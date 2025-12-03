@@ -1,0 +1,9 @@
+{
+  "require": {
+    "php": ">=7.4",
+    "phpseclib/phpseclib": "~3.0"
+  },
+  "require-dev": {
+    "humbug/php-scoper": "^0.18.18"
+  }
+}

@@ -1,0 +1,318 @@
+# Module KSEF - English Translation
+
+# ============================================
+# Module General
+# ============================================
+KSEF_Module=KSeF Integration
+KSEF_ModuleInformation=Module Information
+KSEF_Version=Version
+KSEF_Publisher=Publisher
+KSEF_Setup=Module Setup
+KSEF_SetupPage=Configure KSEF integration settings, certificate, and submission options
+KSEF_About=About
+KSEF_HowToUse=How to Use
+KSEF_BackToModuleList=Back to Module List
+KSEF_Enabled=Enabled
+KSEF_Active=Active
+KSEF_Add=Add
+KSEF_Save=Save
+KSEF_UpdateToken=Update Token
+KSEF_Value=Value
+KSEF_Parameter=Parameter
+KSEF_ActionRequired=Action Required
+
+# ============================================
+# Menu & Navigation
+# ============================================
+KSEF_Area=KSEF
+KSEF_Dashboard=KSEF Dashboard
+KSEF_Settings=KSEF Configuration
+KSEF_Status=KSEF Submission Status
+
+# ============================================
+# Configuration Groups
+# ============================================
+KSEF_AUTH_CONFIG=Authentication
+KSEF_UI_CONFIG=User Interface
+KSEF_CUSTOMIZATION_CONFIG=Customization
+KSEF_CUSTOMER_EXCLUSIONS=Customer Exclusions
+KSEF_Configuration=KSeF configuration
+
+# ============================================
+# Environment Settings
+# ============================================
+KSEF_ENV_DEMO=Demo
+KSEF_ENV_PRODUCTION=Production
+KSEF_ENV_TEST=Test
+KSEF_Environment=Environment
+KSEF_ENVIRONMENT_Help=Select TEST for testing, PRODUCTION for live invoices
+
+# ============================================
+# Authentication & Token
+# ============================================
+KSEF_AUTH_TOKEN_Help=Alphanumeric token from KSeF web portal
+KSEF_AuthToken=Authentication token
+KSEF_TOKEN_STATUS=Token Status
+KSEF_TOKEN_OBTAIN_INFO=Obtain token by logging into KSeF portal with qualified seal/signature
+KSEF_PasteTokenHere=Paste your token here
+KSEF_EnterNewTokenToReplace=Enter new token to replace the existing one
+KSEF_TOKEN_SAVED=Token saved successfully
+KSEF_TOKEN_TOO_SHORT=Token is too short
+KSEF_TOKEN_INVALID_FORMAT=Token has invalid format
+KSEF_NoTokenConfigured=No token configured
+KSEF_NotConfigured=Not configured
+KSEF_Configured=Configured
+KSEF_WARNING_NO_TOKEN=Warning: No token configured
+KSEF_GetToken=Get Token
+KSEF_GenerateTokenInPortal=Generate a token in the portal under Token Management
+KSEF_VisitKSEFPortal=Visit KSeF Portal
+
+# ============================================
+# NIP & Company Data
+# ============================================
+KSEF_COMPANY_NIP=Company NIP
+KSEF_COMPANY_NIP_Help=Auto-populated preferentially from Professional ID 1 and then from VAT ID if it's blank
+KSEF_AutoPopulatedFromCompany=Auto-populated
+KSEF_WARNING_NO_NIP=Warning: Company NIP is missing
+KSEF_EnterNIPAndToken=Enter your NIP (tax ID) and paste your token
+KSEF_CustomerExcludedFromKSEF=Customer excluded from KSeF
+KSEF_CustomerRemovedFromKSEFExclusions=Customer removed from KSeF exclusions
+KSEF_EXCLUDED_CUSTOMERS=Excluded Customers
+KSEF_EXCLUDED_CUSTOMERS_Help=List of customers excluded from KSeF submissions
+KSEF_EXCLUDED_CUSTOMERS_INFO=Comma-separated list of customer IDs
+KSEF_SelectCustomer=Select Customer
+KSEF_PleaseSelectCustomer=Please select a customer
+
+# ============================================
+# Features
+# ============================================
+KSEF_ADD_QR=Add QR code to PDF
+KSEF_ADD_QR_Help=Include verification QR code on invoice PDFs
+KSEF_EnableBarcodeModuleForQR=Enable the Barcode module to generate QR codes
+KSEF_TCPDFRequiredForQR=TCPDF library is required for QR codes
+KSEF_SomeOptionalFeaturesUnavailable=Some optional features are unavailable
+KSEF_AutoSubmit=Auto-submit on validation
+KSEF_AUTO_SUBMIT_Help=Automatically send invoices to KSeF when validated
+
+# ============================================
+# UI Settings
+# ============================================
+KSEF_BUTTON_COLOR=Button Color
+KSEF_BUTTON_COLOR_Help=Color of the KSeF action button on invoices
+KSEF_Blue=Blue
+KSEF_Red=Red
+KSEF_Green=Green
+KSEF_Yellow=Yellow
+KSEF_Orange=Orange
+KSEF_Purple=Purple
+KSEF_Cyan=Cyan
+
+# ============================================
+# Connection & Testing
+# ============================================
+KSEF_TestConnection=Test Connection
+KSEF_TEST_CONNECTION=Test Connection
+KSEF_TEST_TOKEN_AUTH=Test Token Authentication
+KSEF_CONNECTION_SUCCESS=Connection successful
+KSEF_CONNECTION_FAILED=Connection failed
+KSEF_CONNECTION_ERROR=Connection error
+KSEF_AUTH_SUCCESS=Authentication successful
+KSEF_AUTH_FAILED=Authentication failed
+KSEF_AUTH_ERROR=Authentication error
+KSEF_Diagnostics=Diagnostics
+KSEF_Test=Test
+KSEF_Details=Details
+KSEF_TestEnvironment=Test Environment
+
+# ============================================
+# System Requirements & Health
+# ============================================
+KSEF_SystemInformation=System Information
+KSEF_SystemInformationDesc=Information about your system environment
+KSEF_SystemRequirements=System Requirements
+KSEF_CriticalIssues=Critical Issues
+KSEF_Warnings=Warnings
+KSEF_AllRequirementsMet=All requirements met
+KSEF_Required=Required
+KSEF_OK=OK
+KSEF_Missing=Missing
+KSEF_FileNotFound=File not found
+KSEF_TableExists=Table exists
+KSEF_TableMissing=Table missing
+KSEF_RunSQLScripts=Run SQL scripts to fix
+KSEF_FixAndRetry=Fix the issue and retry
+KSEF_CriticalRequirementsNotMet=Critical requirements are not met
+
+# ============================================
+# Requirement Checks
+# ============================================
+KSEF_Test_PHPExtensions=PHP Extensions
+KSEF_Test_Certificate=Certificate
+KSEF_Test_DatabaseTable=Database Table
+KSEF_Test_NIPConfigured=NIP Configured
+KSEF_Test_NIPInvalid=NIP Invalid
+
+# ============================================
+# Workflow & Usage
+# ============================================
+KSEF_HowToUsePage=Usage Guide
+KSEF_QuickStartGuide=Quick Start Guide
+KSEF_ConfigureModule=Configure Module
+KSEF_ModuleSetup=Module Setup
+KSEF_GoToSetup=Go to Setup
+KSEF_UsingTheModule=Using the Module
+KSEF_SubmitInvoice=Submit Invoice
+KSEF_SubmittingInvoices=Submitting Invoices
+KSEF_SubmitInvoiceSteps=Steps to submit an invoice
+KSEF_OpenAnyInvoice=Open any invoice (date should be today)
+KSEF_OpenInvoiceCard=Open invoice card
+KSEF_OpenValidatedInvoice=Open a validated invoice
+KSEF_ClickKSEFButton=Click the "Validate and Upload to KSeF" button to submit
+KSEF_ClickRedKSEFButton=Click the red KSeF button
+KSEF_ClickInfoIcon=Click the info icon
+KSEF_WaitForConfirmation=Wait for confirmation
+KSEF_ScrollToKSEFSection=Scroll to KSeF section
+KSEF_ConfigureNow=Configure now
+KSEF_TestNow=Test Now
+KSEF_Troubleshooting=Troubleshooting
+KSEF_ViewingErrorDetails=Viewing Error Details
+KSEF_ErrorDetailsLocation=To see detailed error information
+
+# ============================================
+# Dashboard / Home (ksefindex.php)
+# ============================================
+KSEF_Statistics=Statistics
+KSEF_Last30Days=Last 30 days
+KSEF_TotalSubmissions=Total submissions
+KSEF_Accepted=Accepted
+KSEF_Pending=Pending
+KSEF_Failed=Failed
+KSEF_SuccessRate=Success rate
+KSEF_RecentSubmissions=Recent submissions
+KSEF_NoRecentSubmissions=No recent submissions
+KSEF_CreateInvoice=Create invoice
+KSEF_SetupRequired=Setup required
+KSEF_SetupRequiredDesc=Configure Company NIP and authentication before using KSeF
+KSEF_MandatoryWarning=Mandatory KSeF notice
+KSEF_MandatoryWarningDesc=KSeF will be mandatory in %d days. Configure your system now.
+
+# ============================================
+# Invoice Tab (tab_ksef.php)
+# ============================================
+KSEF_Tab=KSeF
+KSEF_SubmissionHistory=KSeF submission history
+KSEF_Number=KSeF number
+KSEF_DownloadFA3XML=Download FA(3) XML
+KSEF_DownloadUPO=Download UPO
+KSEF_SubmittedOn=Submitted on
+
+# ============================================
+# Status List Page (status.php)
+# ============================================
+KSEF_ErrorDetails=Error details
+KSEF_ErrorCode=Error code
+KSEF_TechnicalDetails=Technical details
+KSEF_UPONotAvailable=UPO file not available
+KSEF_CommonErrors=Common errors
+KSEF_StatusUpdated=Status updated
+KSEF_VerifyOnKSEFPortal=Verify on KSeF portal
+KSEF_ViewAllAttemptsOnInvoice=View all attempts on this invoice
+KSEF_ViewAllSubmissions=View all submissions
+KSEF_RetrySubmission=Retry Submission
+KSEF_CheckStatus=Check status
+KSEF_ViewErrorDetails=View error details
+KSEF_DownloadKSEFZip=Download invoices with KSeF data (ZIP)
+KSEF_Attempts=Attempts
+KSEF_SubmissionRetried=Submission retried
+
+# ============================================
+# Status Badge Values (ksef.lib.php)
+# ============================================
+KSEF_STATUS_PENDING=Pending
+KSEF_STATUS_SUBMITTED=Submitted
+KSEF_STATUS_ACCEPTED=Accepted
+KSEF_STATUS_REJECTED=Rejected
+KSEF_STATUS_FAILED=Failed
+KSEF_STATUS_TIMEOUT=Timeout
+
+# ============================================
+# Actions & Buttons (actions_ksef.class.php)
+# ============================================
+KSEF_SubmitToKSEF=Submit to KSeF
+KSEF_UploadToKSEF=Upload to KSeF
+KSEF_ValidateAndUpload=Validate and Upload to KSeF
+KSEF_ValidatingAndSubmitting=Validating and submitting to KSeF
+KSEF_SubmittingToKSEF=Submitting to KSeF
+KSEF_ViewSubmissionDetails=View Details
+KSEF_ViewXML=View FA(3) XML
+
+# ============================================
+# Success Messages
+# ============================================
+KSEF_SubmissionSuccess=Invoice successfully submitted to KSeF
+KSEF_AcceptanceSuccess=Invoice accepted by KSeF
+KSEF_UPODownloaded=UPO confirmation downloaded
+KSEF_InvoiceAccepted=Invoice Accepted
+KSEF_SubmissionStatus=Submission Status
+KSEF_CheckingStatus=Checking Status
+KSEF_BeingProcessed=Being processed
+KSEF_Updated=Updated
+
+# ============================================
+# Invoice Messages
+# ============================================
+KSEF_SubmissionPending=Invoice submitted - waiting for KSeF confirmation
+KSEF_SubmissionRejected=Invoice rejected by KSeF
+KSEF_SubmissionFailed=Failed to submit invoice to KSeF
+KSEF_CustomerExcluded=This customer is excluded from KSeF submissions
+KSEF_CustomerExcludedInfo=This customer is excluded from KSeF - invoice will not be submitted
+KSEF_AlreadySubmitted=Invoice already submitted to KSeF
+KSEF_XMLGenerationFailed=Failed to generate FA(3) XML
+KSEF_SubmissionRecordFailed=Submission successful but failed to save record
+KSEF_IncludedInPDF=KSeF number will be included in PDF
+
+# ============================================
+# Extrafields
+# ============================================
+KSEF_KSEFNumber=KSeF Number
+KSEF_KSEFStatus=KSeF Status
+KSEF_KSEFSubmissionDate=KSeF Submission Date
+KSEF_KSEFReference=KSeF Reference
+
+# ============================================
+# Issue Solutions
+# ============================================
+KSEF_Issue_CertNotFound=Certificate not found
+KSEF_Issue_CertNotFound_Solution=Check if the certificate file exists in the specified path.
+KSEF_Issue_AuthFailed=Authentication failed
+KSEF_Issue_AuthFailed_Solution=Verify your token and NIP. Ensure the token is generated for the correct environment (Test/Prod).
+KSEF_Issue_Timeout=Connection timeout
+KSEF_Issue_Timeout_Solution=Check your internet connection and firewall settings.
+KSEF_Issue_InvalidNIP=Invalid NIP
+KSEF_Issue_InvalidNIP_Solution=Ensure the Company NIP contains only digits and is valid.
+KSEF_Issue_XMLValidation=XML Validation Error
+KSEF_Issue_XMLValidation_Solution=The generated XML does not match the KSeF schema. Check invoice data.
+
+# ============================================
+# Info Fields (Support Page)
+# ============================================
+KSEF_SOC_NAME=Company Name
+KSEF_SOC_MAIL=Company Email
+KSEF_SOC_NIP=Company NIP
+KSEF_MOD_NAME=Module Name
+KSEF_MOD_VERSION=Module Version
+KSEF_DOL_VERSION=Dolibarr Version
+KSEF_PHP_VERSION=PHP Version
+KSEF_SERVER_OS=Server OS
+KSEF_DATABASE=Database
+KSEF_USER_AGENT=User Agent
+KSEF_CERT_STATUS=Certificate Status
+KSEF_PHP_OPENSSL=OpenSSL Extension
+KSEF_PHP_CURL=cURL Extension
+KSEF_PHP_DOM=DOM Extension
+KSEF_STATS_TOTAL=Total Submissions
+KSEF_STATS_ACCEPTED=Accepted
+KSEF_STATS_PENDING=Pending
+KSEF_STATS_FAILED=Failed
+KSEF_STATS_SUCCESS_RATE=Success Rate
+KSEF_DESCRIPTION=Description
