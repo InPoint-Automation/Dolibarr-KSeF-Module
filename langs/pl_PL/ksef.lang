@@ -1,0 +1,318 @@
+# Module KSEF - Tłumaczenie polskie
+
+# ============================================
+# Module General
+# ============================================
+KSEF_Module=Integracja KSeF
+KSEF_ModuleInformation=Informacje o module
+KSEF_Version=Wersja
+KSEF_Publisher=Wydawca
+KSEF_Setup=Ustawienia modułu
+KSEF_SetupPage=Konfiguracja integracji KSeF, certyfikatu i opcji przesyłania
+KSEF_About=O module
+KSEF_HowToUse=Jak używać
+KSEF_BackToModuleList=Powrót do listy modułów
+KSEF_Enabled=Włączony
+KSEF_Active=Aktywny
+KSEF_Add=Dodaj
+KSEF_Save=Zapisz
+KSEF_UpdateToken=Aktualizuj token
+KSEF_Value=Wartość
+KSEF_Parameter=Parametr
+KSEF_ActionRequired=Wymagana akcja
+
+# ============================================
+# Menu & Navigation
+# ============================================
+KSEF_Area=KSeF
+KSEF_Dashboard=Panel KSeF
+KSEF_Settings=Konfiguracja KSeF
+KSEF_Status=Status wysyłki KSeF
+
+# ============================================
+# Configuration Groups
+# ============================================
+KSEF_AUTH_CONFIG=Uwierzytelnianie
+KSEF_UI_CONFIG=Interfejs użytkownika
+KSEF_CUSTOMIZATION_CONFIG=Dostosowanie
+KSEF_CUSTOMER_EXCLUSIONS=Wykluczenia kontrahentów
+KSEF_Configuration=Konfiguracja KSeF
+
+# ============================================
+# Environment Settings
+# ============================================
+KSEF_ENV_DEMO=Demo
+KSEF_ENV_PRODUCTION=Produkcja
+KSEF_ENV_TEST=Test
+KSEF_ENVIRONMENT=Środowisko
+KSEF_ENVIRONMENT_Help=Wybierz TEST do testowania, PRODUKCJA dla rzeczywistych faktur
+
+# ============================================
+# Authentication & Token
+# ============================================
+KSEF_AUTH_TOKEN_Help=Token alfanumeryczny z portalu KSeF
+KSEF_AuthToken=Token uwierzytelniający
+KSEF_TOKEN_STATUS=Status tokenu
+KSEF_TOKEN_OBTAIN_INFO=Uzyskaj token logując się do portalu KSeF z kwalifikowaną pieczęcią/podpisem
+KSEF_PasteTokenHere=Wklej tutaj swój token
+KSEF_EnterNewTokenToReplace=Wprowadź nowy token aby zastąpić istniejący
+KSEF_TOKEN_SAVED=Token został zapisany pomyślnie
+KSEF_TOKEN_TOO_SHORT=Token jest za krótki
+KSEF_TOKEN_INVALID_FORMAT=Token ma nieprawidłowy format
+KSEF_NoTokenConfigured=Brak skonfigurowanego tokenu
+KSEF_NotConfigured=Nie skonfigurowany
+KSEF_Configured=Skonfigurowany
+KSEF_WARNING_NO_TOKEN=Uwaga: Brak skonfigurowanego tokenu
+KSEF_GetToken=Uzyskaj token
+KSEF_GenerateTokenInPortal=Wygeneruj token w portalu w zakładce Zarządzanie tokenami
+KSEF_VisitKSEFPortal=Odwiedź Portal KSeF
+
+# ============================================
+# NIP & Company Data
+# ============================================
+KSEF_COMPANY_NIP=NIP firmy
+KSEF_COMPANY_NIP_Help=Wypełniane automatycznie z ID zawodowego 1, a następnie z numeru VAT jeśli jest pusty
+KSEF_AutoPopulatedFromCompany=Wypełniane automatycznie
+KSEF_WARNING_NO_NIP=Uwaga: Brak NIP firmy
+KSEF_EnterNIPAndToken=Wprowadź swój NIP i wklej token
+KSEF_CustomerExcludedFromKSEF=Kontrahent wykluczony z KSeF
+KSEF_CustomerRemovedFromKSEFExclusions=Kontrahent usunięty z wykluczeń KSeF
+KSEF_EXCLUDED_CUSTOMERS=Wykluczeni kontrahenci
+KSEF_EXCLUDED_CUSTOMERS_Help=Lista kontrahentów wykluczonych z wysyłki do KSeF
+KSEF_EXCLUDED_CUSTOMERS_INFO=Lista ID kontrahentów oddzielonych przecinkami
+KSEF_SelectCustomer=Wybierz kontrahenta
+KSEF_PleaseSelectCustomer=Proszę wybrać kontrahenta
+
+# ============================================
+# Features
+# ============================================
+KSEF_ADD_QR=Dodaj kod QR do PDF
+KSEF_ADD_QR_Help=Dołącz kod QR weryfikacyjny na fakturach PDF
+KSEF_EnableBarcodeModuleForQR=Włącz moduł Kod kreskowy aby generować kody QR
+KSEF_TCPDFRequiredForQR=Biblioteka TCPDF jest wymagana dla kodów QR
+KSEF_SomeOptionalFeaturesUnavailable=Niektóre opcjonalne funkcje są niedostępne
+KSEF_AutoSubmit=Automatyczne wysyłanie przy zatwierdzeniu
+KSEF_AUTO_SUBMIT_Help=Automatycznie wysyłaj faktury do KSeF po zatwierdzeniu
+
+# ============================================
+# UI Settings
+# ============================================
+KSEF_BUTTON_COLOR=Kolor przycisku
+KSEF_BUTTON_COLOR_Help=Kolor przycisku akcji KSeF na fakturach
+KSEF_Blue=Niebieski
+KSEF_Red=Czerwony
+KSEF_Green=Zielony
+KSEF_Yellow=Żółty
+KSEF_Orange=Pomarańczowy
+KSEF_Purple=Fioletowy
+KSEF_Cyan=Cyjan
+
+# ============================================
+# Connection & Testing
+# ============================================
+KSEF_TestConnection=Testuj połączenie
+KSEF_TEST_CONNECTION=Testuj połączenie
+KSEF_TEST_TOKEN_AUTH=Testuj uwierzytelnianie tokenu
+KSEF_CONNECTION_SUCCESS=Połączenie udane
+KSEF_CONNECTION_FAILED=Połączenie nieudane
+KSEF_CONNECTION_ERROR=Błąd połączenia
+KSEF_AUTH_SUCCESS=Uwierzytelnianie udane
+KSEF_AUTH_FAILED=Uwierzytelnianie nieudane
+KSEF_AUTH_ERROR=Błąd uwierzytelniania
+KSEF_Diagnostics=Diagnostyka
+KSEF_Test=Test
+KSEF_Details=Szczegóły
+KSEF_TestEnvironment=Środowisko testowe
+
+# ============================================
+# System Requirements & Health
+# ============================================
+KSEF_SystemInformation=Informacje systemowe
+KSEF_SystemInformationDesc=Informacje o środowisku systemowym
+KSEF_SystemRequirements=Wymagania systemowe
+KSEF_CriticalIssues=Krytyczne problemy
+KSEF_Warnings=Ostrzeżenia
+KSEF_AllRequirementsMet=Wszystkie wymagania spełnione
+KSEF_Required=Wymagane
+KSEF_OK=OK
+KSEF_Missing=Brak
+KSEF_FileNotFound=Nie znaleziono pliku
+KSEF_TableExists=Tabela istnieje
+KSEF_TableMissing=Brak tabeli
+KSEF_RunSQLScripts=Uruchom skrypty SQL aby naprawić
+KSEF_FixAndRetry=Napraw problem i spróbuj ponownie
+KSEF_CriticalRequirementsNotMet=Krytyczne wymagania nie zostały spełnione
+
+# ============================================
+# Requirement Checks
+# ============================================
+KSEF_Test_PHPExtensions=Rozszerzenia PHP
+KSEF_Test_Certificate=Certyfikat
+KSEF_Test_DatabaseTable=Tabela bazy danych
+KSEF_Test_NIPConfigured=NIP skonfigurowany
+KSEF_Test_NIPInvalid=NIP nieprawidłowy
+
+# ============================================
+# Workflow & Usage
+# ============================================
+KSEF_HowToUsePage=Instrukcja użytkowania
+KSEF_QuickStartGuide=Przewodnik szybkiego startu
+KSEF_ConfigureModule=Konfiguruj moduł
+KSEF_ModuleSetup=Ustawienia modułu
+KSEF_GoToSetup=Przejdź do ustawień
+KSEF_UsingTheModule=Używanie modułu
+KSEF_SubmitInvoice=Wyślij fakturę
+KSEF_SubmittingInvoices=Wysyłanie faktur
+KSEF_SubmitInvoiceSteps=Kroki wysyłania faktury
+KSEF_OpenAnyInvoice=Otwórz dowolną fakturę (data powinna być dzisiejsza)
+KSEF_OpenInvoiceCard=Otwórz kartę faktury
+KSEF_OpenValidatedInvoice=Otwórz zatwierdzoną fakturę
+KSEF_ClickKSEFButton=Kliknij przycisk "Zatwierdź i prześlij do KSeF" aby wysłać
+KSEF_ClickRedKSEFButton=Kliknij czerwony przycisk KSeF
+KSEF_ClickInfoIcon=Kliknij ikonę informacji
+KSEF_WaitForConfirmation=Poczekaj na potwierdzenie
+KSEF_ScrollToKSEFSection=Przewiń do sekcji KSeF
+KSEF_ConfigureNow=Skonfiguruj teraz
+KSEF_TestNow=Testuj teraz
+KSEF_Troubleshooting=Rozwiązywanie problemów
+KSEF_ViewingErrorDetails=Przeglądanie szczegółów błędów
+KSEF_ErrorDetailsLocation=Aby zobaczyć szczegółowe informacje o błędzie
+
+# ============================================
+# Dashboard / Home (ksefindex.php)
+# ============================================
+KSEF_Statistics=Statystyki
+KSEF_Last30Days=Ostatnie 30 dni
+KSEF_TotalSubmissions=Całkowita liczba wysyłek
+KSEF_Accepted=Zaakceptowane
+KSEF_Pending=Oczekujące
+KSEF_Failed=Nieudane
+KSEF_SuccessRate=Wskaźnik sukcesu
+KSEF_RecentSubmissions=Ostatnie wysyłki
+KSEF_NoRecentSubmissions=Brak ostatnich wysyłek
+KSEF_CreateInvoice=Utwórz fakturę
+KSEF_SetupRequired=Wymagana konfiguracja
+KSEF_SetupRequiredDesc=Skonfiguruj NIP firmy i uwierzytelnianie przed użyciem KSeF
+KSEF_MandatoryWarning=Powiadomienie o obowiązku KSeF
+KSEF_MandatoryWarningDesc=KSeF będzie obowiązkowy za %d dni. Skonfiguruj system teraz.
+
+# ============================================
+# Invoice Tab (tab_ksef.php)
+# ============================================
+KSEF_Tab=KSeF
+KSEF_SubmissionHistory=Historia wysyłek KSeF
+KSEF_Number=Numer KSeF
+KSEF_DownloadFA3XML=Pobierz XML FA(3)
+KSEF_DownloadUPO=Pobierz UPO
+KSEF_SubmittedOn=Wysłano dnia
+
+# ============================================
+# Status List Page (status.php)
+# ============================================
+KSEF_ErrorDetails=Szczegóły błędu
+KSEF_ErrorCode=Kod błędu
+KSEF_TechnicalDetails=Szczegóły techniczne
+KSEF_UPONotAvailable=Plik UPO niedostępny
+KSEF_CommonErrors=Typowe błędy
+KSEF_StatusUpdated=Status zaktualizowany
+KSEF_VerifyOnKSEFPortal=Zweryfikuj w portalu KSeF
+KSEF_ViewAllAttemptsOnInvoice=Zobacz wszystkie próby dla tej faktury
+KSEF_ViewAllSubmissions=Zobacz wszystkie wysyłki
+KSEF_RetrySubmission=Ponów wysyłkę
+KSEF_CheckStatus=Sprawdź status
+KSEF_ViewErrorDetails=Zobacz szczegóły błędu
+KSEF_DownloadKSEFZip=Pobierz faktury z danymi KSeF (ZIP)
+KSEF_Attempts=Próby
+KSEF_SubmissionRetried=Wysyłka ponowiona
+
+# ============================================
+# Status Badge Values (ksef.lib.php)
+# ============================================
+KSEF_STATUS_PENDING=Oczekujący
+KSEF_STATUS_SUBMITTED=Wysłany
+KSEF_STATUS_ACCEPTED=Zaakceptowany
+KSEF_STATUS_REJECTED=Odrzucony
+KSEF_STATUS_FAILED=Nieudany
+KSEF_STATUS_TIMEOUT=Przekroczono limit czasu
+
+# ============================================
+# Actions & Buttons (actions_ksef.class.php)
+# ============================================
+KSEF_SubmitToKSEF=Wyślij do KSeF
+KSEF_UploadToKSEF=Prześlij do KSeF
+KSEF_ValidateAndUpload=Zatwierdź i prześlij do KSeF
+KSEF_ValidatingAndSubmitting=Zatwierdzanie i wysyłanie do KSeF
+KSEF_SubmittingToKSEF=Wysyłanie do KSeF
+KSEF_ViewSubmissionDetails=Zobacz szczegóły
+KSEF_ViewXML=Zobacz XML FA(3)
+
+# ============================================
+# Success Messages
+# ============================================
+KSEF_SubmissionSuccess=Faktura pomyślnie wysłana do KSeF
+KSEF_AcceptanceSuccess=Faktura zaakceptowana przez KSeF
+KSEF_UPODownloaded=Potwierdzenie UPO pobrane
+KSEF_InvoiceAccepted=Faktura zaakceptowana
+KSEF_SubmissionStatus=Status wysyłki
+KSEF_CheckingStatus=Sprawdzanie statusu
+KSEF_BeingProcessed=W trakcie przetwarzania
+KSEF_Updated=Zaktualizowany
+
+# ============================================
+# Invoice Messages
+# ============================================
+KSEF_SubmissionPending=Faktura wysłana - oczekiwanie na potwierdzenie KSeF
+KSEF_SubmissionRejected=Faktura odrzucona przez KSeF
+KSEF_SubmissionFailed=Nie udało się wysłać faktury do KSeF
+KSEF_CustomerExcluded=Ten kontrahent jest wykluczony z wysyłki KSeF
+KSEF_CustomerExcludedInfo=Ten kontrahent jest wykluczony z KSeF - faktura nie zostanie wysłana
+KSEF_AlreadySubmitted=Faktura już wysłana do KSeF
+KSEF_XMLGenerationFailed=Nie udało się wygenerować XML FA(3)
+KSEF_SubmissionRecordFailed=Wysyłka udana, ale nie udało się zapisać rekordu
+KSEF_IncludedInPDF=Numer KSeF zostanie uwzględniony w PDF
+
+# ============================================
+# Extrafields
+# ============================================
+KSEF_KSEFNumber=Numer KSeF
+KSEF_KSEFStatus=Status KSeF
+KSEF_KSEFSubmissionDate=Data wysyłki KSeF
+KSEF_KSEFReference=Referencja KSeF
+
+# ============================================
+# Issue Solutions
+# ============================================
+KSEF_Issue_CertNotFound=Nie znaleziono certyfikatu
+KSEF_Issue_CertNotFound_Solution=Sprawdź czy plik certyfikatu istnieje w podanej ścieżce.
+KSEF_Issue_AuthFailed=Uwierzytelnianie nieudane
+KSEF_Issue_AuthFailed_Solution=Zweryfikuj swój token i NIP. Upewnij się, że token został wygenerowany dla właściwego środowiska (Test/Prod).
+KSEF_Issue_Timeout=Przekroczono limit czasu połączenia
+KSEF_Issue_Timeout_Solution=Sprawdź połączenie internetowe i ustawienia zapory sieciowej.
+KSEF_Issue_InvalidNIP=Nieprawidłowy NIP
+KSEF_Issue_InvalidNIP_Solution=Upewnij się, że NIP firmy zawiera tylko cyfry i jest prawidłowy.
+KSEF_Issue_XMLValidation=Błąd walidacji XML
+KSEF_Issue_XMLValidation_Solution=Wygenerowany XML nie pasuje do schematu KSeF. Sprawdź dane faktury.
+
+# ============================================
+# Info Fields (Support Page)
+# ============================================
+KSEF_SOC_NAME=Nazwa firmy
+KSEF_SOC_MAIL=Email firmy
+KSEF_SOC_NIP=NIP firmy
+KSEF_MOD_NAME=Nazwa modułu
+KSEF_MOD_VERSION=Wersja modułu
+KSEF_DOL_VERSION=Wersja Dolibarr
+KSEF_PHP_VERSION=Wersja PHP
+KSEF_SERVER_OS=System operacyjny serwera
+KSEF_DATABASE=Baza danych
+KSEF_USER_AGENT=Agent użytkownika
+KSEF_CERT_STATUS=Status certyfikatu
+KSEF_PHP_OPENSSL=Rozszerzenie OpenSSL
+KSEF_PHP_CURL=Rozszerzenie cURL
+KSEF_PHP_DOM=Rozszerzenie DOM
+KSEF_STATS_TOTAL=Całkowita liczba wysyłek
+KSEF_STATS_ACCEPTED=Zaakceptowane
+KSEF_STATS_PENDING=Oczekujące
+KSEF_STATS_FAILED=Nieudane
+KSEF_STATS_SUCCESS_RATE=Wskaźnik sukcesu
+KSEF_DESCRIPTION=Opis
