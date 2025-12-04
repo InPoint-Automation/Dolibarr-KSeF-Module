@@ -8,7 +8,7 @@
 
 ## Opis
 
-Ten moduł integruje Dolibarr z KSeF (Krajowy System e-Faktur), polskim systemem elektronicznego fakturowania.
+Ten moduł integruje Dolibarr (https://www.dolibarr.org/) z KSeF (Krajowy System e-Faktur), polskim systemem elektronicznego fakturowania.
 
 ## Funkcje
 
