@@ -8,7 +8,7 @@
 
 ## Description
 
-This module integrates Dolibarr with KSEF (Krajowy System e-Faktur / National e-Invoice System), the Polish electronic
+This module integrates Dolibarr (https://www.dolibarr.org/) with KSEF (Krajowy System e-Faktur / National e-Invoice System), the Polish electronic
 invoicing system.
 
 ## Features
