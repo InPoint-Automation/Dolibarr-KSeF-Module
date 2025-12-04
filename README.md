@@ -1,5 +1,9 @@
 # KSEF for Dolibarr ERP CRM
 
+<p align="center" width="100%">
+<img alt="Icon" src="./img/ksef.png" width="20%" />
+</p>
+
 ## [Po Polsku](README_PL.md)
 
 ## Description
