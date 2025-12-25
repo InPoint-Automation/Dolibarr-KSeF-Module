@@ -98,6 +98,54 @@ if ($action == 'testconnection') {
     exit;
 }
 
+if ($action == 'testcertauth') {
+    dol_include_once('/ksef/class/ksef_client.class.php');
+
+    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'TEST';
+
+    $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
+            !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
+            !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
+
+    if (!$has_auth_cert) {
+        setEventMessages($langs->trans('KSEF_CertificateNotConfigured'), null, 'errors');
+        header("Location: " . $_SERVER["PHP_SELF"]);
+        exit;
+    }
+
+    $orig_method = $conf->global->KSEF_AUTH_METHOD;
+    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'certificate', 'chaine', 0, '', $conf->entity);
+
+    try {
+        $client = new KsefClient($db, $environment);
+
+        if ($client->authenticate()) {
+            setEventMessages(
+                    $langs->trans('KSEF_CERT_AUTH_SUCCESS') . ' [' . $environment . ']',
+                    null,
+                    'mesgs'
+            );
+        } else {
+            setEventMessages(
+                    $langs->trans('KSEF_CERT_AUTH_FAILED') . ': ' . $client->error,
+                    null,
+                    'errors'
+            );
+        }
+    } catch (Exception $e) {
+        setEventMessages(
+                $langs->trans('KSEF_CERT_AUTH_ERROR') . ': ' . $e->getMessage(),
+                null,
+                'errors'
+        );
+    }
+
+    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', $orig_method, 'chaine', 0, '', $conf->entity);
+
+    header("Location: " . $_SERVER["PHP_SELF"]);
+    exit;
+}
+
 if ($action == 'testtokenauth') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
@@ -174,18 +222,50 @@ print '<span class="opacitymedium">' . $langs->trans("KSEF_HowToUsePage") . '</s
 
                 <div style="flex: 1; min-width: 200px; padding: 15px; background: #f8f9fa; border-left: 4px solid #ffc107;">
                     <h4 style="margin-top: 0;">3. <?php echo $langs->trans("KSEF_TestConnection"); ?></h4>
+
+                    <?php
+                    $has_token = !empty($conf->global->KSEF_AUTH_TOKEN);
+                    $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
+                            !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
+                            !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
+                    ?>
+
                     <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testconnection&token=<?php echo newToken(); ?>"
-                       class="button small">
+                       class="button small" style="margin-bottom: 8px; display: block;">
                         <span class="fa fa-plug paddingright"></span>
                         <?php echo $langs->trans("KSEF_TEST_CONNECTION"); ?>
                     </a>
-                    <?php if (!empty($conf->global->KSEF_AUTH_TOKEN)) { ?>
-                        <br><br>
+
+                    <?php if ($has_token) { ?>
                         <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testtokenauth&token=<?php echo newToken(); ?>"
-                           class="button small">
+                           class="button small" style="margin-bottom: 8px; display: block;">
                             <span class="fa fa-key paddingright"></span>
                             <?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
                         </a>
+                    <?php } else { ?>
+                        <span class="button small butActionRefused classfortooltip"
+                              style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
+                              title="<?php echo $langs->trans('KSEF_ConfigureTokenFirst'); ?>">
+                            <span class="fa fa-key paddingright"></span>
+                            <?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+                        </span>
+                        <small class="opacitymedium"><?php echo $langs->trans('KSEF_TokenNotConfigured'); ?></small>
+                    <?php } ?>
+
+                    <?php if ($has_auth_cert) { ?>
+                        <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testcertauth&token=<?php echo newToken(); ?>"
+                           class="button small" style="margin-bottom: 8px; display: block;">
+                            <span class="fa fa-certificate paddingright"></span>
+                            <?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
+                        </a>
+                    <?php } else { ?>
+                        <span class="button small butActionRefused classfortooltip"
+                              style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
+                              title="<?php echo $langs->trans('KSEF_ConfigureCertificateFirst'); ?>">
+                            <span class="fa fa-certificate paddingright"></span>
+                            <?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
+                        </span>
+                        <small class="opacitymedium"><?php echo $langs->trans('KSEF_CertificateNotConfigured'); ?></small>
                     <?php } ?>
                 </div>
 

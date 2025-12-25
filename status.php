@@ -245,6 +245,8 @@ $sql .= " s.error_code,";
 $sql .= " s.error_details,";
 $sql .= " s.retry_count,";
 $sql .= " s.fa3_xml,";
+$sql .= " s.offline_mode,";
+$sql .= " s.offline_deadline,";
 $sql .= " f.ref as invoice_ref,";
 $sql .= " f.total_ttc,";
 $sql .= " soc.nom as company_name,";
@@ -383,6 +385,7 @@ print_liste_field_titre("Customer", $_SERVER["PHP_SELF"], "soc.nom", "", $param,
 print_liste_field_titre("KSEF_Number", $_SERVER["PHP_SELF"], "s.ksef_number", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("Status", $_SERVER["PHP_SELF"], "s.status", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("KSEF_Environment", $_SERVER["PHP_SELF"], "s.environment", "", $param, '', $sortfield, $sortorder, 'center ');
+print_liste_field_titre("KSEF_OfflineMode", $_SERVER["PHP_SELF"], "s.offline_mode", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("Date", $_SERVER["PHP_SELF"], "s.date_submission", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("Amount", $_SERVER["PHP_SELF"], "f.total_ttc", "", $param, '', $sortfield, $sortorder, 'right ');
 print_liste_field_titre("KSEF_Attempts", $_SERVER["PHP_SELF"], "", "", $param, '', $sortfield, $sortorder, 'center ');
@@ -423,6 +426,17 @@ while ($i < min($num, $limit)) {
     print '</td>';
 
     print '<td class="center">' . ksefGetEnvironmentBadge($obj->environment) . '</td>';
+    print '<td class="center">';
+    if (!empty($obj->offline_mode)) {
+        print ksefGetOfflineModeBadge($obj->offline_mode);
+        if (!empty($obj->offline_deadline) && ($obj->status != 'ACCEPTED')) {
+            print '<br><small>' . ksefFormatDeadline($obj->offline_deadline) . '</small>';
+        }
+    } else {
+        print '<span class="opacitymedium">-</span>';
+    }
+    print '</td>';
+
     print '<td class="center">' . dol_print_date($obj->date_submission, 'dayhour') . '</td>';
     print '<td class="right">' . price($obj->total_ttc) . '</td>';
     print '<td class="center">' . ($obj->total_attempts > 1 ? '<a href="' . DOL_URL_ROOT . '/custom/ksef/tab_ksef.php?id=' . $obj->fk_facture . '" class="classfortooltip" title="' . $langs->trans("KSEF_ViewAllAttemptsOnInvoice") . '"><span class="badge badge-info">' . $obj->total_attempts . '</span></a>' : '<span class="opacitymedium">1</span>') . '</td>';
@@ -430,12 +444,16 @@ while ($i < min($num, $limit)) {
     print '<td class="center nowraponall">';
     if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN') && ($massactionbutton || $massaction)) print '<input id="cb' . $obj->rowid . '" class="flat checkforselect" type="checkbox" name="toselect[]" value="' . $obj->rowid . '"' . (in_array($obj->rowid, $arrayofselected) ? ' checked="checked"' : '') . '>';
 
-    if (in_array($obj->status, array('FAILED', 'TIMEOUT', 'REJECTED')) && $user->hasRight('ksef', 'write')) print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=retry&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_RetrySubmission") . '"><span class="fa fa-redo paddingrightonly"></span></a>';
-    if (in_array($obj->status, array('SUBMITTED', 'TIMEOUT', 'PENDING')) && !empty($obj->ksef_reference) && $user->hasRight('ksef', 'write')) print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=check_status&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_CheckStatus") . '"><span class="fa fa-sync paddingrightonly"></span></a>';
-    if (in_array($obj->status, array('FAILED', 'REJECTED')) && !empty($obj->error_code)) print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=view_error&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_ViewErrorDetails") . '"><span class="fa fa-info-circle paddingrightonly"></span></a>';
-    if (!empty($obj->fa3_xml)) print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=download_xml&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_DownloadFA3XML") . '"><span class="fa fa-download paddingrightonly"></span></a>';
-    if ($obj->status == 'ACCEPTED' && !empty($obj->ksef_number)) print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=download_upo&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_DownloadUPO") . '"><span class="fa fa-download paddingrightonly"></span></a>';
-    if ($user->hasRight('facture', 'supprimer')) print '<a class="butActionDelete classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=delete&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("Delete") . '"><span class="fa fa-trash paddingrightonly"></span></a>';
+    $can_retry = in_array($obj->status, array('FAILED', 'TIMEOUT', 'REJECTED', 'OFFLINE'));
+    if ($obj->status == 'PENDING' && !empty($obj->offline_mode)) {$can_retry = true;}
+    if ($can_retry && $user->hasRight('ksef', 'write')) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=retry&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_RetrySubmission") . '"><span class="fa fa-paper-plane paddingrightonly"></span></a>';}
+    if (in_array($obj->status, array('SUBMITTED', 'TIMEOUT', 'PENDING')) && !empty($obj->ksef_reference) && $user->hasRight('ksef', 'write')) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=check_status&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_CheckStatus") . '"><span class="fa fa-sync-alt paddingrightonly"></span></a>';}
+    if (in_array($obj->status, array('REJECTED', 'FAILED')) && !empty($obj->offline_mode) && $user->hasRight('ksef', 'write')) {print '<a class="butAction classfortooltip marginleftonly" href="' . DOL_URL_ROOT . '/compta/facture/card.php?facid=' . $obj->fk_facture . '&action=ksef_technical_correction&submission_id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_TechnicalCorrection") . '"><span class="fa fa-tools paddingrightonly"></span></a>';}
+    if (in_array($obj->status, array('FAILED', 'REJECTED')) && !empty($obj->error_code)) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=view_error&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_ViewErrorDetails") . '"><span class="fa fa-exclamation-circle paddingrightonly"></span></a>';}
+    if (!empty($obj->fa3_xml)) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=download_xml&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_DownloadFA3XML") . '"><span class="fa fa-file-code paddingrightonly"></span></a>';}
+    if ($obj->status == 'ACCEPTED' && !empty($obj->ksef_number)) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=download_upo&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_DownloadUPO") . '"><span class="fa fa-certificate paddingrightonly"></span></a>';}
+    if ($user->hasRight('facture', 'supprimer')) {print '<a class="butActionDelete classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=delete&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("Delete") . '"><span class="fa fa-trash paddingrightonly"></span></a>';}
+
     print '</td></tr>';
     $i++;
 }

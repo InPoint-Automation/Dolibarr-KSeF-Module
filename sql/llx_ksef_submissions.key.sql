@@ -27,6 +27,9 @@ CREATE INDEX idx_ksef_submissions_fk_user_submit ON llx_ksef_submissions (fk_use
 CREATE INDEX idx_ksef_submissions_fk_user_last_update ON llx_ksef_submissions (fk_user_last_update);
 CREATE INDEX idx_ksef_submissions_error_code ON llx_ksef_submissions (error_code);
 CREATE INDEX idx_ksef_submissions_status_date ON llx_ksef_submissions (status, date_submission);
+CREATE INDEX idx_ksef_submissions_offline_mode ON llx_ksef_submissions (offline_mode);
+CREATE INDEX idx_ksef_submissions_offline_deadline ON llx_ksef_submissions (offline_deadline);
+CREATE INDEX idx_ksef_submissions_fa3_creation_date ON llx_ksef_submissions (fa3_creation_date);
 
 -- Foreign Keys
 ALTER TABLE llx_ksef_submissions

@@ -89,11 +89,46 @@ class modKSEF extends DolibarrModules
         $this->const = array();
         $r = 0;
 
+        // Company & Environment
         $this->const[$r++] = array('KSEF_COMPANY_NIP', 'chaine', '', 'Company NIP for KSEF authentication', 0, 'current', 1);
         $this->const[$r++] = array('KSEF_ENVIRONMENT', 'chaine', 'TEST', 'KSEF API environment (TEST/DEMO/PRODUCTION)', 0, 'current', 1);
         $this->const[$r++] = array('KSEF_TIMEOUT', 'chaine', '5', 'KSEF API timeout in seconds', 0, 'current', 1);
+
+        // Authentication Method Selection
+        $this->const[$r++] = array('KSEF_AUTH_METHOD', 'chaine', 'token', 'Authentication method: token or certificate', 0, 'current', 1);
+
+        // Online Authentication Token
+        $this->const[$r++] = array('KSEF_AUTH_TOKEN', 'chaine', '', 'KSeF authentication token (encrypted)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_TOKEN_UPDATED_AT', 'chaine', '', 'Timestamp when auth token was last updated', 0, 'current', 1);
+
+        // Authentication Certificate Configuration
+        $this->const[$r++] = array('KSEF_AUTH_CERTIFICATE', 'chaine', '', 'Authentication certificate (Base64 PEM)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_AUTH_PRIVATE_KEY', 'chaine', '', 'Authentication encrypted private key (Base64 PEM)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_AUTH_KEY_PASSWORD', 'chaine', '', 'Authentication private key password (encrypted)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_AUTH_CERT_SERIAL', 'chaine', '', 'Authentication certificate serial number', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_AUTH_CERT_VALID_FROM', 'chaine', '', 'Authentication certificate validity start timestamp', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_AUTH_CERT_VALID_TO', 'chaine', '', 'Authentication certificate validity end timestamp', 0, 'current', 1);
+
+        // Offline Certificate Configuration
+        $this->const[$r++] = array('KSEF_OFFLINE_CERTIFICATE', 'chaine', '', 'Offline certificate (Base64 PEM)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_OFFLINE_PRIVATE_KEY', 'chaine', '', 'Offline encrypted private key (Base64 PEM)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_OFFLINE_KEY_PASSWORD', 'chaine', '', 'Offline private key password (encrypted)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_OFFLINE_CERT_SERIAL', 'chaine', '', 'Offline certificate serial number', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_OFFLINE_CERT_VALID_FROM', 'chaine', '', 'Offline certificate validity start timestamp', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_OFFLINE_CERT_VALID_TO', 'chaine', '', 'Offline certificate validity end timestamp', 0, 'current', 1);
+
+
+        // PDF & QR Settings
         $this->const[$r++] = array('KSEF_ADD_TO_PDF', 'chaine', '1', 'Add KSEF number to invoice PDFs', 0, 'current', 1);
         $this->const[$r++] = array('KSEF_ADD_QR', 'chaine', '1', 'Add KSEF QR code to invoice PDFs', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_QR_SIZE', 'chaine', '25', 'QR code size in mm', 0, 'current', 1);
+
+        // UI Customization
+        $this->const[$r++] = array('KSEF_BUTTON_COLOR', 'chaine', '#dc3545', 'KSeF button color', 0, 'current', 1);
+
+        // Customer Exclusions
+        $this->const[$r++] = array('KSEF_EXCLUDED_CUSTOMERS', 'chaine', '', 'Comma-separated list of excluded customer IDs', 0, 'current', 1);
+
 
         if (!isset($conf->ksef) || !isset($conf->ksef->enabled)) {
             $conf->ksef = new stdClass();
@@ -253,7 +288,7 @@ class modKSEF extends DolibarrModules
                     'ACCEPTED' => 'Accepted',
                     'REJECTED' => 'Rejected',
                     'FAILED' => 'Failed',
-                    'OFFLINE24' => 'Offline (24h)',
+                    'OFFLINE' => 'Offline',
                     'VALIDATION_FAILED' => 'Validation Failed'
                 )),
                 1, '', '1', '', '', '', 'ksef@ksef', '$conf->ksef->enabled', 0, 0

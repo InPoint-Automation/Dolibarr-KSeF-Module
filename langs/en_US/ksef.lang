@@ -316,3 +316,188 @@ KSEF_STATS_PENDING=Pending
 KSEF_STATS_FAILED=Failed
 KSEF_STATS_SUCCESS_RATE=Success Rate
 KSEF_DESCRIPTION=Description
+
+# ============================================
+# Offline Mode & Deadlines
+# ============================================
+KSEF_OfflineMode=Offline Mode
+KSEF_MODE_OFFLINE=Offline
+KSEF_MODE_OFFLINE_SYSTEM=System Offline
+KSEF_MODE_AWARYJNY=Emergency Mode
+KSEF_OfflineDeadline=Submission Deadline
+KSEF_DeadlinePassed=Deadline Passed
+KSEF_DeadlineUrgent=URGENT
+KSEF_HoursRemaining=%s hours remaining
+KSEF_OfflineDeadlinePassed=Offline deadline has passed - invoice cannot be uploaded
+KSEF_STATUS_OFFLINE=Offline (Awaiting Upload)
+KSEF_OfflineNumberNotYetSubmitted=This is an offline invoice number - not yet submitted to KSeF
+
+# ============================================
+# Offline Confirmation Dialog
+# ============================================
+KSEF_OfflineConfirmTitle=Offline Mode Required
+KSEF_OfflineConfirmMessage=Invoice date is %s day(s) behind the current date. This invoice will be submitted in OFFLINE mode.
+KSEF_OfflineConfirmInfo=In offline mode, the invoice must be submitted to KSeF by the deadline shown above. Two QR codes will be added to the PDF.
+KSEF_ConfirmOfflineSubmit=Submit in Offline Mode
+KSEF_OfflineBackdatedTitle=Backdated Invoice Detected
+KSEF_OfflineBackdatedMessage=Invoice is dated %d day(s) in the past and requires offline mode.
+KSEF_OfflineConnectionTitle=Connection Issue Detected
+KSEF_OfflineConnectionMessage=Unable to connect to KSeF. You can create an offline invoice instead.
+KSEF_OfflineExplanation=The invoice will be stored locally and must be uploaded to KSeF before the deadline.
+
+# ============================================
+# Technical Correction
+# ============================================
+KSEF_TechnicalCorrection=Technical Correction
+KSEF_TechnicalCorrectionSubmitted=Technical correction submitted successfully
+KSEF_TechnicalCorrectionFailed=Technical correction failed
+
+# ============================================
+# Certificate Configuration (Common)
+# ============================================
+KSEF_Certificate=Certificate
+KSEF_PrivateKey=Private Key
+KSEF_Password=Password
+KSEF_CertificateFile=Certificate File
+KSEF_PrivateKeyFile=Private Key File
+KSEF_PrivateKeyPassword=Private Key Password
+KSEF_PrivateKeyPassword_Help=The password used to decrypt the encrypted private key (.key file)
+KSEF_OrPasteContent=Or paste content
+KSEF_LeaveEmptyToKeep=Leave empty to keep current
+KSEF_EnterPassword=Enter password
+KSEF_CertSerial=Serial Number
+KSEF_ValidUntil=Valid Until
+KSEF_CertificateReady=Certificate Ready
+KSEF_CertificateIncomplete=Configuration Incomplete
+KSEF_CertificateActive=Certificate Active
+KSEF_CertificateExpired=Certificate Expired
+KSEF_CertificateExpiresSoon=Certificate expires within 30 days
+KSEF_ExpiresSoon=Expires Soon
+KSEF_RemoveAll=Remove All
+KSEF_RemoveCertificate=Remove Certificate
+KSEF_UpdateCertificate=Update Certificate
+KSEF_CertificateSaved=Certificate saved successfully
+KSEF_PrivateKeySaved=Private key saved successfully (encrypted)
+KSEF_PrivateKeyValidated=Private key validated successfully
+KSEF_PrivateKeyInvalid=Invalid private key format
+KSEF_PrivateKeyPasswordMismatch=Warning: Password does not match the private key
+KSEF_CertificateRemoved=Certificate configuration removed
+KSEF_CertificateParseError=Failed to parse certificate
+KSEF_CertificateInvalid=Invalid certificate format
+KSEF_NoCertificateConfigured=No certificate configured
+KSEF_CertificateNotConfigured=Certificate not configured
+
+# ============================================
+# Offline Certificate Configuration
+# ============================================
+KSEF_OFFLINE_CERTIFICATE_CONFIG=Offline Certificate Configuration (QR Code II)
+KSEF_OFFLINE_CERTIFICATE=Offline Certificate
+KSEF_OFFLINE_CERTIFICATE_Help=Certificate used for signing QR Code II on invoices issued in offline mode. You need both the certificate (.crt) and the encrypted private key (.key) that was used to generate the certificate request.
+KSEF_OFFLINE_PRIVATE_KEY=Offline Certificate Private Key
+KSEF_OFFLINE_PRIVATE_KEY_Help=Private key corresponding to the offline certificate. Will be stored encrypted.
+KSEF_SaveOfflineCertificate=Save Offline Certificate
+KSEF_OfflineCertificateSaved=Offline certificate saved
+KSEF_OfflinePrivateKeySaved=Offline private key saved
+KSEF_OfflinePasswordSaved=Offline certificate password saved
+KSEF_OfflineCertificateRemoved=Offline certificate configuration removed
+KSEF_ConfirmRemoveOfflineCert=Are you sure you want to remove the offline certificate configuration?
+KSEF_CertificateRequiredForOffline=Certificate is required for QR Code II generation in offline mode
+KSEF_OfflineCertificateRequired=Offline Certificate Required
+KSEF_OfflineCertificateRequiredExplanation=To create offline invoices, you must configure an offline certificate in the KSeF module settings.
+KSEF_OfflineCertificateMissingItems=Missing configuration
+KSEF_Missing_certificate=Offline certificate (.crt file)
+KSEF_Missing_private_key=Offline private key (.key file)
+KSEF_Missing_password=Private key password
+KSEF_QR_CertNotConfigured=Cert not configured
+
+# ============================================
+# Authentication Certificate Configuration
+# ============================================
+KSEF_ConfigureCertificateBelow=You can configure the Online Certificate needed below
+KSEF_ForAPIAuthentication=Online Certificate
+KSEF_ForQRCodeSigning=Offline Certificate
+KSEF_AUTH_CERTIFICATE_CONFIG=Authentication Certificate Configuration
+KSEF_AUTH_CERTIFICATE=Authentication Certificate
+KSEF_AUTH_CERTIFICATE_Help=Certificate used for authenticating with KSeF API via XAdES signature. You need both the certificate (.crt) and the encrypted private key (.key) that was used to generate the certificate request.
+KSEF_SaveAuthCertificate=Save Authentication Certificate
+KSEF_AuthCertificateSaved=Authentication certificate saved
+KSEF_AuthPrivateKeySaved=Authentication private key saved
+KSEF_AuthPasswordSaved=Authentication certificate password saved
+KSEF_AuthCertificateRemoved=Authentication certificate configuration removed
+KSEF_ConfirmRemoveAuthCert=Are you sure you want to remove the authentication certificate configuration?
+KSEF_NoAuthCertificateConfigured=No authentication certificate configured
+KSEF_AuthCertificateInfo=Authentication certificates can be obtained from the KSeF portal. They allow authentication via digital signature instead of using tokens.
+KSEF_ConfigureCertificateFirst=You need to configure the authentication certificate first
+KSEF_WARNING_NO_AUTH_CERTIFICATE=Certificate authentication is selected but certificate is not fully configured
+
+# ============================================
+# Authentication Method
+# ============================================
+KSEF_AUTH_METHOD_SELECT=Authentication Method
+KSEF_AUTH_METHOD_SELECT_Help=Choose whether to authenticate using a KSeF token or a KSeF certificate. Certificate authentication requires a valid certificate issued by KSeF with both .crt and .key files.
+KSEF_AUTH_METHOD_TOKEN=Token Authentication
+KSEF_AUTH_METHOD_CERTIFICATE=Certificate Authentication
+KSEF_AuthMethodUpdated=Authentication method updated
+KSEF_NO_AUTH_CONFIGURED=No Authentication Configured
+KSEF_ConfigureAuthBelow=Configure token or certificate below to enable KSeF submissions
+KSEF_WARNING_NO_AUTH=No authentication method configured
+KSEF_WARNING_CONFIGURE_TOKEN_OR_CERT=You must configure either a token or certificate to submit invoices to KSeF
+KSEF_TEST_CERT_AUTH=Test Certificate Authentication
+KSEF_CERT_AUTH_SUCCESS=Certificate authentication successful
+KSEF_CERT_AUTH_FAILED=Certificate authentication failed
+KSEF_CERT_AUTH_ERROR=Certificate authentication error
+
+# ============================================
+# Token Configuration
+# ============================================
+KSEF_TOKEN_CONFIG=Token Configuration
+KSEF_TokenConfigured=Token Configured
+KSEF_TokenNotConfigured=Token not configured
+KSEF_ConfigureTokenBelow=Configure in the Token section below
+KSEF_ConfigureTokenFirst=You need to configure the authentication token first
+
+# ============================================
+# Offline Submission & Retry
+# ============================================
+KSEF_SubmissionInProgress=Submission in progress...
+KSEF_RetrySubmission=Retry Submission
+KSEF_RetryingSubmission=Retrying submission
+KSEF_RetryFailed=Retry failed
+KSEF_RetryOnlineHelp=Try to submit this offline invoice to KSeF online (before deadline)
+KSEF_CreateOfflineInvoice=Create Offline Invoice
+KSEF_CreatingOfflineInvoice=Creating offline invoice
+KSEF_OfflineInvoiceCreated=Offline invoice created successfully
+KSEF_OfflineCreationFailed=Failed to create offline invoice
+KSEF_SubmitOnline=Submit Online
+KSEF_TryAgain=Try Again
+KSEF_AlreadyAccepted=Invoice already accepted in KSeF
+KSEF_TooManyRetries=Too many retry attempts
+KSEF_InvalidStatusForUpload=Invoice is not in offline status
+KSEF_NoSubmissionFound=No submission record found for this invoice
+
+# ============================================
+# Upload Status
+# ============================================
+KSEF_UploadToKSEF=Upload to KSeF
+KSEF_UploadingToKSEF=Uploading to KSeF
+KSEF_UploadSuccess=Successfully uploaded to KSeF
+KSEF_UploadFailed=Upload to KSeF failed
+KSEF_UploadPending=Upload submitted, awaiting confirmation
+KSEF_OnlineSubmissionSuccess=Online submission successful
+KSEF_OnlineRetryFailed=Online retry failed, offline invoice remains valid
+
+# ============================================
+# Failure Dialog
+# ============================================
+KSEF_ConnectionFailed=Connection to KSeF Failed
+KSEF_ConnectionErrorExplanation=Unable to connect to the KSeF server. This could be due to network issues, server maintenance, or firewall settings. You can try again or create an offline invoice.
+KSEF_OfflineOptionAvailable=Create Offline Invoice?
+KSEF_OfflineOptionExplanation=Since we can't submit to KSeF page, we can create an Offline invoice. If the issue is on your side, you have until the next business day to submit the invoice to KSeF (the Deadline shown below). You can also check the Ministry of Finance page (https://www.gov.pl/web/finanse) for announcements that may extend this timeline.
+
+# ============================================
+# Modification Warnings
+# ============================================
+KSEF_ModifyWarningTitle=KSeF Warning
+KSEF_ModifyWarningKSeF=This invoice has already been submitted to KSeF with number %s. Modifying it will NOT update the KSeF record. You may need to issue a corrective invoice instead.
+KSEF_ModifyWarningOffline=An offline invoice has been generated for this document. Modifying it will invalidate the QR codes on the printed PDF and may cause compliance issues.
+KSEF_ModifyInfoFailed=A previous KSeF submission attempt failed. Modifying the invoice will require a new submission.

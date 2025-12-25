@@ -47,11 +47,16 @@ class KsefSubmission extends CommonObject
     public $fk_user_submit;
     public $error_code;
     public $error_details;
-
+    public $offline_mode;
+    public $offline_deadline;
+    public $offline_detected_reason;
+    public $original_invoice_hash;
+    public $fa3_creation_date;
     const STATUS_PENDING = 'PENDING';
     const STATUS_SUBMITTED = 'SUBMITTED';
     const STATUS_ACCEPTED = 'ACCEPTED';
     const STATUS_REJECTED = 'REJECTED';
+    const STATUS_OFFLINE = 'OFFLINE';
     const STATUS_FAILED = 'FAILED';
     const STATUS_TIMEOUT = 'TIMEOUT';
 
@@ -94,6 +99,7 @@ class KsefSubmission extends CommonObject
         $sql .= "status,";
         $sql .= "environment,";
         $sql .= "fa3_xml,";
+        $sql .= "fa3_creation_date,";
         $sql .= "upo_xml,";
         $sql .= "api_response,";
         $sql .= "date_submission,";
@@ -103,7 +109,11 @@ class KsefSubmission extends CommonObject
         $sql .= "error_code,";
         $sql .= "error_details,";
         $sql .= "retry_count,";
-        $sql .= "fk_user_submit";
+        $sql .= "fk_user_submit,";
+        $sql .= "offline_mode,";
+        $sql .= "offline_deadline,";
+        $sql .= "offline_detected_reason,";
+        $sql .= "original_invoice_hash";
         $sql .= ")";
         $sql .= " VALUES (";
         $sql .= " " . (int)$this->fk_facture . ",";
@@ -113,6 +123,7 @@ class KsefSubmission extends CommonObject
         $sql .= " '" . $this->db->escape($this->status) . "',";
         $sql .= " '" . $this->db->escape($this->environment) . "',";
         $sql .= " " . ($this->fa3_xml ? "'" . $this->db->escape($this->fa3_xml) . "'" : "NULL") . ",";
+        $sql .= " " . ($this->fa3_creation_date ? (int)$this->fa3_creation_date : "NULL") . ",";
         $sql .= " " . ($this->upo_xml ? "'" . $this->db->escape($this->upo_xml) . "'" : "NULL") . ",";
         $sql .= " " . ($this->api_response ? "'" . $this->db->escape($this->api_response) . "'" : "NULL") . ",";
         $sql .= " " . (int)$this->date_submission . ",";
@@ -122,7 +133,11 @@ class KsefSubmission extends CommonObject
         $sql .= " " . ($this->error_code ? (int)$this->error_code : "NULL") . ",";
         $sql .= " " . ($this->error_details ? "'" . $this->db->escape($this->error_details) . "'" : "NULL") . ",";
         $sql .= " " . (int)$this->retry_count . ",";
-        $sql .= " " . (int)$user->id;
+        $sql .= " " . (int)$user->id . ",";
+        $sql .= " " . ($this->offline_mode ? "'" . $this->db->escape($this->offline_mode) . "'" : "NULL") . ",";
+        $sql .= " " . ($this->offline_deadline ? (int)$this->offline_deadline : "NULL") . ",";
+        $sql .= " " . ($this->offline_detected_reason ? "'" . $this->db->escape($this->offline_detected_reason) . "'" : "NULL") . ",";
+        $sql .= " " . ($this->original_invoice_hash ? "'" . $this->db->escape($this->original_invoice_hash) . "'" : "NULL");
         $sql .= ")";
 
         dol_syslog(get_class($this) . "::create", LOG_DEBUG);
@@ -178,6 +193,7 @@ class KsefSubmission extends CommonObject
         $sql = "UPDATE " . MAIN_DB_PREFIX . $this->table_element . " SET";
         $sql .= " ksef_reference = " . ($this->ksef_reference ? "'" . $this->db->escape($this->ksef_reference) . "'" : "NULL") . ",";
         $sql .= " ksef_number = " . ($this->ksef_number ? "'" . $this->db->escape($this->ksef_number) . "'" : "NULL") . ",";
+        $sql .= " fa3_creation_date = " . ($this->fa3_creation_date ? (int)$this->fa3_creation_date : "NULL") . ",";
         $sql .= " invoice_hash = " . ($this->invoice_hash ? "'" . $this->db->escape($this->invoice_hash) . "'" : "NULL") . ",";
         $sql .= " status = '" . $this->db->escape($this->status) . "',";
         $sql .= " api_response = " . ($this->api_response ? "'" . $this->db->escape($this->api_response) . "'" : "NULL") . ",";
@@ -186,7 +202,11 @@ class KsefSubmission extends CommonObject
         $sql .= " error_message = " . ($this->error_message ? "'" . $this->db->escape($this->error_message) . "'" : "NULL") . ",";
         $sql .= " error_code = " . ($this->error_code ? (int)$this->error_code : "NULL") . ",";
         $sql .= " error_details = " . ($this->error_details ? "'" . $this->db->escape($this->error_details) . "'" : "NULL") . ",";
-        $sql .= " retry_count = " . (int)$this->retry_count;
+        $sql .= " retry_count = " . (int)$this->retry_count . ",";
+        $sql .= " offline_mode = " . ($this->offline_mode ? "'" . $this->db->escape($this->offline_mode) . "'" : "NULL") . ",";
+        $sql .= " offline_deadline = " . ($this->offline_deadline ? (int)$this->offline_deadline : "NULL") . ",";
+        $sql .= " offline_detected_reason = " . ($this->offline_detected_reason ? "'" . $this->db->escape($this->offline_detected_reason) . "'" : "NULL") . ",";
+        $sql .= " original_invoice_hash = " . ($this->original_invoice_hash ? "'" . $this->db->escape($this->original_invoice_hash) . "'" : "NULL");
         $sql .= " WHERE rowid = " . (int)$this->rowid;
 
         dol_syslog(get_class($this) . "::update", LOG_DEBUG);
@@ -243,6 +263,7 @@ class KsefSubmission extends CommonObject
         $sql .= " t.status,";
         $sql .= " t.environment,";
         $sql .= " t.fa3_xml,";
+        $sql .= " t.fa3_creation_date,";
         $sql .= " t.upo_xml,";
         $sql .= " t.api_response,";
         $sql .= " t.date_submission,";
@@ -252,7 +273,11 @@ class KsefSubmission extends CommonObject
         $sql .= " t.error_code,";
         $sql .= " t.error_details,";
         $sql .= " t.retry_count,";
-        $sql .= " t.fk_user_submit";
+        $sql .= " t.fk_user_submit,";
+        $sql .= " t.offline_mode,";
+        $sql .= " t.offline_deadline,";
+        $sql .= " t.offline_detected_reason,";
+        $sql .= " t.original_invoice_hash";
         $sql .= " FROM " . MAIN_DB_PREFIX . $this->table_element . " as t";
 
         if ($id > 0) {
@@ -280,6 +305,7 @@ class KsefSubmission extends CommonObject
                 $this->status = $obj->status;
                 $this->environment = $obj->environment;
                 $this->fa3_xml = $obj->fa3_xml;
+                $this->fa3_creation_date = $obj->fa3_creation_date;
                 $this->upo_xml = $obj->upo_xml;
                 $this->api_response = $obj->api_response;
                 $this->date_submission = $obj->date_submission;
@@ -290,6 +316,10 @@ class KsefSubmission extends CommonObject
                 $this->error_details = $obj->error_details;
                 $this->retry_count = $obj->retry_count;
                 $this->fk_user_submit = $obj->fk_user_submit;
+                $this->offline_mode = $obj->offline_mode;
+                $this->offline_deadline = $obj->offline_deadline;
+                $this->offline_detected_reason = $obj->offline_detected_reason;
+                $this->original_invoice_hash = $obj->original_invoice_hash;
             }
             $this->db->free($resql);
             return 1;
@@ -414,6 +444,7 @@ class KsefSubmission extends CommonObject
     {
         global $db, $conf;
         require_once DOL_DOCUMENT_ROOT . '/custom/ksef/class/ksef_client.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/custom/ksef/class/ksef.class.php';
 
         $submission = new KsefSubmission($db);
         $pending = $submission->fetchPending($conf->global->KSEF_ENVIRONMENT);
@@ -421,12 +452,28 @@ class KsefSubmission extends CommonObject
         if (!$pending) return 0;
 
         $processed = 0;
-        $ksef = new KsefClient($db, $conf->global->KSEF_ENVIRONMENT);
+        $ksef = new KSEF($db);
+        $ksefClient = new KsefClient($db, $conf->global->KSEF_ENVIRONMENT);
 
         foreach ($pending as $sub) {
             try {
+                if ($sub->status == 'PENDING' && !empty($sub->offline_mode)) {
+                    if (!empty($sub->offline_deadline) && ksefIsDeadlinePassed($sub->offline_deadline)) {
+                        $sub->status = 'FAILED';
+                        $sub->error_message = 'Offline deadline passed without successful submission';
+                        $sub->update($user, 1);
+                        $processed++;
+                        continue;
+                    }
+                    $result = $ksef->retrySubmission($sub->fk_facture, $user);
+                    if ($result && $result['status'] == 'ACCEPTED') {
+                        $processed++;
+                    }
+                    continue;
+                }
+
                 if (in_array($sub->status, array(self::STATUS_SUBMITTED, self::STATUS_TIMEOUT))) {
-                    $invoiceStatus = $ksef->checkInvoiceInSession($sub->ksef_reference, $sub->ksef_reference);
+                    $invoiceStatus = $ksefClient->checkInvoiceInSession($sub->ksef_reference, $sub->ksef_reference);
 
                     if ($invoiceStatus) {
                         if ($invoiceStatus['status'] == 'ACCEPTED') {
@@ -437,9 +484,9 @@ class KsefSubmission extends CommonObject
                             $processed++;
                         } elseif ($invoiceStatus['status'] == 'REJECTED') {
                             $sub->status = self::STATUS_REJECTED;
-                            $sub->error_code = $ksef->last_error_code;
-                            $sub->error_message = $ksef->error;
-                            $sub->error_details = json_encode($ksef->last_error_details);
+                            $sub->error_code = $ksefClient->last_error_code;
+                            $sub->error_message = $ksefClient->error;
+                            $sub->error_details = json_encode($ksefClient->last_error_details);
                             $sub->update($user, 1);
                             $processed++;
                         }
@@ -450,9 +497,9 @@ class KsefSubmission extends CommonObject
 
             } catch (Exception $e) {
                 $sub->error_message = $e->getMessage();
-                if ($ksef->last_error_code) {
-                    $sub->error_code = $ksef->last_error_code;
-                    $sub->error_details = json_encode($ksef->last_error_details);
+                if ($ksefClient->last_error_code) {
+                    $sub->error_code = $ksefClient->last_error_code;
+                    $sub->error_details = json_encode($ksefClient->last_error_details);
                 }
                 $sub->update($user, 1);
             }
@@ -469,5 +516,91 @@ class KsefSubmission extends CommonObject
     public function fetchByInvoice($fk_facture)
     {
         return $this->fetch(0, $fk_facture);
+    }
+
+    /**
+     * @brief Fetches offline submissions approaching deadline
+     * @param int $hours_ahead Hours ahead to check (default 24)
+     * @return array|false Submission objects
+     */
+    public function fetchCronJobs($hours_ahead = 24)
+    {
+        $results = array();
+        $deadline_threshold = dol_now() + ($hours_ahead * 3600);
+
+        $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . $this->table_element;
+        $sql .= " WHERE offline_mode IS NOT NULL";
+        $sql .= " AND status NOT IN ('ACCEPTED', 'REJECTED')";
+        $sql .= " AND offline_deadline IS NOT NULL";
+        $sql .= " AND offline_deadline <= " . (int)$deadline_threshold;
+        $sql .= " AND offline_deadline > " . dol_now();
+        $sql .= " ORDER BY offline_deadline ASC";
+
+        $resql = $this->db->query($sql);
+
+        if ($resql) {
+            while ($obj = $this->db->fetch_object($resql)) {
+                $submission = new KsefSubmission($this->db);
+                if ($submission->fetch($obj->rowid) > 0) {
+                    $results[] = $submission;
+                }
+            }
+            $this->db->free($resql);
+            return $results;
+        }
+
+        $this->error = "Error " . $this->db->lasterror();
+        return false;
+    }
+
+    /**
+     * @brief Checks if submission can be retried
+     * @return bool True if retryable
+     */
+    public function canRetry()
+    {
+        $retryable = array('PENDING', 'FAILED', 'REJECTED', 'TIMEOUT');
+
+        if (!in_array($this->status, $retryable)) {
+            return false;
+        }
+
+        if (!empty($this->offline_mode) && !empty($this->offline_deadline)) {
+            if (ksefIsDeadlinePassed($this->offline_deadline)) {
+                return false;
+            }
+        }
+
+        if ($this->retry_count >= 100) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @brief Gets reason why retry is not allowed
+     * @return string|null Reason or null if retry is allowed
+     */
+    public function getNoRetryReason()
+    {
+        global $langs;
+        $langs->load("ksef@ksef");
+
+        if ($this->status == 'ACCEPTED') {
+            return $langs->trans('KSEF_AlreadyAccepted');
+        }
+
+        if (!empty($this->offline_mode) && !empty($this->offline_deadline)) {
+            if (ksefIsDeadlinePassed($this->offline_deadline)) {
+                return $langs->trans('KSEF_DeadlinePassed');
+            }
+        }
+
+        if ($this->retry_count >= 10) {
+            return $langs->trans('KSEF_TooManyRetries');
+        }
+
+        return null;
     }
 }

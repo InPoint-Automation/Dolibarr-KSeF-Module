@@ -316,3 +316,188 @@ KSEF_STATS_PENDING=Oczekujące
 KSEF_STATS_FAILED=Nieudane
 KSEF_STATS_SUCCESS_RATE=Wskaźnik sukcesu
 KSEF_DESCRIPTION=Opis
+
+# ============================================
+# Offline Mode & Deadlines
+# ============================================
+KSEF_OfflineMode=Tryb Offline
+KSEF_MODE_OFFLINE=Offline
+KSEF_MODE_OFFLINE_SYSTEM=System Offline
+KSEF_MODE_AWARYJNY=Tryb Awaryjny
+KSEF_OfflineDeadline=Termin Wysłania
+KSEF_DeadlinePassed=Termin Minął
+KSEF_DeadlineUrgent=PILNE
+KSEF_HoursRemaining=Pozostało %s godzin
+KSEF_OfflineDeadlinePassed=Termin wysłania faktury offline minął - nie można już wysłać faktury
+KSEF_STATUS_OFFLINE=Offline (Oczekuje na Wysłanie)
+KSEF_OfflineNumberNotYetSubmitted=To jest numer faktury offline - nie została jeszcze wysłana do KSeF
+
+# ============================================
+# Offline Confirmation Dialog
+# ============================================
+KSEF_OfflineConfirmTitle=Wymagany Tryb Offline
+KSEF_OfflineConfirmMessage=Data faktury jest wstecz o %s dni. Faktura zostanie wysłana w trybie OFFLINE.
+KSEF_OfflineConfirmInfo=W trybie offline faktura musi zostać wysłana do KSeF przed terminem pokazanym powyżej. Do PDF-a zostaną dodane dwa kody QR.
+KSEF_ConfirmOfflineSubmit=Wyślij w Trybie Offline
+KSEF_OfflineBackdatedTitle=Wykryto Fakturę Wsteczną
+KSEF_OfflineBackdatedMessage=Faktura jest datowana %d dni wstecz i wymaga trybu offline.
+KSEF_OfflineConnectionTitle=Wykryto Problem z Połączeniem
+KSEF_OfflineConnectionMessage=Nie można połączyć się z KSeF. Możesz utworzyć fakturę offline.
+KSEF_OfflineExplanation=Faktura zostanie zapisana lokalnie i musi być wysłana do KSeF przed terminem.
+
+# ============================================
+# Technical Correction
+# ============================================
+KSEF_TechnicalCorrection=Korekta Techniczna
+KSEF_TechnicalCorrectionSubmitted=Korekta techniczna wysłana pomyślnie
+KSEF_TechnicalCorrectionFailed=Wysłanie korekty technicznej nie powiodło się
+
+# ============================================
+# Certificate Configuration (Common)
+# ============================================
+KSEF_Certificate=Certyfikat
+KSEF_PrivateKey=Klucz Prywatny
+KSEF_Password=Hasło
+KSEF_CertificateFile=Plik Certyfikatu
+KSEF_PrivateKeyFile=Plik Klucza Prywatnego
+KSEF_PrivateKeyPassword=Hasło Klucza Prywatnego
+KSEF_PrivateKeyPassword_Help=Hasło używane do odszyfrowania zaszyfrowanego klucza prywatnego (plik .key)
+KSEF_OrPasteContent=Lub wklej zawartość
+KSEF_LeaveEmptyToKeep=Pozostaw puste, aby zachować obecne
+KSEF_EnterPassword=Wprowadź hasło
+KSEF_CertSerial=Numer Seryjny
+KSEF_ValidUntil=Ważny Do
+KSEF_CertificateReady=Certyfikat Gotowy
+KSEF_CertificateIncomplete=Konfiguracja Niekompletna
+KSEF_CertificateActive=Certyfikat Aktywny
+KSEF_CertificateExpired=Certyfikat Wygasł
+KSEF_CertificateExpiresSoon=Certyfikat wygasa w ciągu 30 dni
+KSEF_ExpiresSoon=Wkrótce Wygasa
+KSEF_RemoveAll=Usuń Wszystko
+KSEF_RemoveCertificate=Usuń Certyfikat
+KSEF_UpdateCertificate=Aktualizuj Certyfikat
+KSEF_CertificateSaved=Certyfikat zapisany pomyślnie
+KSEF_PrivateKeySaved=Klucz prywatny zapisany pomyślnie (zaszyfrowany)
+KSEF_PrivateKeyValidated=Klucz prywatny zwalidowany pomyślnie
+KSEF_PrivateKeyInvalid=Nieprawidłowy format klucza prywatnego
+KSEF_PrivateKeyPasswordMismatch=Uwaga: Hasło nie pasuje do klucza prywatnego
+KSEF_CertificateRemoved=Konfiguracja certyfikatu usunięta
+KSEF_CertificateParseError=Nie udało się przetworzyć certyfikatu
+KSEF_CertificateInvalid=Nieprawidłowy format certyfikatu
+KSEF_NoCertificateConfigured=Nie skonfigurowano certyfikatu
+KSEF_CertificateNotConfigured=Certyfikat nie jest skonfigurowany
+
+# ============================================
+# Offline Certificate Configuration
+# ============================================
+KSEF_OFFLINE_CERTIFICATE_CONFIG=Konfiguracja Certyfikatu Offline (Kod QR II)
+KSEF_OFFLINE_CERTIFICATE=Certyfikat Offline
+KSEF_OFFLINE_CERTIFICATE_Help=Certyfikat używany do podpisywania Kodu QR II na fakturach wystawionych w trybie offline. Potrzebujesz zarówno certyfikatu (.crt) jak i zaszyfrowanego klucza prywatnego (.key), który został użyty do wygenerowania żądania certyfikatu.
+KSEF_OFFLINE_PRIVATE_KEY=Klucz Prywatny Certyfikatu Offline
+KSEF_OFFLINE_PRIVATE_KEY_Help=Klucz prywatny odpowiadający certyfikatowi offline. Zostanie zapisany w formie zaszyfrowanej.
+KSEF_SaveOfflineCertificate=Zapisz Certyfikat Offline
+KSEF_OfflineCertificateSaved=Certyfikat offline zapisany
+KSEF_OfflinePrivateKeySaved=Klucz prywatny offline zapisany
+KSEF_OfflinePasswordSaved=Hasło certyfikatu offline zapisane
+KSEF_OfflineCertificateRemoved=Konfiguracja certyfikatu offline usunięta
+KSEF_ConfirmRemoveOfflineCert=Czy na pewno chcesz usunąć konfigurację certyfikatu offline?
+KSEF_CertificateRequiredForOffline=Certyfikat jest wymagany do generowania Kodu QR II w trybie offline
+KSEF_OfflineCertificateRequired=Wymagany Certyfikat Offline
+KSEF_OfflineCertificateRequiredExplanation=Aby tworzyć faktury offline, musisz skonfigurować certyfikat offline w ustawieniach modułu KSeF.
+KSEF_OfflineCertificateMissingItems=Brakująca konfiguracja
+KSEF_Missing_certificate=Certyfikat offline (plik .crt)
+KSEF_Missing_private_key=Klucz prywatny offline (plik .key)
+KSEF_Missing_password=Hasło klucza prywatnego
+KSEF_QR_CertNotConfigured=Certyfikat nie skonfigurowany
+
+# ============================================
+# Authentication Certificate Configuration
+# ============================================
+KSEF_ConfigureCertificateBelow=Poniżej możesz skonfigurować Certyfikat Online
+KSEF_ForAPIAuthentication=Certyfikat Online
+KSEF_ForQRCodeSigning=Certyfikat Offline
+KSEF_AUTH_CERTIFICATE_CONFIG=Konfiguracja Certyfikatu Uwierzytelniania
+KSEF_AUTH_CERTIFICATE=Certyfikat Uwierzytelniania
+KSEF_AUTH_CERTIFICATE_Help=Certyfikat używany do uwierzytelniania w API KSeF poprzez podpis XAdES. Potrzebujesz zarówno certyfikatu (.crt) jak i zaszyfrowanego klucza prywatnego (.key), który został użyty do wygenerowania żądania certyfikatu.
+KSEF_SaveAuthCertificate=Zapisz Certyfikat Uwierzytelniania
+KSEF_AuthCertificateSaved=Certyfikat uwierzytelniania zapisany
+KSEF_AuthPrivateKeySaved=Klucz prywatny uwierzytelniania zapisany
+KSEF_AuthPasswordSaved=Hasło certyfikatu uwierzytelniania zapisane
+KSEF_AuthCertificateRemoved=Konfiguracja certyfikatu uwierzytelniania usunięta
+KSEF_ConfirmRemoveAuthCert=Czy na pewno chcesz usunąć konfigurację certyfikatu uwierzytelniania?
+KSEF_NoAuthCertificateConfigured=Nie skonfigurowano certyfikatu uwierzytelniania
+KSEF_AuthCertificateInfo=Certyfikaty uwierzytelniania można uzyskać z portalu KSeF. Umożliwiają uwierzytelnianie za pomocą podpisu cyfrowego zamiast tokenów.
+KSEF_ConfigureCertificateFirst=Najpierw musisz skonfigurować certyfikat uwierzytelniania
+KSEF_WARNING_NO_AUTH_CERTIFICATE=Wybrano uwierzytelnianie certyfikatem, ale certyfikat nie jest w pełni skonfigurowany
+
+# ============================================
+# Authentication Method
+# ============================================
+KSEF_AUTH_METHOD_SELECT=Metoda Uwierzytelniania
+KSEF_AUTH_METHOD_SELECT_Help=Wybierz, czy uwierzytelniać się za pomocą tokenu KSeF, czy certyfikatu KSeF. Uwierzytelnianie certyfikatem wymaga ważnego certyfikatu wydanego przez KSeF z plikami .crt i .key.
+KSEF_AUTH_METHOD_TOKEN=Uwierzytelnianie Tokenem
+KSEF_AUTH_METHOD_CERTIFICATE=Uwierzytelnianie Certyfikatem
+KSEF_AuthMethodUpdated=Metoda uwierzytelniania zaktualizowana
+KSEF_NO_AUTH_CONFIGURED=Brak Skonfigurowanego Uwierzytelniania
+KSEF_ConfigureAuthBelow=Skonfiguruj token lub certyfikat poniżej, aby włączyć wysyłanie do KSeF
+KSEF_WARNING_NO_AUTH=Nie skonfigurowano metody uwierzytelniania
+KSEF_WARNING_CONFIGURE_TOKEN_OR_CERT=Musisz skonfigurować token lub certyfikat, aby wysyłać faktury do KSeF
+KSEF_TEST_CERT_AUTH=Testuj Uwierzytelnianie Certyfikatem
+KSEF_CERT_AUTH_SUCCESS=Uwierzytelnianie certyfikatem powiodło się
+KSEF_CERT_AUTH_FAILED=Uwierzytelnianie certyfikatem nie powiodło się
+KSEF_CERT_AUTH_ERROR=Błąd uwierzytelniania certyfikatem
+
+# ============================================
+# Token Configuration
+# ============================================
+KSEF_TOKEN_CONFIG=Konfiguracja Tokenu
+KSEF_TokenConfigured=Token Skonfigurowany
+KSEF_TokenNotConfigured=Token nie skonfigurowany
+KSEF_ConfigureTokenBelow=Skonfiguruj w sekcji Token poniżej
+KSEF_ConfigureTokenFirst=Najpierw musisz skonfigurować token uwierzytelniania
+
+# ============================================
+# Offline Submission & Retry
+# ============================================
+KSEF_SubmissionInProgress=Trwa wysyłanie...
+KSEF_RetrySubmission=Ponów Wysłanie
+KSEF_RetryingSubmission=Ponowne wysyłanie
+KSEF_RetryFailed=Ponowienie nie powiodło się
+KSEF_RetryOnlineHelp=Spróbuj wysłać tę fakturę offline do KSeF online (przed terminem)
+KSEF_CreateOfflineInvoice=Utwórz Fakturę Offline
+KSEF_CreatingOfflineInvoice=Tworzenie faktury offline
+KSEF_OfflineInvoiceCreated=Faktura offline utworzona pomyślnie
+KSEF_OfflineCreationFailed=Nie udało się utworzyć faktury offline
+KSEF_SubmitOnline=Wyślij Online
+KSEF_TryAgain=Spróbuj Ponownie
+KSEF_AlreadyAccepted=Faktura została już zaakceptowana w KSeF
+KSEF_TooManyRetries=Zbyt wiele prób ponowienia
+KSEF_InvalidStatusForUpload=Faktura nie ma statusu offline
+KSEF_NoSubmissionFound=Nie znaleziono rekordu wysyłki dla tej faktury
+
+# ============================================
+# Upload Status
+# ============================================
+KSEF_UploadToKSEF=Wyślij do KSeF
+KSEF_UploadingToKSEF=Wysyłanie do KSeF
+KSEF_UploadSuccess=Pomyślnie wysłano do KSeF
+KSEF_UploadFailed=Wysłanie do KSeF nie powiodło się
+KSEF_UploadPending=Wysłano, oczekiwanie na potwierdzenie
+KSEF_OnlineSubmissionSuccess=Wysyłka online powiodła się
+KSEF_OnlineRetryFailed=Ponowienie online nie powiodło się, faktura offline pozostaje ważna
+
+# ============================================
+# Failure Dialog
+# ============================================
+KSEF_ConnectionFailed=Błąd Połączenia z KSeF
+KSEF_ConnectionErrorExplanation=Nie można połączyć się z serwerem KSeF. Może to być spowodowane problemami z siecią, konserwacją serwera lub ustawieniami firewall. Możesz spróbować ponownie lub utworzyć fakturę offline.
+KSEF_OfflineOptionAvailable=Utworzyć Fakturę Offline?
+KSEF_OfflineOptionExplanation=Ponieważ nie możemy wysłać do KSeF, możemy utworzyć fakturę Offline. Jeśli problem jest po Twojej stronie, masz czas do następnego dnia roboczego na wysłanie faktury do KSeF (Termin pokazany poniżej). Możesz również sprawdzić stronę Ministerstwa Finansów (https://www.gov.pl/web/finanse) w poszukiwaniu komunikatów, które mogą przedłużyć ten termin.
+
+# ============================================
+# Modification Warnings
+# ============================================
+KSEF_ModifyWarningTitle=Ostrzeżenie KSeF
+KSEF_ModifyWarningKSeF=Ta faktura została już wysłana do KSeF z numerem %s. Modyfikacja NIE zaktualizuje wpisu w KSeF. Może być konieczne wystawienie faktury korygującej.
+KSEF_ModifyWarningOffline=Dla tego dokumentu została wygenerowana faktura offline. Modyfikacja unieważni kody QR na wydrukowanym PDF i może spowodować problemy z zgodnością.
+KSEF_ModifyInfoFailed=Poprzednia próba wysłania do KSeF nie powiodła się. Modyfikacja faktury będzie wymagała nowego wysłania.

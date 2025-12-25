@@ -32,7 +32,8 @@ class FA3Builder
 
     private $sellerName;
     private $buyerName;
-
+    private $lastXmlHash;
+    private $lastCreationDate;
     const FA3_NAMESPACE = 'http://crd.gov.pl/wzor/2025/06/25/13775/';
     const FA3_SCHEMA_VERSION = '1-0E';
 
@@ -44,14 +45,21 @@ class FA3Builder
 
     /**
      * @brief Builds FA(3) XML from Dolibarr invoice
-     * @param $invoice_id Invoice ID
+     * @param int $invoice_id Invoice ID
+     * @param array $options Optional settings:
+     *   - offline_mode: bool - Whether invoice is being submitted in offline mode
+     *   - include_attachments: bool - Attachments
      * @return string|false XML string or false on error
-     * @called_by KSEF::generateFA3XML(), KSEF::submitInvoice()
+     * @called_by KSEF::generateFA3XML(), KSEF::submitInvoice(), KSEF::submitInvoiceOffline()
      * @calls buildNaglowek(), buildPodmiot1(), buildPodmiot2(), buildFa()
      */
-    public function buildFromInvoice($invoice_id)
+    public function buildFromInvoice($invoice_id, $options = array())
     {
         global $conf, $mysoc;
+
+        // Reset hash
+        $this->lastXmlHash = null;
+        $this->lastCreationDate = null;
 
         try {
             $invoice = new Facture($this->db);
@@ -84,12 +92,22 @@ class FA3Builder
             $faktura = $xml->createElementNS(self::FA3_NAMESPACE, 'Faktura');
             $xml->appendChild($faktura);
 
-            $this->buildNaglowek($xml, $faktura, $invoice);
+            if (!empty($options['original_creation_date'])) {
+                $this->lastCreationDate = $options['original_creation_date'];
+            } else {
+                $this->lastCreationDate = dol_now();
+            }
+
+            $this->buildNaglowek($xml, $faktura, $invoice, $options);
             $this->buildPodmiot1($xml, $faktura, $mysoc);
             $this->buildPodmiot2($xml, $faktura, $customer);
             $this->buildFa($xml, $faktura, $invoice, $originalInvoice);
 
-            return $xml->saveXML();
+            $xmlString = $xml->saveXML();
+
+            $this->lastXmlHash = base64_encode(hash('sha256', $xmlString, true));
+
+            return $xmlString;
 
         } catch (Exception $e) {
             $this->error = "FA(3) generation error: " . $e->getMessage();
@@ -100,13 +118,33 @@ class FA3Builder
     }
 
     /**
+     * @brief Gets creation date from last built XML
+     * @return int|null Unix timestamp of FA3 creation date
+     * @called_by KSEF::submitInvoice(), KSEF::submitInvoiceOffline()
+     */
+    public function getLastCreationDate()
+    {
+        return $this->lastCreationDate;
+    }
+
+    /**
+     * @brief Gets hash of last built XML
+     * @return string|null Base64-encoded SHA-256 hash
+     */
+    public function getLastXmlHash()
+    {
+        return $this->lastXmlHash;
+    }
+
+    /**
      * @brief Builds header section of FA(3)
-     * @param $xml DOMDocument
-     * @param $parent Parent element
-     * @param $invoice Invoice object
+     * @param DOMDocument $xml
+     * @param DOMElement $parent Parent element
+     * @param Facture $invoice Invoice object
+     * @param array $options Build options
      * @called_by buildFromInvoice()
      */
-    private function buildNaglowek($xml, $parent, $invoice)
+    private function buildNaglowek($xml, $parent, $invoice, $options = array())
     {
         $naglowek = $xml->createElement('Naglowek');
         $parent->appendChild($naglowek);
@@ -120,12 +158,23 @@ class FA3Builder
         // Form variant
         $naglowek->appendChild($xml->createElement('WariantFormularza', '3'));
 
-        // Invoice creation date
-        $dateCreation = dol_print_date(dol_now(), '%Y-%m-%dT%H:%M:%S');
+        if (!empty($options['original_creation_date'])) {
+            if (is_numeric($options['original_creation_date'])) {
+                $dateCreation = date('Y-m-d\TH:i:s', $options['original_creation_date']);
+            } else {
+                $dateCreation = $options['original_creation_date'];
+            }
+        } else {
+            $dateCreation = date('Y-m-d\TH:i:s');
+        }
         $naglowek->appendChild($xml->createElement('DataWytworzeniaFa', $dateCreation));
 
         // System identification
-        $naglowek->appendChild($xml->createElement('SystemInfo', 'Dolibarr ERP ' . DOL_VERSION));
+        $systemInfo = 'Dolibarr ERP ' . DOL_VERSION;
+        if (!empty($options['offline_mode'])) {
+            $systemInfo .= ' (offline)';
+        }
+        $naglowek->appendChild($xml->createElement('SystemInfo', $systemInfo));
     }
 
     /**

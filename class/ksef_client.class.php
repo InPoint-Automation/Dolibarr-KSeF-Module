@@ -44,6 +44,9 @@ class KsefClient
     public $last_error_details = [];
 
     private $sessionExpiryBuffer = 300;
+    private $auth_method;
+    private $auth_certificate_pem;
+    private $auth_certificate_password;
 
     const API_TEST = 'https://ksef-test.mf.gov.pl/api/v2';
     const API_DEMO = 'https://ksef-demo.mf.gov.pl/api/v2';
@@ -170,9 +173,32 @@ class KsefClient
         }
 
         $this->nip = $conf->global->KSEF_COMPANY_NIP ?? '';
+        $this->auth_method = $conf->global->KSEF_AUTH_METHOD ?? 'token';
         $encrypted_token = $conf->global->KSEF_AUTH_TOKEN ?? '';
         $this->ksef_token = !empty($encrypted_token) ? dol_decode($encrypted_token) : '';
+        $this->auth_certificate_pem = '';
+        $this->auth_private_key_pem = '';
         $this->timeout = !empty($conf->global->KSEF_TIMEOUT) ? (int)$conf->global->KSEF_TIMEOUT : 30;
+    }
+
+    /**
+     * @brief Loads and decrypts authentication certificate and private key
+     * @return bool True if loaded successfully
+     * @called_by authenticateWithCertificate()
+     */
+    private function loadAuthCertificateCredentials()
+    {
+        $credentials = ksefLoadAuthCertificate();
+        if (!$credentials) {
+            $this->error = 'Authentication certificate not properly configured';
+            return false;
+        }
+
+        $this->auth_certificate_pem = $credentials['certificate_pem'];
+        $this->auth_private_key_pem = $credentials['private_key_pem'];
+
+        dol_syslog("KsefClient: Authentication credentials loaded successfully", LOG_DEBUG);
+        return true;
     }
 
     /**
@@ -486,7 +512,7 @@ class KsefClient
      * @called_by KSEF::submitInvoice()
      * @calls authenticate(), makeRequest(), checkInvoiceInSession(), checkSessionStatus()
      */
-    public function submitInvoice($invoiceXml)
+    public function submitInvoice($invoiceXml, $options = array())
     {
         if (!$this->authenticate()) {
             $this->error = "Authentication failed";
@@ -524,6 +550,11 @@ class KsefClient
                 'encryption' => array('encryptedSymmetricKey' => base64_encode($encryptedSymmetricKey), 'initializationVector' => base64_encode($iv))
             );
 
+            if (!empty($options['offline_mode'])) {
+                $sessionRequest['offlineMode'] = true;
+                dol_syslog("KsefClient: Submitting in OFFLINE mode", LOG_INFO);
+            }
+
             $sessionResp = $this->makeRequest('POST', '/sessions/online', json_encode($sessionRequest), array(
                 "Authorization: Bearer {$this->session_token}",
                 'Content-Type: application/json',
@@ -538,13 +569,22 @@ class KsefClient
 
             sleep(1);
 
+            $invoiceHash = !empty($options['invoice_hash'])
+                ? $options['invoice_hash']
+                : base64_encode(hash('sha256', $invoiceXml, true));
+
             $invoicePayload = array(
-                'invoiceHash' => base64_encode(hash('sha256', $invoiceXml, true)),
+                'invoiceHash' => $invoiceHash,
                 'invoiceSize' => strlen($invoiceXml),
                 'encryptedInvoiceHash' => base64_encode(hash('sha256', $encryptedInvoice, true)),
                 'encryptedInvoiceSize' => strlen($encryptedInvoice),
                 'encryptedInvoiceContent' => base64_encode($encryptedInvoice)
             );
+
+            if (!empty($options['corrected_hash'])) {
+                $invoicePayload['hashOfCorrectedInvoice'] = $options['corrected_hash'];
+                dol_syslog("KsefClient: Including correction reference to hash: " . substr($options['corrected_hash'], 0, 20) . "...", LOG_INFO);
+            }
 
             $invoiceResp = $this->makeRequest('POST', "/sessions/online/{$sessionRef}/invoices", json_encode($invoicePayload), array(
                 "Authorization: Bearer {$this->session_token}",
@@ -663,11 +703,15 @@ class KsefClient
      * @brief Authenticates with KSeF API
      * @return bool True if authenticated
      * @called_by submitInvoice(), checkStatus(), downloadUPO()
-     * @calls loadKsefPublicKey(), makeRequest()
+     * @calls loadKsefPublicKey(), makeRequest(), authenticateWithCertificate()
      */
     public function authenticate()
     {
         if ($this->isAuthenticated()) return true;
+
+        if ($this->auth_method == 'certificate') {
+            return $this->authenticateWithCertificate();
+        }
 
         if (empty($this->ksef_token)) throw new Exception('KSeF token not configured');
 
@@ -740,25 +784,298 @@ class KsefClient
     }
 
     /**
-     * @brief Refreshes authentication token
-     * @return bool True if refreshed
+     * @brief Authenticates with KSeF API using certificate with XAdES
+     * @return bool True if authenticated
      * @called_by authenticate()
-     * @calls makeRequest()
      */
-    public function refreshToken()
+    private function authenticateWithCertificate()
     {
-        if (empty($this->refresh_token)) throw new Exception('Refresh token not available');
+        if (!$this->loadAuthCertificateCredentials()) {
+            throw new Exception($this->error);
+        }
 
-        $refreshResp = $this->makeRequest('POST', '/auth/token/refresh', null, array("Authorization: Bearer {$this->refresh_token}", "Content-Type: application/json", "Accept: application/json"));
+        $challengeResp = $this->makeRequest('POST', '/auth/challenge',
+            json_encode(array('contextIdentifier' => array('type' => 'Nip', 'value' => $this->nip))),
+            array('Content-Type: application/json', 'Accept: application/json')
+        );
 
-        if ($refreshResp === false) throw new Exception('Token refresh failed');
+        if (!$challengeResp) {
+            throw new Exception('Failed to obtain authentication challenge');
+        }
 
-        $tokenData = json_decode($refreshResp, true);
+        $challengeData = json_decode($challengeResp, true);
+        if (empty($challengeData['challenge'])) {
+            throw new Exception('Invalid challenge response from KSeF');
+        }
+
+        $challenge = $challengeData['challenge'];
+        $timestamp = $challengeData['timestamp'];
+
+        $authTokenRequestXml = $this->buildAuthTokenRequestXml($challenge, $timestamp);
+
+        $signedXml = $this->signXadesAuthRequest($authTokenRequestXml);
+
+        if (!$signedXml) {
+            throw new Exception('Failed to sign authentication request: ' . $this->error);
+        }
+
+        $authResp = $this->makeRequest('POST', '/auth/xades-signature', $signedXml, array(
+            'Content-Type: application/xml',
+            'Accept: application/json'
+        ));
+
+        if (!$authResp) {
+            throw new Exception('Certificate authentication request failed: ' . $this->error);
+        }
+
+        $authData = json_decode($authResp, true);
+        $authToken = $authData['authenticationToken']['token'] ?? null;
+        $referenceNumber = $authData['referenceNumber'] ?? null;
+
+        if (!$authToken || !$referenceNumber) {
+            dol_syslog("KsefClient: Auth response: " . $authResp, LOG_ERR);
+            throw new Exception('Invalid authentication response received');
+        }
+
+        $maxAttempts = 20;
+        $pollInterval = 3;
+        $statusCode = 0;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            $statusResp = $this->makeRequest('GET', '/auth/' . $referenceNumber, null,
+                array("Authorization: Bearer {$authToken}", 'Accept: application/json')
+            );
+
+            if (!$statusResp) {
+                if ($attempt < $maxAttempts) sleep($pollInterval);
+                continue;
+            }
+
+            $statusData = json_decode($statusResp, true);
+            $statusCode = isset($statusData['status']['code']) ? (int)$statusData['status']['code'] : 0;
+
+            dol_syslog("KsefClient: Auth status poll attempt $attempt: code $statusCode", LOG_DEBUG);
+
+            if ($statusCode === 200) break;
+            if ($statusCode >= 400) {
+                $desc = $statusData['status']['description'] ?? 'Unknown error';
+                throw new Exception("Certificate authentication failed (status $statusCode): $desc");
+            }
+            if ($attempt < $maxAttempts) sleep($pollInterval);
+        }
+
+        if ($statusCode !== 200) {
+            throw new Exception("Certificate authentication status verification timeout");
+        }
+
+        $redeemResp = $this->makeRequest('POST', '/auth/token/redeem',
+            json_encode(array('referenceNumber' => $referenceNumber, 'authenticationToken' => array('token' => $authToken))),
+            array("Authorization: Bearer {$authToken}", "Content-Type: application/json", "Accept: application/json")
+        );
+
+        if (!$redeemResp) {
+            throw new Exception('Token redeem request failed');
+        }
+
+        $tokenData = json_decode($redeemResp, true);
         $this->session_token = $tokenData['accessToken']['token'] ?? null;
+        $this->refresh_token = $tokenData['refreshToken']['token'] ?? null;
         $this->session_expiry = isset($tokenData['accessToken']['validUntil']) ? strtotime($tokenData['accessToken']['validUntil']) : null;
 
-        if (!$this->session_token) throw new Exception('Invalid refresh token response');
+        if (!$this->session_token) {
+            throw new Exception('Invalid tokens returned on redeem');
+        }
+
         return true;
+    }
+
+    /**
+     * @brief Builds AuthTokenRequest XML for certificate authentication (KSeF API v2)
+     * @param string $challenge Challenge string from /auth/challenge
+     * @param string $timestamp Timestamp from challenge (NOT USED in v2 auth request XML)
+     * @return string XML string
+     * @called_by authenticateWithCertificate()
+     */
+    private function buildAuthTokenRequestXml($challenge, $timestamp)
+    {
+        $xml = new DOMDocument('1.0', 'UTF-8');
+        $xml->formatOutput = true;
+        $namespace = 'http://ksef.mf.gov.pl/auth/token/2.0';
+
+        $root = $xml->createElementNS($namespace, 'AuthTokenRequest');
+        $root->setAttributeNS('http://www.w3.org/2001/XMLSchema-instance', 'xsi:schemaLocation',
+            'http://ksef.mf.gov.pl/auth/token/2.0 http://ksef.mf.gov.pl/schema/gtw/svc/auth/request/2.0/authv2.xsd');
+        $xml->appendChild($root);
+
+        $challengeEl = $xml->createElement('Challenge', $challenge);
+        $root->appendChild($challengeEl);
+
+        $contextIdent = $xml->createElement('ContextIdentifier');
+        $nipEl = $xml->createElement('Nip', $this->nip);
+        $contextIdent->appendChild($nipEl);
+        $root->appendChild($contextIdent);
+
+        $subjectType = $xml->createElement('SubjectIdentifierType', 'certificateSubject');
+        $root->appendChild($subjectType);
+
+        return $xml->saveXML();
+    }
+
+    /**
+     * @brief Signs XML with XAdES-BES using authentication certificate
+     * @param string $xml XML to sign
+     * @return string|false Signed XML or false on error
+     * @called_by authenticateWithCertificate()
+     */
+    private function signXadesAuthRequest($xml)
+    {
+        try {
+            $privateKey = openssl_pkey_get_private($this->auth_private_key_pem);
+            if (!$privateKey) {
+                throw new Exception('Failed to load private key: ' . openssl_error_string());
+            }
+
+            $keyDetails = openssl_pkey_get_details($privateKey);
+            $isEcKey = ($keyDetails['type'] == OPENSSL_KEYTYPE_EC);
+
+            $dom = new DOMDocument();
+            $dom->loadXML($xml);
+            $dom->preserveWhiteSpace = false;
+            $dom->formatOutput = false;
+
+            $canonicalXml = $dom->C14N(true, false);
+            $digest = base64_encode(hash('sha256', $canonicalXml, true));
+
+            $signatureId = 'Signature-' . bin2hex(random_bytes(8));
+            $signedPropertiesId = 'SignedProperties-' . bin2hex(random_bytes(8));
+            $keyInfoId = 'KeyInfo-' . bin2hex(random_bytes(8));
+            $signingTime = gmdate('Y-m-d\TH:i:s\Z');
+
+            $certDer = ksefPemToDer($this->auth_certificate_pem);
+            $certDigest = base64_encode(hash('sha256', $certDer, true));
+
+            $certInfo = openssl_x509_parse($this->auth_certificate_pem);
+            $issuerName = ksefFormatIssuerNameRfc2253($certInfo['issuer']);
+            $serialNumber = $certInfo['serialNumber'];
+
+            $signedPropertiesXml = $this->buildSignedProperties(
+                $signedPropertiesId, $signingTime, $certDigest, $issuerName, $serialNumber
+            );
+
+            $spDom = new DOMDocument();
+            $spDom->loadXML($signedPropertiesXml);
+            $spCanonical = $spDom->C14N(true, false);
+            $spDigest = base64_encode(hash('sha256', $spCanonical, true));
+
+            $signatureMethod = $isEcKey
+                ? 'http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256'
+                : 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256';
+
+            $signedInfoXml = '<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">' .
+                '<ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>' .
+                '<ds:SignatureMethod Algorithm="' . $signatureMethod . '"/>' .
+                '<ds:Reference URI="">' .
+                '<ds:Transforms>' .
+                '<ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>' .
+                '<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>' .
+                '</ds:Transforms>' .
+                '<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>' .
+                '<ds:DigestValue>' . $digest . '</ds:DigestValue>' .
+                '</ds:Reference>' .
+                '<ds:Reference URI="#' . $signedPropertiesId . '" Type="http://uri.etsi.org/01903#SignedProperties">' .
+                '<ds:Transforms>' .
+                '<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>' .
+                '</ds:Transforms>' .
+                '<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>' .
+                '<ds:DigestValue>' . $spDigest . '</ds:DigestValue>' .
+                '</ds:Reference>' .
+                '</ds:SignedInfo>';
+
+            $siDom = new DOMDocument();
+            $siDom->loadXML($signedInfoXml);
+            $canonicalSignedInfo = $siDom->C14N(true, false);
+
+            $signature = '';
+            if (!openssl_sign($canonicalSignedInfo, $signature, $privateKey, OPENSSL_ALGO_SHA256)) {
+                throw new Exception('Signing failed: ' . openssl_error_string());
+            }
+
+            if ($isEcKey) {
+                $curveName = $keyDetails['ec']['curve_name'] ?? 'prime256v1';
+                $componentSize = 32;
+                if (strpos($curveName, '384') !== false) {
+                    $componentSize = 48;
+                } elseif (strpos($curveName, '521') !== false) {
+                    $componentSize = 66;
+                }
+                $signature = ksefConvertEcdsaDerToRaw($signature, $componentSize);
+            }
+
+            $signatureValue = base64_encode($signature);
+
+            $certClean = preg_replace('/-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----|\s/', '', $this->auth_certificate_pem);
+
+            $signatureElement = '<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" Id="' . $signatureId . '">' .
+                $signedInfoXml .
+                '<ds:SignatureValue>' . $signatureValue . '</ds:SignatureValue>' .
+                '<ds:KeyInfo Id="' . $keyInfoId . '">' .
+                '<ds:X509Data>' .
+                '<ds:X509Certificate>' . $certClean . '</ds:X509Certificate>' .
+                '</ds:X509Data>' .
+                '</ds:KeyInfo>' .
+                '<ds:Object>' .
+                '<xades:QualifyingProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Target="#' . $signatureId . '">' .
+                $signedPropertiesXml .
+                '</xades:QualifyingProperties>' .
+                '</ds:Object>' .
+                '</ds:Signature>';
+
+            $signatureDom = new DOMDocument();
+            $signatureDom->loadXML($signatureElement);
+            $signatureNode = $dom->importNode($signatureDom->documentElement, true);
+            $dom->documentElement->appendChild($signatureNode);
+
+            $result = $dom->saveXML();
+
+            dol_syslog("KsefClient: XAdES signature created successfully", LOG_DEBUG);
+
+            return $result;
+
+        } catch (Exception $e) {
+            $this->error = "XAdES signing failed: " . $e->getMessage();
+            dol_syslog("KsefClient::signXadesAuthRequest ERROR: " . $this->error, LOG_ERR);
+            return false;
+        }
+    }
+
+    /**
+     * @brief Builds SignedProperties element for XAdES-BES signature
+     * @param string $id SignedProperties ID attribute
+     * @param string $signingTime ISO 8601 signing timestamp
+     * @param string $certDigest Base64-encoded SHA-256 digest of certificate
+     * @param string $issuerName Issuer DN in RFC 2253 format
+     * @param string $serialNumber Certificate serial number
+     * @return string SignedProperties XML string
+     * @called_by signXadesAuthRequest()
+     */
+    private function buildSignedProperties($id, $signingTime, $certDigest, $issuerName, $serialNumber)
+    {
+        $issuerSerialV2Base64 = ksefGenerateIssuerSerialV2DER($this->auth_certificate_pem);
+
+        return '<xades:SignedProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Id="' . $id . '">' .
+            '<xades:SignedSignatureProperties>' .
+            '<xades:SigningTime>' . $signingTime . '</xades:SigningTime>' .
+            '<xades:SigningCertificateV2>' .
+            '<xades:Cert>' .
+            '<xades:CertDigest>' .
+            '<ds:DigestMethod xmlns:ds="http://www.w3.org/2000/09/xmldsig#" Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>' .
+            '<ds:DigestValue xmlns:ds="http://www.w3.org/2000/09/xmldsig#">' . $certDigest . '</ds:DigestValue>' .
+            '</xades:CertDigest>' .
+            '<xades:IssuerSerialV2>' . $issuerSerialV2Base64 . '</xades:IssuerSerialV2>' .
+            '</xades:Cert>' .
+            '</xades:SigningCertificateV2>' .
+            '</xades:SignedSignatureProperties>' .
+            '</xades:SignedProperties>';
     }
 
     /**

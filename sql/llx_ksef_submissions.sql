@@ -30,6 +30,7 @@ CREATE TABLE llx_ksef_submissions
 
 -- XML Data
     fa3_xml                MEDIUMTEXT,
+    fa3_creation_date      INTEGER      DEFAULT NULL,
     upo_xml                MEDIUMTEXT,
     api_response           TEXT,
 
@@ -54,5 +55,12 @@ CREATE TABLE llx_ksef_submissions
     fk_user_submit         INTEGER,
     fk_user_last_update    INTEGER      DEFAULT NULL,
     tms                    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    import_key             VARCHAR(14)
+    import_key             VARCHAR(14),
+
+-- Offline Mode
+    offline_mode           VARCHAR(20)  DEFAULT NULL,
+    offline_deadline       INTEGER      DEFAULT NULL,
+    offline_detected_reason VARCHAR(255) DEFAULT NULL,
+    original_invoice_hash  VARCHAR(255) DEFAULT NULL
+
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
