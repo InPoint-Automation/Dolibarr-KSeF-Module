@@ -58,7 +58,6 @@ Instrukcje budowania znajdują się w README dla deweloperów [DEV.md](DEV.md)
 
 - [ ] Dodaj wykluczenie KSeF do kart Stron trzecich (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)
 - [ ] Generator FA(3) nie jest jeszcze kompletny dla niektórych przypadków brzegowych
-- [ ] Obsługa trybu Offline24 brakuje i nie generuje jeszcze kodów QR offline
 - [ ] Napraw problemy php-scoper z phpseclib
 
 ## Licencje

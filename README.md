@@ -59,7 +59,6 @@ Build instructions can be found in the developer readme [DEV.md](DEV.md)
 
 - [ ] Add KSeF exclusion to Third Party tabs (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)
 - [ ] FA(3) builder is yet not complete for some edge cases
-- [ ] Offline24 mode handling is missing, and it does not generate the Offline QR Codes yet
 - [ ] Fix php-scoper issues with phpseclib
 
 ## Licenses
