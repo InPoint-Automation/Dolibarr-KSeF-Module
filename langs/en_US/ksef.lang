@@ -51,7 +51,7 @@ KSEF_ENVIRONMENT_Help=Select TEST for testing, PRODUCTION for live invoices
 # Authentication & Token
 # ============================================
 KSEF_AUTH_TOKEN_Help=Alphanumeric token from KSeF web portal
-KSEF_AuthToken=Authentication token
+KSEF_AUTH_TOKEN=Authentication token
 KSEF_TOKEN_STATUS=Token Status
 KSEF_TOKEN_OBTAIN_INFO=Obtain token by logging into KSeF portal with qualified seal/signature
 KSEF_PasteTokenHere=Paste your token here

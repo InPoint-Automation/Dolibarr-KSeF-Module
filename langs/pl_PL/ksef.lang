@@ -51,7 +51,7 @@ KSEF_ENVIRONMENT_Help=Wybierz TEST do testowania, PRODUKCJA dla rzeczywistych fa
 # Authentication & Token
 # ============================================
 KSEF_AUTH_TOKEN_Help=Token alfanumeryczny z portalu KSeF
-KSEF_AuthToken=Token uwierzytelniający
+KSEF_AUTH_TOKEN=Token uwierzytelniający
 KSEF_TOKEN_STATUS=Status tokenu
 KSEF_TOKEN_OBTAIN_INFO=Uzyskaj token logując się do portalu KSeF z kwalifikowaną pieczęcią/podpisem
 KSEF_PasteTokenHere=Wklej tutaj swój token
