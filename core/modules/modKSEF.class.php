@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '0.2.0';
+        $this->version = '0.3.0';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -66,6 +66,7 @@ class modKSEF extends DolibarrModules
                 'invoicelist',
                 'completeTabsHead',
                 'afterPDFTotalTable',
+                'thirdpartycard',
             ),
             'moduleforexternal' => 0,
         );
@@ -211,7 +212,7 @@ class modKSEF extends DolibarrModules
         $this->menu[$r++] = array(
             'fk_menu' => 'fk_mainmenu=billing,fk_leftmenu=ksef',
             'type' => 'left',
-            'titre' => 'HowToUse',
+            'titre' => 'KSEF_HowToUse',
             'mainmenu' => 'billing',
             'leftmenu' => 'ksef_howto',
             'url' => '/ksef/admin/howtouse.php',
@@ -266,7 +267,7 @@ class modKSEF extends DolibarrModules
                 100,
                 255,
                 'facture',
-                0, 0, '', '', 1, '', '0', '', '', '', 'ksef@ksef', '$conf->ksef->enabled', 0, 1
+                0, 0, '', '', 1, '', '0', '', '', '', 'ksef@ksef', '$conf->ksef->enabled', 0, 0
             );
             if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
                 $this->error = $extrafields->error;

@@ -162,9 +162,9 @@ function ksefGetVerificationURL($ksef_number, $invoice_hash = null, $environment
     }
 
     $urls = array(
-        'PRODUCTION' => 'https://ksef.mf.gov.pl',
-        'TEST' => 'https://ksef-test.mf.gov.pl',
-        'DEMO' => 'https://ksef-demo.mf.gov.pl'
+        'PRODUCTION' => 'https://qr.ksef.mf.gov.pl',
+        'TEST' => 'https://qr-test.ksef.mf.gov.pl',
+        'DEMO' => 'https://qr-demo.ksef.mf.gov.pl'
     );
 
     $base_url = isset($urls[$environment]) ? $urls[$environment] : $urls['TEST'];

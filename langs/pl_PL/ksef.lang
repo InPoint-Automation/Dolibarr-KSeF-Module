@@ -93,6 +93,9 @@ KSEF_TCPDFRequiredForQR=Biblioteka TCPDF jest wymagana dla kodów QR
 KSEF_SomeOptionalFeaturesUnavailable=Niektóre opcjonalne funkcje są niedostępne
 KSEF_AutoSubmit=Automatyczne wysyłanie przy zatwierdzeniu
 KSEF_AUTO_SUBMIT_Help=Automatycznie wysyłaj faktury do KSeF po zatwierdzeniu
+KSEF_ExcludeFromKSEF=Wyklucz z KSeF
+KSEF_ExcludeFromKSEFHelp=Nie wysyłaj faktur dla tego kontrahenta do KSeF
+KSEF_NotApplicableNotCustomer=Nie dotyczy - ten kontrahent nie jest klientem. Wykluczenie z KSeF dotyczy tylko klientów, którym wystawiasz faktury.
 
 # ============================================
 # UI Settings

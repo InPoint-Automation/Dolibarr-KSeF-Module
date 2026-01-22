@@ -48,9 +48,9 @@ class KsefClient
     private $auth_certificate_pem;
     private $auth_certificate_password;
 
-    const API_TEST = 'https://ksef-test.mf.gov.pl/api/v2';
-    const API_DEMO = 'https://ksef-demo.mf.gov.pl/api/v2';
-    const API_PROD = 'https://ksef.mf.gov.pl/api/v2';
+    const API_TEST = 'https://api-test.ksef.mf.gov.pl/api/v2';
+    const API_DEMO = 'https://api-demo.ksef.mf.gov.pl/api/v2';
+    const API_PROD = 'https://api.ksef.mf.gov.pl/api/v2';
 
     // KSeF Error Codes (from GitHub issue #325)
     const ERROR_CODES = array(
@@ -1186,6 +1186,8 @@ class KsefClient
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
 
         switch (strtoupper($method)) {
             case 'POST':

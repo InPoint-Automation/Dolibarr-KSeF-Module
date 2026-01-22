@@ -93,6 +93,9 @@ KSEF_TCPDFRequiredForQR=TCPDF library is required for QR codes
 KSEF_SomeOptionalFeaturesUnavailable=Some optional features are unavailable
 KSEF_AutoSubmit=Auto-submit on validation
 KSEF_AUTO_SUBMIT_Help=Automatically send invoices to KSeF when validated
+KSEF_ExcludeFromKSEF=Exclude from KSeF
+KSEF_ExcludeFromKSEFHelp=Do not submit invoices for this customer to KSeF
+KSEF_NotApplicableNotCustomer=Not applicable - this third party is not a customer. KSeF exclusion only applies to customers you issue invoices to.
 
 # ============================================
 # UI Settings

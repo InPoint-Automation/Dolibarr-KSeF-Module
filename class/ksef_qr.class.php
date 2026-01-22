@@ -41,9 +41,9 @@ class KsefQR
     private function getEnvironmentURL($env)
     {
         $urls = array(
-            'PRODUCTION' => 'https://ksef.mf.gov.pl',
-            'TEST' => 'https://ksef-test.mf.gov.pl',
-            'DEMO' => 'https://ksef-demo.mf.gov.pl'
+            'PRODUCTION' => 'https://qr.ksef.mf.gov.pl',
+            'TEST' => 'https://qr-test.ksef.mf.gov.pl',
+            'DEMO' => 'https://qr-demo.ksef.mf.gov.pl'
         );
         return isset($urls[$env]) ? $urls[$env] : $urls['TEST'];
     }

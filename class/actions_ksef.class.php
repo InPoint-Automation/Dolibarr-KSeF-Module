@@ -318,6 +318,34 @@ class ActionsKSEF
 
         global $conf, $user, $langs, $db;
 
+        $currentcontext = $parameters['currentcontext'] ?? '';
+        if ($currentcontext == 'thirdpartycard') {
+            if (empty($conf->ksef) || empty($conf->ksef->enabled)) {
+                return 0;
+            }
+
+            if (($action == 'update' || $action == 'add') && is_object($object) && !empty($object->id)) {
+                require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
+
+                $ksef_exclude = GETPOST('ksef_exclude', 'int');
+                $current_excluded = $conf->global->KSEF_EXCLUDED_CUSTOMERS ?? '';
+                $excluded_array = array_filter(array_map('trim', explode(',', $current_excluded)));
+
+                if ($ksef_exclude) {
+                    if (!in_array($object->id, $excluded_array)) {
+                        $excluded_array[] = $object->id;
+                        dolibarr_set_const($db, 'KSEF_EXCLUDED_CUSTOMERS', implode(',', $excluded_array), 'chaine', 0, '', $conf->entity);
+                    }
+                } else {
+                    $excluded_array = array_diff($excluded_array, array($object->id));
+                    dolibarr_set_const($db, 'KSEF_EXCLUDED_CUSTOMERS', implode(',', $excluded_array), 'chaine', 0, '', $conf->entity);
+                }
+            }
+
+            return 0;
+        }
+
+
         if (!in_array('invoicecard', array($parameters['currentcontext']))) {
             return 0;
         }
@@ -967,9 +995,15 @@ class ActionsKSEF
      */
     public function formObjectOptions($parameters, &$object, &$action, $hookmanager)
     {
-        global $langs, $db;
+        global $langs, $db, $conf;
+        dol_include_once('/ksef/lib/ksef.lib.php');
 
-        if (in_array($parameters['currentcontext'], array('invoicecard'))) {
+        $currentcontext = $parameters['currentcontext'] ?? '';
+        if ($currentcontext == 'invoicecard') {
+            if (empty($object) || empty($object->id)) {
+                return 0;
+            }
+
             dol_include_once('/ksef/class/ksef_submission.class.php');
             dol_include_once('/ksef/lib/ksef.lib.php');
             dol_include_once('/ksef/class/ksef_client.class.php');
@@ -1015,6 +1049,43 @@ class ActionsKSEF
                 print '</td></tr>';
             }
         }
+
+        if ($currentcontext == 'thirdpartycard') {
+            if (!is_object($object) || empty($object->id)) {
+                return 0;
+            }
+
+            $langs->load("ksef@ksef");
+
+            print '<tr class="oddeven">';
+            print '<td>' . $langs->trans("KSEF_ExcludeFromKSEF") . '</td>';
+            print '<td colspan="3">';
+
+            // Check if this is a customer (client = 1 customer, 3 customer+supplier). 0 means not client and 2 is prospect.
+            $client_type = isset($object->client) ? (int)$object->client : 0;
+            $is_customer = in_array($client_type, array(1, 3));
+
+            if (!$is_customer) {
+                print '<span class="opacitymedium"><i class="fa fa-info-circle"></i> ' . $langs->trans("KSEF_NotApplicableNotCustomer") . '</span>';
+            } else {
+                $is_excluded = ksefIsCustomerExcluded($object->id);
+
+                if ($action == 'edit' || $action == 'create') {
+                    print '<input type="checkbox" name="ksef_exclude" id="ksef_exclude" value="1"' . ($is_excluded ? ' checked' : '') . '>';
+                    print ' <label for="ksef_exclude">' . $langs->trans("KSEF_ExcludeFromKSEFHelp") . '</label>';
+                } else {
+                    if ($is_excluded) {
+                        print '<span class="badge badge-warning">' . $langs->trans("Yes") . '</span>';
+                        print ' <span class="opacitymedium">(' . $langs->trans("KSEF_CustomerExcludedInfo") . ')</span>';
+                    } else {
+                        print '<span class="badge badge-status4">' . $langs->trans("No") . '</span>';
+                    }
+                }
+            }
+
+            print '</td></tr>';
+        }
+
         return 0;
     }
 

@@ -57,7 +57,7 @@ Build instructions can be found in the developer readme [DEV.md](DEV.md)
 
 ## Roadmap
 
-- [ ] Add KSeF exclusion to Third Party tabs (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)
+- [X] ~~Add KSeF exclusion to Third Party tabs (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)~~
 - [ ] FA(3) builder is yet not complete for some edge cases
 - [ ] Fix php-scoper issues with phpseclib
 

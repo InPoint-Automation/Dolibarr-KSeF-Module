@@ -56,7 +56,7 @@ Instrukcje budowania znajdują się w README dla deweloperów [DEV.md](DEV.md)
 
 ## Plan rozwoju
 
-- [ ] Dodaj wykluczenie KSeF do kart Stron trzecich (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)
+- [X] ~~Dodaj wykluczenie KSeF do kart Stron trzecich (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)~~
 - [ ] Generator FA(3) nie jest jeszcze kompletny dla niektórych przypadków brzegowych
 - [ ] Napraw problemy php-scoper z phpseclib
 
