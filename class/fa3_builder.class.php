@@ -239,6 +239,9 @@ class FA3Builder
         $podmiot2->appendChild($daneIdent);
 
         $nip = ksefCleanNIP($customer->idprof1);
+        if (empty($nip)) {
+            $nip = ksefCleanNIP($customer->tva_intra);
+        }
         if (!empty($nip) && $customer->country_code == 'PL') {
             $daneIdent->appendChild($xml->createElement('NIP', $nip));
         } elseif (!empty($customer->idprof1)) {
