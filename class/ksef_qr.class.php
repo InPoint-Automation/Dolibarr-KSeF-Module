@@ -26,7 +26,6 @@ require_once DOL_DOCUMENT_ROOT . '/core/class/commonobject.class.php';
 class KsefQR
 {
     private $db;
-    private $cache = array();
 
     public function __construct($db)
     {
@@ -70,7 +69,7 @@ class KsefQR
         $hash_decoded = base64_decode($hash);
         $base64url_hash = rtrim(strtr(base64_encode($hash_decoded), '+/', '-_'), '=');
 
-        return "{$base_url}/client-app/invoice/{$nip}/{$formatted_date}/{$base64url_hash}";
+        return "{$base_url}/invoice/{$nip}/{$formatted_date}/{$base64url_hash}";
     }
 
     /**
@@ -107,6 +106,78 @@ class KsefQR
         $certSerial = $credentials['serial'];
 
         return "{$base_url}/client-app/certificate/nip/{$nip}/{$nip}/{$certSerial}/{$hashBase64URL}/{$signature}";
+    }
+
+    /**
+     * @brief Renders the verification link section to the right of QR codes
+     * @param object $pdf TCPDF object
+     * @param float $textX X position for text (right of QR codes)
+     * @param float $textY Y position for text
+     * @param float $textWidth Available width for text
+     * @param string $verifyUrl Verification URL
+     * @param string|null $ksefNumber KSeF number to display (optional)
+     * @return void
+     * @called_by addQRToPDF()
+     */
+    private function renderVerificationLink(&$pdf, $textX, $textY, $textWidth, $verifyUrl, $ksefNumber = null)
+    {
+        if (empty($verifyUrl)) {
+            return;
+        }
+
+        $pdf->SetFont('freesans', '', 6);
+        $pdf->SetTextColor(0, 0, 0);
+        $pdf->SetXY($textX, $textY);
+        $instructionText = 'Nie możesz zeskanować kodu z obrazka? Kliknij w link weryfikacyjny i przejdź do weryfikacji faktury!';
+        $pdf->MultiCell($textWidth, 3, $instructionText, 0, 'L', false);
+
+        $textY = $pdf->GetY() + 1;
+
+        // KSeF number if provided
+        if (!empty($ksefNumber)) {
+            $pdf->SetFont('freesans', 'B', 6);
+            $pdf->SetXY($textX, $textY);
+            $pdf->Cell($textWidth, 3, $ksefNumber, 0, 1, 'L');
+            $textY = $pdf->GetY() + 1;
+        }
+
+        // Verification URL
+        $pdf->SetFont('freesans', '', 5);
+        $pdf->SetTextColor(0, 0, 255);
+        $pdf->SetXY($textX, $textY);
+        $linkHtml = '<a href="' . htmlspecialchars($verifyUrl) . '">' . htmlspecialchars($verifyUrl) . '</a>';
+        $pdf->writeHTMLCell($textWidth, 0, $textX, $textY, $linkHtml, 0, 1, false, true, 'L');
+        $pdf->SetTextColor(0, 0, 0);
+    }
+
+    /**
+     * @brief Generates verification URL for display
+     * @param string $ksefNumber KSeF invoice number
+     * @param string $invoiceHash Base64-encoded invoice hash
+     * @param string $environment Environment
+     * @return string Verification URL
+     * @called_by addQRToPDF()
+     */
+    private function generateDisplayVerificationUrl($ksefNumber, $invoiceHash, $environment)
+    {
+        $parts = explode('-', $ksefNumber);
+        $nip = $parts[0] ?? '';
+
+        if (empty($nip)) {
+            return '';
+        }
+
+        $dateStr = $parts[1] ?? '';
+        if (strlen($dateStr) == 8) {
+            $formattedDate = substr($dateStr, 6, 2) . '-' . substr($dateStr, 4, 2) . '-' . substr($dateStr, 0, 4);
+        } else {
+            $formattedDate = date('d-m-Y');
+        }
+
+        $hashDecoded = base64_decode($invoiceHash);
+        $hashBase64Url = rtrim(strtr(base64_encode($hashDecoded), '+/', '-_'), '=');
+        $baseUrl = $this->getEnvironmentURL($environment);
+        return $baseUrl . '/invoice/' . $nip . '/' . $formattedDate . '/' . $hashBase64Url;
     }
 
     /**
@@ -217,7 +288,7 @@ class KsefQR
 
                 if (!empty($qr_i_url)) {
                     $pdf->write2DBarcode($qr_i_url, 'QRCODE,H', $qr_i_x, $qrY, $qrSize, $qrSize, $style, 'N');
-                    $pdf->SetFont('helvetica', 'B', 7);
+                    $pdf->SetFont('freesans', 'B', 7);
                     $pdf->SetTextColor(0, 0, 0);
                     $pdf->SetXY($qr_i_x, $qrY + $qrSize + 1);
                     $pdf->Cell($qrSize, 4, 'OFFLINE', 0, 0, 'C');
@@ -232,31 +303,52 @@ class KsefQR
 
                 if (!empty($qr_ii_url)) {
                     $pdf->write2DBarcode($qr_ii_url, 'QRCODE,H', $qr_ii_x, $qrY, $qrSize, $qrSize, $style, 'N');
-                    $pdf->SetFont('helvetica', 'B', 7);
+                    $pdf->SetFont('freesans', 'B', 7);
                     $pdf->SetXY($qr_ii_x, $qrY + $qrSize + 1);
                     $pdf->Cell($qrSize, 4, 'CERTYFIKAT', 0, 0, 'C');
                 } else {
                     dol_syslog("KsefQR::addQRToPDF - QR Code II not generated (certificate not configured)", LOG_WARNING);
                 }
+
+                // Verification link
+                $textX = $qr_ii_x + $qrSize + 5;
+                $textWidth = $pageWidth - $textX - $marginRight;
+                if ($textWidth > 30 && !empty($qr_i_url)) {
+                    $this->renderVerificationLink($pdf, $textX, $qrY, $textWidth, $qr_i_url, null);
+                }
             } else if ($has_real_ksef_number) {
                 dol_syslog("KsefQR::addQRToPDF - Generating ACCEPTED QR code for {$submission->ksef_number}", LOG_INFO);
                 $qrX = $marginLeft;
-                $verifyUrl = ksefGetVerificationURL(
+
+                $verifyUrl = $this->generateDisplayVerificationUrl(
                     $submission->ksef_number,
                     $submission->invoice_hash,
-                    $submission->environment ?? 'TEST',
-                    $nip,
-                    $invoice->date
+                    $submission->environment ?? 'TEST'
                 );
 
                 if (!empty($verifyUrl)) {
                     $pdf->write2DBarcode($verifyUrl, 'QRCODE,H', $qrX, $qrY, $qrSize, $qrSize, $style, 'N');
-                    $pdf->SetFont('helvetica', '', 6);
+
+                    // KSeF number below QR code
+                    $pdf->SetFont('freesans', '', 5);
                     $pdf->SetTextColor(0, 0, 0);
                     $pdf->SetXY($qrX, $qrY + $qrSize + 1);
-                    $pdf->MultiCell($qrSize + 20, 3, $submission->ksef_number, 0, 'L', false);
+                    $ksefNum = $submission->ksef_number;
+                    if (strlen($ksefNum) > 35) {
+                        $part1 = substr($ksefNum, 0, 35);
+                        $part2 = substr($ksefNum, 35);
+                        $pdf->Cell($qrSize, 2.5, $part1, 0, 1, 'C');
+                        $pdf->SetXY($qrX, $qrY + $qrSize + 3.5);
+                        $pdf->Cell($qrSize, 2.5, $part2, 0, 1, 'C');
+                    } else {
+                        $pdf->Cell($qrSize, 3, $ksefNum, 0, 1, 'C');
+                    }
 
-                    dol_syslog("KsefQR::addQRToPDF - Added accepted QR code", LOG_INFO);
+                    $textX = $qrX + $qrSize + 5;
+                    $textWidth = $pageWidth - $textX - $marginRight;
+                    if ($textWidth > 30) {
+                        $this->renderVerificationLink($pdf, $textX, $qrY, $textWidth, $verifyUrl, null);
+                    }
                 }
             }
 

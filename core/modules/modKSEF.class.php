@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2025 InPoint Automation Sp z o.o.
+/* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '0.3.0';
+        $this->version = '1.0.0';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -92,7 +92,7 @@ class modKSEF extends DolibarrModules
 
         // Company & Environment
         $this->const[$r++] = array('KSEF_COMPANY_NIP', 'chaine', '', 'Company NIP for KSEF authentication', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_ENVIRONMENT', 'chaine', 'TEST', 'KSEF API environment (TEST/DEMO/PRODUCTION)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_ENVIRONMENT', 'chaine', 'PRODUCTION', 'KSEF API environment (TEST/DEMO/PRODUCTION)', 0, 'current', 1);
         $this->const[$r++] = array('KSEF_TIMEOUT', 'chaine', '5', 'KSEF API timeout in seconds', 0, 'current', 1);
 
         // Authentication Method Selection
@@ -212,6 +212,21 @@ class modKSEF extends DolibarrModules
         $this->menu[$r++] = array(
             'fk_menu' => 'fk_mainmenu=billing,fk_leftmenu=ksef',
             'type' => 'left',
+            'titre' => 'KSEF_IncomingInvoices',
+            'mainmenu' => 'billing',
+            'leftmenu' => 'ksef_incoming',
+            'url' => '/ksef/incoming_list.php',
+            'langs' => 'ksef@ksef',
+            'position' => 1000 + $r,
+            'enabled' => '$conf->ksef->enabled',
+            'perms' => '$user->hasRight("ksef", "read")',
+            'target' => '',
+            'user' => 2,
+        );
+
+        $this->menu[$r++] = array(
+            'fk_menu' => 'fk_mainmenu=billing,fk_leftmenu=ksef',
+            'type' => 'left',
             'titre' => 'KSEF_HowToUse',
             'mainmenu' => 'billing',
             'leftmenu' => 'ksef_howto',
@@ -259,60 +274,131 @@ class modKSEF extends DolibarrModules
         $extrafields = new ExtraFields($db);
         $existingFields = $extrafields->fetch_name_optionals_label('facture');
 
-        if (!isset($existingFields['ksef_number'])) {
-            $result = $extrafields->addExtraField(
-                'ksef_number',
-                'KSEF Number',
-                'varchar',
-                100,
-                255,
-                'facture',
-                0, 0, '', '', 1, '', '0', '', '', '', 'ksef@ksef', '$conf->ksef->enabled', 0, 0
-            );
-            if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
-                $this->error = $extrafields->error;
-                return -1;
-            }
-        }
-
-        if (!isset($existingFields['ksef_status'])) {
-            $result = $extrafields->addExtraField(
-                'ksef_status',
-                'KSEF Status',
-                'select',
-                101,
-                0,
-                'facture',
-                0, 0, 'PENDING',
-                array('options' => array(
-                    'PENDING' => 'Pending',
-                    'ACCEPTED' => 'Accepted',
-                    'REJECTED' => 'Rejected',
-                    'FAILED' => 'Failed',
-                    'OFFLINE' => 'Offline',
-                    'VALIDATION_FAILED' => 'Validation Failed'
+        $extraFieldDefs = array(
+            'ksef_number' => array(
+                'label' => 'KSEF_ExtraFieldNumber',
+                'type' => 'varchar',
+                'pos' => 100,
+                'size' => '255',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+            'ksef_status' => array(
+                'label' => 'KSEF_ExtraFieldStatus',
+                'type' => 'select',
+                'pos' => 101,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => 'PENDING',
+                'param' => array('options' => array(
+                    'PENDING' => 'KSEF_StatusPending',
+                    'ACCEPTED' => 'KSEF_StatusAccepted',
+                    'REJECTED' => 'KSEF_StatusRejected',
+                    'FAILED' => 'KSEF_StatusFailed',
+                    'OFFLINE' => 'KSEF_StatusOffline',
+                    'VALIDATION_FAILED' => 'KSEF_StatusValidationFailed'
                 )),
-                1, '', '1', '', '', '', 'ksef@ksef', '$conf->ksef->enabled', 0, 0
-            );
-            if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
-                $this->error = $extrafields->error;
-                return -1;
-            }
-        }
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '1',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+            'ksef_submission_date' => array(
+                'label' => 'KSEF_ExtraFieldSubmissionDate',
+                'type' => 'datetime',
+                'pos' => 102,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '1',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+        );
 
-        if (!isset($existingFields['ksef_submission_date'])) {
-            $result = $extrafields->addExtraField(
-                'ksef_submission_date',
-                'KSEF Submission Date',
-                'datetime',
-                102,
-                0,
-                'facture',
-                0, 0, '', '', 0, '', '1', '', '', '', 'ksef@ksef', '$conf->ksef->enabled', 0, 0
-            );
-            if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
-                $this->error = $extrafields->error;
-                return -1;
+        foreach ($extraFieldDefs as $fieldName => $def) {
+            if (!isset($existingFields[$fieldName])) {
+                $result = $extrafields->addExtraField(
+                    $fieldName,
+                    $def['label'],
+                    $def['type'],
+                    $def['pos'],
+                    $def['size'],
+                    'facture',
+                    $def['unique'],
+                    $def['required'],
+                    $def['default_value'],
+                    $def['param'],
+                    $def['alwayseditable'],
+                    $def['perms'],
+                    $def['list'],
+                    $def['help'],
+                    $def['computed'],
+                    $def['entity'],
+                    $def['langfile'],
+                    $def['enabled'],
+                    $def['totalizable'],
+                    $def['printable']
+                );
+                if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
+                    $this->error = $extrafields->error;
+                    return -1;
+                }
+            } else {
+                // Update existing extrafield
+                $result = $extrafields->updateExtraField(
+                    $fieldName,
+                    $def['label'],
+                    $def['type'],
+                    $def['pos'],
+                    $def['size'],
+                    'facture',
+                    $def['unique'],
+                    $def['required'],
+                    $def['default_value'],
+                    $def['param'],
+                    $def['alwayseditable'],
+                    $def['perms'],
+                    $def['list'],
+                    $def['help'],
+                    $def['computed'],
+                    $def['entity'],
+                    $def['langfile'],
+                    $def['enabled'],
+                    $def['totalizable'],
+                    $def['printable']
+                );
+                if ($result > 0) {
+                    dol_syslog("modKSEF::init - Updated extrafield '$fieldName'", LOG_INFO);
+                }
             }
         }
 

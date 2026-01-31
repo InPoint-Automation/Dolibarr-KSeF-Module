@@ -1,7 +1,7 @@
 <?php
 /* Copyright (C) 2004-2017 Laurent Destailleur  <eldy@users.sourceforge.net>
  * Copyright (C) 2021      Éric Seigne          <eric.seigne@cap-rel.fr>
- * Copyright (C) 2025      InPoint Automation Sp z o.o.
+ * Copyright (C) 2025-2026      InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -230,7 +230,7 @@ $requirements['token'] = array(
         'value' => $token_configured ? '••••••••' : null
 );
 
-$environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'TEST';
+$environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
 $requirements['environment'] = array(
         'label' => 'Environment',
         'status' => true,

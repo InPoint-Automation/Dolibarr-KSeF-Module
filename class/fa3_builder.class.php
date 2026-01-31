@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2025 InPoint Automation Sp z o.o.
+/* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -34,8 +34,6 @@ class FA3Builder
     private $buyerName;
     private $lastXmlHash;
     private $lastCreationDate;
-    const FA3_NAMESPACE = 'http://crd.gov.pl/wzor/2025/06/25/13775/';
-    const FA3_SCHEMA_VERSION = '1-0E';
 
     public function __construct($db)
     {
@@ -89,7 +87,7 @@ class FA3Builder
             $xml = new DOMDocument('1.0', 'UTF-8');
             $xml->formatOutput = true;
 
-            $faktura = $xml->createElementNS(self::FA3_NAMESPACE, 'Faktura');
+            $faktura = $xml->createElementNS(KSEF_FA3_NAMESPACE, 'Faktura');
             $xml->appendChild($faktura);
 
             if (!empty($options['original_creation_date'])) {
@@ -102,6 +100,7 @@ class FA3Builder
             $this->buildPodmiot1($xml, $faktura, $mysoc);
             $this->buildPodmiot2($xml, $faktura, $customer);
             $this->buildFa($xml, $faktura, $invoice, $originalInvoice);
+            $this->buildStopka($xml, $faktura);
 
             $xmlString = $xml->saveXML();
 
@@ -152,7 +151,7 @@ class FA3Builder
         // Form code
         $kodFormularza = $xml->createElement('KodFormularza', 'FA');
         $kodFormularza->setAttribute('kodSystemowy', 'FA (3)');
-        $kodFormularza->setAttribute('wersjaSchemy', self::FA3_SCHEMA_VERSION);
+        $kodFormularza->setAttribute('wersjaSchemy', KSEF_FA3_SCHEMA_VERSION);
         $naglowek->appendChild($kodFormularza);
 
         // Form variant
@@ -160,12 +159,12 @@ class FA3Builder
 
         if (!empty($options['original_creation_date'])) {
             if (is_numeric($options['original_creation_date'])) {
-                $dateCreation = date('Y-m-d\TH:i:s', $options['original_creation_date']);
+                $dateCreation = date('Y-m-d\TH:i:sP', $options['original_creation_date']);
             } else {
                 $dateCreation = $options['original_creation_date'];
             }
         } else {
-            $dateCreation = date('Y-m-d\TH:i:s');
+            $dateCreation = date('Y-m-d\TH:i:sP');
         }
         $naglowek->appendChild($xml->createElement('DataWytworzeniaFa', $dateCreation));
 
@@ -187,6 +186,8 @@ class FA3Builder
      */
     private function buildPodmiot1($xml, $parent, $mysoc)
     {
+        global $conf;
+
         // Seller
         $podmiot1 = $xml->createElement('Podmiot1');
         $parent->appendChild($podmiot1);
@@ -195,8 +196,16 @@ class FA3Builder
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
         $podmiot1->appendChild($daneIdent);
 
-        $nip = ksefCleanNIP($mysoc->idprof1);
-        if (empty($nip)) throw new Exception("Seller NIP is required");
+        $nip = '';
+        if (!empty($conf->global->KSEF_COMPANY_NIP)) {
+            $nip = ksefCleanNIP($conf->global->KSEF_COMPANY_NIP);
+        }
+        if (empty($nip)) {
+            $nip = ksefCleanNIP($mysoc->idprof1);
+        }
+        if (empty($nip)) {
+            throw new Exception("Seller NIP is required - configure KSEF");
+        }
 
         $this->sellerName = $this->xmlSafe($mysoc->name);
         $daneIdent->appendChild($xml->createElement('NIP', $nip));
@@ -230,6 +239,8 @@ class FA3Builder
      */
     private function buildPodmiot2($xml, $parent, $customer)
     {
+        global $conf;
+
         // Buyer
         $podmiot2 = $xml->createElement('Podmiot2');
         $parent->appendChild($podmiot2);
@@ -268,6 +279,11 @@ class FA3Builder
         }
 
         $adres->appendChild($xml->createElement('AdresL1', $adresL1));
+
+        // NrKlienta: Customer code from Dolibarr
+        if (!empty($conf->global->KSEF_FA3_INCLUDE_NRKLIENTA) && !empty($customer->code_client)) {
+            $podmiot2->appendChild($xml->createElement('NrKlienta', $this->xmlSafe($customer->code_client)));
+        }
 
         $flags = $this->getEntityFlags($customer);
         $podmiot2->appendChild($xml->createElement('JST', $flags['jst'])); // Local Gov Unit flag
@@ -459,6 +475,8 @@ class FA3Builder
      */
     private function buildFaWiersz($xml, $parent, $invoice)
     {
+        global $conf;
+
         $lineNum = 1;
         foreach ($invoice->lines as $line) {
             $faWiersz = $xml->createElement('FaWiersz');
@@ -469,6 +487,21 @@ class FA3Builder
             // P_7: Product Name
             $description = $line->product_label ?: $line->desc;
             $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(substr($description, 0, 512))));
+
+            // Indeks: Product reference code
+            if (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS) && !empty($line->product_ref)) {
+                $faWiersz->appendChild($xml->createElement('Indeks', $this->xmlSafe(substr($line->product_ref, 0, 50))));
+            }
+
+            // GTIN: From Product barcode
+            if (!empty($conf->global->KSEF_FA3_INCLUDE_GTIN) && !empty($line->product_barcode)) {
+                $faWiersz->appendChild($xml->createElement('GTIN', $this->xmlSafe($line->product_barcode)));
+            }
+
+            // P_8A: Unit of measure
+            if (!empty($conf->global->KSEF_FA3_INCLUDE_UNIT) && !empty($line->product_unit)) {
+                $faWiersz->appendChild($xml->createElement('P_8A', $this->xmlSafe($line->product_unit)));
+            }
 
             // P_8B: Quantity
             $faWiersz->appendChild($xml->createElement('P_8B', number_format($line->qty, 2, '.', '')));
@@ -491,10 +524,12 @@ class FA3Builder
      * @param $parent Parent element
      * @param $invoice Invoice object
      * @called_by buildFa()
-     * @calls getPaymentMethodCode(), cleanIBAN()
+     * @calls getPaymentMethodCode(), cleanIBAN(), xmlSafe()
      */
     private function buildPlatnosc($xml, $parent, $invoice)
     {
+        global $conf;
+
         $platnosc = $xml->createElement('Platnosc');
         $parent->appendChild($platnosc);
 
@@ -515,7 +550,53 @@ class FA3Builder
                 $rachunekBankowy = $xml->createElement('RachunekBankowy');
                 $platnosc->appendChild($rachunekBankowy);
                 $rachunekBankowy->appendChild($xml->createElement('NrRB', $this->cleanIBAN($account->iban)));
+                if (!empty($account->bic)) {
+                    $rachunekBankowy->appendChild($xml->createElement('SWIFT', strtoupper(trim($account->bic))));
+                }
+                if (!empty($account->bank)) {
+                    $rachunekBankowy->appendChild($xml->createElement('NazwaBanku', $this->xmlSafe($account->bank)));
+                }
+                // OpisRachunku: Bank account description/label
+                if (!empty($conf->global->KSEF_FA3_INCLUDE_BANK_DESC) && !empty($account->label)) {
+                    $rachunekBankowy->appendChild($xml->createElement('OpisRachunku', $this->xmlSafe($account->label)));
+                }
             }
+        }
+    }
+
+    /**
+     * @brief Builds footer section with registry numbers
+     * @param DOMDocument $xml
+     * @param DOMElement $parent Parent element
+     * @called_by buildFromInvoice()
+     */
+    private function buildStopka($xml, $parent)
+    {
+        global $conf;
+
+        $krs = !empty($conf->global->KSEF_COMPANY_KRS) ? trim($conf->global->KSEF_COMPANY_KRS) : '';
+        $regon = !empty($conf->global->KSEF_COMPANY_REGON) ? trim($conf->global->KSEF_COMPANY_REGON) : '';
+        $bdo = !empty($conf->global->KSEF_COMPANY_BDO) ? trim($conf->global->KSEF_COMPANY_BDO) : '';
+
+        // Only create Stopka if at least one registry number is set
+        if (empty($krs) && empty($regon) && empty($bdo)) {
+            return;
+        }
+
+        $stopka = $xml->createElement('Stopka');
+        $parent->appendChild($stopka);
+
+        $rejestry = $xml->createElement('Rejestry');
+        $stopka->appendChild($rejestry);
+
+        if (!empty($krs)) {
+            $rejestry->appendChild($xml->createElement('KRS', $this->xmlSafe($krs)));
+        }
+        if (!empty($regon)) {
+            $rejestry->appendChild($xml->createElement('REGON', $this->xmlSafe($regon)));
+        }
+        if (!empty($bdo)) {
+            $rejestry->appendChild($xml->createElement('BDO', $this->xmlSafe($bdo)));
         }
     }
 
@@ -547,6 +628,7 @@ class FA3Builder
      * @param $mode_reglement_id Payment mode ID
      * @return string KSeF payment code
      * @called_by buildPlatnosc()
+     * KSeF codes: 1=Cash, 2=Card, 3=Voucher, 4=Check, 5=Credit, 6=Transfer, 7=Mobile
      */
     private function getPaymentMethodCode($mode_reglement_id)
     {
@@ -560,8 +642,8 @@ class FA3Builder
             8 => '6',   // VAD -> Przelew
             9 => '6',   // TRA -> Przelew
             50 => '5',  // VAL -> Kredyt kupiecki (Trade credit)
-            51 => '9',  // COMPENSATION -> Kompensata
-            52 => '12', // OTHER -> Inne
+            51 => '6',  // COMPENSATION -> Przelew
+            52 => '6',  // OTHER -> Przelew
         );
         return isset($mapping[$mode_reglement_id]) ? $mapping[$mode_reglement_id] : '6';
     }

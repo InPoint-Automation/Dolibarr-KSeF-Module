@@ -19,6 +19,8 @@ Ten moduł integruje Dolibarr (https://www.dolibarr.org/) z KSeF (Krajowy System
 - Możliwość wykluczenia stron trzecich z KSeF (np. generyczne podmioty B2C)
 - Dodawanie pól KSeF (w tym klikalny numer KSeF i status wysyłki do weryfikacji) na głównej stronie faktury
 - Dodawanie strony z przeglądem wszystkich przesyłek, a także karty KSeF na stronie faktury
+- Pobieranie i przetwarzanie faktur przychodzących z KSeF
+- Generowanie wizualizacji faktur w stylu KSeF
 
 ## Wymagania
 

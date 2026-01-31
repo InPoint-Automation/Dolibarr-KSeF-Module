@@ -20,6 +20,8 @@ invoicing system.
 - Can exclude 3rd parties from KSeF (e.g. generic B2C third parties)
 - Adds KSeF Fields (including clickable KSeF number and submission status to verify submission) to main invoice page
 - Adds page with overview of all submissions, as well as KSeF tab to invoice page
+- Download and processing of incoming invoices from KSeF
+- Generation of KSeF-style invoice visualizations
 
 ## Requirements
 

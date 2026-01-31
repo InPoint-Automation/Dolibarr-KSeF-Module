@@ -82,6 +82,14 @@ KSEF_EXCLUDED_CUSTOMERS_Help=List of customers excluded from KSeF submissions
 KSEF_EXCLUDED_CUSTOMERS_INFO=Comma-separated list of customer IDs
 KSEF_SelectCustomer=Select Customer
 KSEF_PleaseSelectCustomer=Please select a customer
+KSEF_COMPANY_KRS=Company KRS
+KSEF_COMPANY_KRS_Help=Auto-populated from Professional ID 2 (KRS). National Court Register number.
+KSEF_COMPANY_REGON=Company REGON
+KSEF_COMPANY_REGON_Help=Auto-populated from Professional ID 3 (REGON). Statistical identification number.
+KSEF_COMPANY_BDO=Company BDO
+KSEF_COMPANY_BDO_Help=Auto-populated from Professional ID 4 (BDO). Waste Database register number.
+KSEF_Optional=Optional
+KSEF_PRODUCTION_WARNING=Production environment — only submit official invoices. Submissions cannot be reversed.
 
 # ============================================
 # Features
@@ -109,6 +117,22 @@ KSEF_Yellow=Yellow
 KSEF_Orange=Orange
 KSEF_Purple=Purple
 KSEF_Cyan=Cyan
+
+# ============================================
+# FA3 Optional Fields
+# ============================================
+KSEF_FA3_OPTIONAL_FIELDS=FA(3) Optional Fields
+KSEF_FA3_INCLUDE_NRKLIENTA=Include Customer Code (NrKlienta)
+KSEF_FA3_INCLUDE_NRKLIENTA_Help=Include the Dolibarr customer code in the FA3 invoice XML. This maps to the NrKlienta field in Podmiot2 (buyer) section.
+KSEF_FA3_INCLUDE_INDEKS=Include Product Code (Indeks)
+KSEF_FA3_INCLUDE_INDEKS_Help=Include the product reference code in invoice line items. This maps to the Indeks field in FaWiersz section.
+KSEF_FA3_INCLUDE_GTIN=Include GTIN/EAN Barcode
+KSEF_FA3_INCLUDE_GTIN_Help=Include product barcodes as GTIN in invoice line items. Enable only if your barcodes are valid GTIN/EAN codes (not internal codes).
+KSEF_FA3_INCLUDE_UNIT=Include Unit of Measure (P_8A)
+KSEF_FA3_INCLUDE_UNIT_Help=Include the unit of measure for products in invoice line items. This maps to the P_8A field in FaWiersz section.
+KSEF_FA3_INCLUDE_BANK_DESC=Include Bank Account Description
+KSEF_FA3_INCLUDE_BANK_DESC_Help=Include the bank account label/description in payment section. Enable only if your account labels are suitable for external visibility (not internal-only names).
+
 
 # ============================================
 # Connection & Testing
@@ -180,6 +204,12 @@ KSEF_TestNow=Test Now
 KSEF_Troubleshooting=Troubleshooting
 KSEF_ViewingErrorDetails=Viewing Error Details
 KSEF_ErrorDetailsLocation=To see detailed error information
+KSEF_GenerateKSeFPDF=Generate KSeF-style PDF
+KSEF_PDFRequiresSubmission=Invoice must be submitted to KSeF first
+KSEF_PDFRequiresAccepted=Invoice must have ACCEPTED status in KSeF
+KSEF_PDFRequiresOnline=Invoice must be submitted online (not offline mode)
+KSEF_PDFGeneratedSuccess=KSeF-style PDF generated successfully: %s
+KSEF_PDFGenerationError=Error generating KSeF-style PDF
 
 # ============================================
 # Dashboard / Home (ksefindex.php)
@@ -281,6 +311,15 @@ KSEF_KSEFNumber=KSeF Number
 KSEF_KSEFStatus=KSeF Status
 KSEF_KSEFSubmissionDate=KSeF Submission Date
 KSEF_KSEFReference=KSeF Reference
+KSEF_ExtraFieldNumber=KSeF Number
+KSEF_ExtraFieldStatus=KSeF Status
+KSEF_ExtraFieldSubmissionDate=KSeF Submission Date
+KSEF_StatusPending=Pending
+KSEF_StatusAccepted=Accepted
+KSEF_StatusRejected=Rejected
+KSEF_StatusFailed=Failed
+KSEF_StatusOffline=Offline
+KSEF_StatusValidationFailed=Validation Failed
 
 # ============================================
 # Issue Solutions
@@ -488,6 +527,9 @@ KSEF_UploadFailed=Upload to KSeF failed
 KSEF_UploadPending=Upload submitted, awaiting confirmation
 KSEF_OnlineSubmissionSuccess=Online submission successful
 KSEF_OnlineRetryFailed=Online retry failed, offline invoice remains valid
+KSEF_DuplicateInvoiceNumber=Duplicate Invoice Number
+KSEF_InvoiceNumberUsedBy=This invoice number was already used by
+KSEF_Retries=Retries
 
 # ============================================
 # Failure Dialog
@@ -504,3 +546,104 @@ KSEF_ModifyWarningTitle=KSeF Warning
 KSEF_ModifyWarningKSeF=This invoice has already been submitted to KSeF with number %s. Modifying it will NOT update the KSeF record. You may need to issue a corrective invoice instead.
 KSEF_ModifyWarningOffline=An offline invoice has been generated for this document. Modifying it will invalidate the QR codes on the printed PDF and may cause compliance issues.
 KSEF_ModifyInfoFailed=A previous KSeF submission attempt failed. Modifying the invoice will require a new submission.
+
+# ============================================
+# Incoming Invoices - General
+# ============================================
+KSEF_IncomingInvoices=Incoming Invoices
+KSEF_IncomingInvoice=Incoming Invoice
+KSEF_NoIncomingInvoices=No incoming invoices found
+KSEF_TopSellers=Top Suppliers
+
+# ============================================
+# Incoming Invoices - Fetch & Sync
+# ============================================
+KSEF_FetchFromKSeF=Fetch from KSeF
+KSEF_DateFrom=Date From
+KSEF_DateTo=Date To
+KSEF_DateType=Date Type
+KSEF_DateTypeIssue=Invoice Date (P_1)
+KSEF_DateTypeInvoicing=KSeF Receipt Date
+KSEF_FetchInvoices=Fetch Invoices
+KSEF_FetchResults=Found %s invoices: %s new added, %s already in system
+KSEF_FetchErrors=Errors during fetch
+KSEF_SyncFromKSeF=Sync from KSeF
+KSEF_SyncNow=Sync Now
+KSEF_SyncContinuationPoint=Continuation Point
+KSEF_LastSync=Last Sync
+KSEF_LastSyncResult=Last Result
+KSEF_SyncNotInitialized=Sync not yet initialized. Click "Sync Now" to start.
+KSEF_SyncResults=Synced %s new, %s existing (of %s total)
+KSEF_SyncResultShort=+%s new, %s existing (%s total)
+KSEF_SyncTruncated=More data available - sync again to continue.
+KSEF_SyncErrors=%s errors during sync
+KSEF_RateLimitActive=Rate limited by KSeF API. Retry after %s
+KSEF_ResetSyncState=Reset Sync
+KSEF_ResetDaysBack=Days back
+KSEF_ConfirmResetSync=Reset sync state? This will re-sync invoices from the specified number of days ago.
+KSEF_SyncStateReset=Sync state reset. Next sync will fetch invoices from %s days ago.
+KSEF_FetchInProgress=Fetching invoices from KSeF...
+KSEF_FetchCompleted=Fetch completed
+KSEF_FetchFailed=Fetch failed
+KSEF_FetchAlreadyInProgress=Fetch already in progress
+KSEF_FetchReset=Fetch state reset
+KSEF_ElapsedTime=Elapsed
+KSEF_NewInvoices=New
+KSEF_ExistingInvoices=Existing
+KSEF_ConfirmCancelFetch=Cancel current fetch?
+KSEF_ResetAndRetry=Reset and retry
+NotSet=Not set
+
+# ============================================
+# Incoming Invoices - Invoice Details
+# ============================================
+KSEF_InvoiceDetails=Invoice Details
+KSEF_Seller=Seller
+KSEF_Buyer=Buyer (Us)
+KSEF_KSEFInformation=KSeF Information
+KSEF_Information=KSeF Information
+KSEF_FetchedOn=Fetched On
+KSEF_XMLCreated=XML Created
+KSEF_SystemInfo=System Info
+KSEF_SaleDate=Sale Date
+KSEF_Totals=Totals
+KSEF_Net=Net
+KSEF_NetExempt=Net (Exempt)
+KSEF_LineItems=Line Items
+KSEF_VatSummary=VAT Summary
+KSEF_VATBreakdown=VAT Breakdown
+KSEF_VATExempt=Exempt
+KSEF_PaymentInfo=Payment Information
+KSEF_CorrectsInvoice=Corrects Invoice
+KSEF_OriginalKsefNumber=Original KSeF Number
+
+# ============================================
+# Incoming Invoices - Actions & Status
+# ============================================
+KSEF_ImportStatus=Import Status
+KSEF_ImportStatusNEW=New
+KSEF_ImportStatusIMPORTED=Imported
+KSEF_ImportStatusSKIPPED=Skipped
+KSEF_ImportStatusERROR=Error
+KSEF_SkipInvoice=Skip Invoice
+KSEF_UnskipInvoice=Mark as New
+KSEF_ImportToDolibarr=Import to Dolibarr
+KSEF_ImportFeatureComingSoon=Import Feature Coming Soon
+KSEF_ImportFeatureDescription=The ability to automatically import KSeF incoming invoices as Dolibarr supplier invoices will be available in a future version. For now, you can view the invoice details and manually create a matching supplier invoice.
+KSEF_ImportComingSoon=This feature will be available in a future version
+KSEF_ViewLinkedInvoice=View Linked Invoice
+KSEF_AlreadyImported=Already imported to Dolibarr
+KSEF_ComingSoon=Coming in future version
+KSEF_ViewRawXml=View XML
+KSEF_DownloadXml=Download XML
+KSEF_XMLMetadata=XML Metadata
+KSEF_DownloadPdf=Generate PDF
+KSEF_DownloadPdfTooltip=Generate PDF visualization with QR code
+KSEF_VisualizationError=Failed to generate invoice visualization
+KSEF_ViewOnPortal=View on KSeF Portal
+KSEF_ClearAll=Clear All Records
+KSEF_ConfirmClearAll=Delete ALL incoming invoices for environment %s? This cannot be undone.
+KSEF_ClearedRecords=Cleared %s incoming invoice records from %s environment
+RecordsDeleted=%s records deleted
+ConfirmDeleteIncomingInvoice=Delete incoming invoice %s?
+NotInSystem=not in system

@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2025 InPoint Automation Sp z o.o.
+/* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -66,7 +66,7 @@ $page_name = "KSEF_HowToUse";
 if ($action == 'testconnection') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
-    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'TEST';
+    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
 
     try {
         $client = new KsefClient($db, $environment);
@@ -101,7 +101,7 @@ if ($action == 'testconnection') {
 if ($action == 'testcertauth') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
-    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'TEST';
+    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
 
     $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
             !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
@@ -149,7 +149,7 @@ if ($action == 'testcertauth') {
 if ($action == 'testtokenauth') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
-    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'TEST';
+    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
 
     try {
         dol_syslog("Testing KSeF token authentication with $environment environment", LOG_INFO);

@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2025 InPoint Automation Sp z o.o.
+/* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -20,6 +20,61 @@
  * \ingroup ksef
  * \brief   common functions
  */
+
+define('KSEF_PORTAL_URL_PRODUCTION', 'https://ksef.mf.gov.pl');
+define('KSEF_PORTAL_URL_TEST', 'https://ksef-test.mf.gov.pl');
+define('KSEF_PORTAL_URL_DEMO', 'https://ksef-demo.mf.gov.pl');
+
+define('KSEF_QR_URL_PRODUCTION', 'https://qr.ksef.mf.gov.pl');
+define('KSEF_QR_URL_TEST', 'https://qr-test.ksef.mf.gov.pl');
+define('KSEF_QR_URL_DEMO', 'https://qr-demo.ksef.mf.gov.pl');
+
+define('KSEF_FA3_NAMESPACE', 'http://crd.gov.pl/wzor/2025/06/25/13775/');
+define('KSEF_FA3_SCHEMA_VERSION', '1-0E');
+
+/**
+ * @brief Gets KSeF portal base URL
+ * @param string|null $environment Environment (TEST, DEMO, PRODUCTION). If null, uses configured environment.
+ * @return string Portal base URL
+ */
+function ksefGetPortalBaseUrl($environment = null)
+{
+    if (empty($environment)) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
+    }
+
+    switch (strtoupper($environment)) {
+        case 'PRODUCTION':
+            return KSEF_PORTAL_URL_PRODUCTION;
+        case 'DEMO':
+            return KSEF_PORTAL_URL_DEMO;
+        case 'TEST':
+        default:
+            return KSEF_PORTAL_URL_TEST;
+    }
+}
+
+/**
+ * @brief Gets KSeF QR/verification base URL
+ * @param string|null $environment Environment (TEST, DEMO, PRODUCTION). If null, uses configured environment.
+ * @return string QR verification base URL
+ */
+function ksefGetQrBaseUrl($environment = null)
+{
+    if (empty($environment)) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
+    }
+
+    switch (strtoupper($environment)) {
+        case 'PRODUCTION':
+            return KSEF_QR_URL_PRODUCTION;
+        case 'DEMO':
+            return KSEF_QR_URL_DEMO;
+        case 'TEST':
+        default:
+            return KSEF_QR_URL_TEST;
+    }
+}
 
 /**
  * @brief Prepares admin head tabs
@@ -63,7 +118,9 @@ function ksefFormatNIP($nip)
 {
     $nip = preg_replace('/[^0-9]/', '', $nip);
     if (strlen($nip) == 10) {
-        return substr($nip, 0, 3).'-'.substr($nip, 3, 3).'-'.substr($nip, 6, 2).'-'.substr($nip, 8, 2);
+//        return substr($nip, 0, 3).'-'.substr($nip, 3, 3).'-'.substr($nip, 6, 2).'-'.substr($nip, 8, 2);
+        // not sure I like using the dashes everywhere ... //TODO see if we really want this or not?
+        return $nip;
     }
     return $nip;
 }
@@ -158,16 +215,10 @@ function ksefGetVerificationURL($ksef_number, $invoice_hash = null, $environment
     global $conf, $mysoc;
 
     if (empty($environment)) {
-        $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'TEST';
+        $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
     }
 
-    $urls = array(
-        'PRODUCTION' => 'https://qr.ksef.mf.gov.pl',
-        'TEST' => 'https://qr-test.ksef.mf.gov.pl',
-        'DEMO' => 'https://qr-demo.ksef.mf.gov.pl'
-    );
-
-    $base_url = isset($urls[$environment]) ? $urls[$environment] : $urls['TEST'];
+    $base_url = ksefGetQrBaseUrl($environment);
 
     if (empty($nip)) {
         if (!empty($ksef_number)) {
@@ -1065,4 +1116,122 @@ function ksefSessionRead($key, $default = null, $closeAfter = true)
     }
 
     return $value;
+}
+
+/**
+ * @brief Gets status badge HTML
+ * @param $status Import status (NEW, IMPORTED, SKIPPED, ERROR)
+ * @return string HTML badge
+ */
+function ksefGetIncomingStatusBadge($status)
+{
+    global $langs;
+    $langs->load("ksef@ksef");
+
+    switch ($status) {
+        case 'NEW':
+            return '<span class="badge badge-status1 badge-status">' . $langs->trans('KSEF_ImportStatusNEW') . '</span>';
+        case 'IMPORTED':
+            return '<span class="badge badge-status4 badge-status">' . $langs->trans('KSEF_ImportStatusIMPORTED') . '</span>';
+        case 'SKIPPED':
+            return '<span class="badge badge-status8 badge-status">' . $langs->trans('KSEF_ImportStatusSKIPPED') . '</span>';
+        case 'ERROR':
+            return '<span class="badge badge-status9 badge-status">' . $langs->trans('KSEF_ImportStatusERROR') . '</span>';
+        default:
+            return '<span class="badge badge-status0 badge-status">' . dol_escape_htmltag($status) . '</span>';
+    }
+}
+
+/**
+ * @brief Gets invoice type badge HTML
+ * @param $type Invoice type (VAT, KOR, ZAL, etc.)
+ * @return string HTML badge
+ */
+function ksefGetInvoiceTypeBadge($type)
+{
+    switch ($type) {
+        case 'VAT':
+            return '<span class="badge badge-status4">VAT</span>';
+        case 'KOR':
+            return '<span class="badge badge-status1">KOR</span>';
+        case 'ZAL':
+            return '<span class="badge badge-status5">ZAL</span>';
+        case 'ROZ':
+            return '<span class="badge badge-status6">ROZ</span>';
+        default:
+            return '<span class="badge badge-status0">' . dol_escape_htmltag($type) . '</span>';
+    }
+}
+
+
+/**
+ * @brief Prepares tabs for KSeF incoming invoice card
+ * @param $object KsefIncoming object related to tabs
+ * @return array Array of tabs to show
+ */
+function ksef_incoming_prepare_head($object)
+{
+    global $langs, $conf;
+    $langs->load("ksef@ksef");
+
+    $h = 0;
+    $head = array();
+
+    $head[$h][0] = dol_buildpath("/ksef/incoming_card.php", 1) . '?id=' . $object->id;
+    $head[$h][1] = $langs->trans("Card");
+    $head[$h][2] = 'card';
+    $h++;
+
+    $head[$h][0] = dol_buildpath("/ksef/incoming_import.php", 1) . '?id=' . $object->id;
+    $head[$h][1] = $langs->trans("KSEF_ImportToDolibarr");
+    $head[$h][2] = 'import';
+    $h++;
+
+    complete_head_from_modules($conf, $langs, $object, $head, $h, 'ksef_incoming');
+
+    complete_head_from_modules($conf, $langs, $object, $head, $h, 'ksef_incoming', 'remove');
+
+    return $head;
+}
+
+
+/**
+ * @brief Gets KSeF verification URL for incoming invoice from raw XML
+ * @param $ksef_number KSeF invoice number
+ * @param $fa3_xml Raw FA(3) XML content
+ * @param $environment Environment (TEST, DEMO, PRODUCTION)
+ * @return string Verification URL for KSeF portal
+ */
+function ksefGetVerificationUrlFromXml($ksef_number, $fa3_xml, $environment = null)
+{
+    global $conf;
+
+    if (empty($ksef_number) || empty($fa3_xml)) {
+        return '';
+    }
+
+    if (empty($environment)) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
+    }
+
+    $baseUrl = ksefGetQrBaseUrl($environment);
+
+    $parts = explode('-', $ksef_number);
+    $nip = $parts[0] ?? '';
+
+    if (empty($nip)) {
+        return '';
+    }
+
+    $dateStr = $parts[1] ?? '';
+    if (strlen($dateStr) == 8) {
+        $formattedDate = substr($dateStr, 6, 2) . '-' . substr($dateStr, 4, 2) . '-' . substr($dateStr, 0, 4);
+    } else {
+        $formattedDate = date('d-m-Y');
+    }
+
+    $rawHash = hash('sha256', $fa3_xml, true);
+    $hashBase64Url = rtrim(strtr(base64_encode($rawHash), '+/', '-_'), '=');
+
+    return $baseUrl . '/client-app/invoice/' . $nip . '/' . $formattedDate . '/' . $hashBase64Url;
 }

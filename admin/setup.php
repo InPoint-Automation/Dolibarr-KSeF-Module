@@ -1,7 +1,7 @@
 <?php
 /* Copyright (C) 2004-2017 Laurent Destailleur  <eldy@users.sourceforge.net>
  * Copyright (C) 2021      Éric Seigne          <eric.seigne@cap-rel.fr>
- * Copyright (C) 2025      InPoint Automation Sp z o.o.
+ * Copyright (C) 2025-2026      InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -86,12 +86,48 @@ if (empty($conf->global->KSEF_COMPANY_NIP)) {
     }
 }
 
+// Auto-pull KRS from Professional ID 2
+if (empty($conf->global->KSEF_COMPANY_KRS)) {
+    global $mysoc;
+    if (!empty($mysoc->idprof2)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_KRS', trim($mysoc->idprof2), 'chaine', 0, '', $conf->entity);
+    }
+}
+
+// Auto-pull REGON from Professional ID 3
+if (empty($conf->global->KSEF_COMPANY_REGON)) {
+    global $mysoc;
+    if (!empty($mysoc->idprof3)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_REGON', trim($mysoc->idprof3), 'chaine', 0, '', $conf->entity);
+    }
+}
+
+// Auto-pull BDO from Professional ID 4
+if (empty($conf->global->KSEF_COMPANY_BDO)) {
+    global $mysoc;
+    if (!empty($mysoc->idprof4)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_BDO', trim($mysoc->idprof4), 'chaine', 0, '', $conf->entity);
+    }
+}
+
 
 if ($action == 'update') {
     // NIP
     $nip = GETPOST("KSEF_COMPANY_NIP", 'alphanohtml');
     $nip = ksefCleanNIP($nip);
     dolibarr_set_const($db, 'KSEF_COMPANY_NIP', $nip, 'chaine', 0, '', $conf->entity);
+
+    // KRS
+    $krs = GETPOST("KSEF_COMPANY_KRS", 'alphanohtml');
+    dolibarr_set_const($db, 'KSEF_COMPANY_KRS', trim($krs), 'chaine', 0, '', $conf->entity);
+
+    // REGON
+    $regon = GETPOST("KSEF_COMPANY_REGON", 'alphanohtml');
+    dolibarr_set_const($db, 'KSEF_COMPANY_REGON', trim($regon), 'chaine', 0, '', $conf->entity);
+
+    // BDO
+    $bdo = GETPOST("KSEF_COMPANY_BDO", 'alphanohtml');
+    dolibarr_set_const($db, 'KSEF_COMPANY_BDO', trim($bdo), 'chaine', 0, '', $conf->entity);
 
     // Environment
     $env = GETPOST('KSEF_ENVIRONMENT', 'alpha');
@@ -132,6 +168,22 @@ if ($action == 'update') {
     if (!empty($color)) {
         dolibarr_set_const($db, 'KSEF_BUTTON_COLOR', $color, 'chaine', 0, '', $conf->entity);
     }
+
+    // Optional Fields
+    $fa3_nrklienta_val = GETPOST('KSEF_FA3_INCLUDE_NRKLIENTA', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_NRKLIENTA', $fa3_nrklienta_val, 'chaine', 0, '', $conf->entity);
+
+    $fa3_indeks_val = GETPOST('KSEF_FA3_INCLUDE_INDEKS', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_INDEKS', $fa3_indeks_val, 'chaine', 0, '', $conf->entity);
+
+    $fa3_gtin_val = GETPOST('KSEF_FA3_INCLUDE_GTIN', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_GTIN', $fa3_gtin_val, 'chaine', 0, '', $conf->entity);
+
+    $fa3_unit_val = GETPOST('KSEF_FA3_INCLUDE_UNIT', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_UNIT', $fa3_unit_val, 'chaine', 0, '', $conf->entity);
+
+    $fa3_bankdesc_val = GETPOST('KSEF_FA3_INCLUDE_BANK_DESC', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_BANK_DESC', $fa3_bankdesc_val, 'chaine', 0, '', $conf->entity);
 
     if (!$error) {
         setEventMessages($langs->trans("SetupSaved"), null, 'mesgs');
@@ -449,6 +501,27 @@ print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_NIP"), $langs->t
 print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_NIP" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_NIP ?? '') . '" placeholder="1234567890"></td>';
 print '</tr>';
 
+// KRS
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_KRS"), $langs->trans("KSEF_COMPANY_KRS_Help")) . '</td>';
+print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_KRS" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_KRS ?? '') . '" placeholder="0000000000">';
+print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span></td>';
+print '</tr>';
+
+// REGON
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_REGON"), $langs->trans("KSEF_COMPANY_REGON_Help")) . '</td>';
+print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_REGON" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_REGON ?? '') . '" placeholder="000000000">';
+print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span></td>';
+print '</tr>';
+
+// BDO
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_BDO"), $langs->trans("KSEF_COMPANY_BDO_Help")) . '</td>';
+print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_BDO" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_BDO ?? '') . '" placeholder="000000000">';
+print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span></td>';
+print '</tr>';
+
 // Environment
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_ENVIRONMENT"), $langs->trans("KSEF_ENVIRONMENT_Help")) . '</td>';
@@ -458,7 +531,25 @@ $array_env = array(
     'DEMO' => $langs->trans('KSEF_ENV_DEMO') . ' (ksef-demo.mf.gov.pl)',
     'PRODUCTION' => $langs->trans('KSEF_ENV_PRODUCTION') . ' (ksef.mf.gov.pl)'
 );
-print $form->selectarray('KSEF_ENVIRONMENT', $array_env, $conf->global->KSEF_ENVIRONMENT ?? 'TEST');
+print $form->selectarray('KSEF_ENVIRONMENT', $array_env, $conf->global->KSEF_ENVIRONMENT ?? 'PRODUCTION');
+
+$current_env = $conf->global->KSEF_ENVIRONMENT ?? 'PRODUCTION';
+print '<div id="production_warning" class="warning" style="margin-top: 10px; padding: 8px 12px; display: ' . ($current_env == 'PRODUCTION' ? 'block' : 'none') . ';">';
+print '<i class="fa fa-exclamation-triangle"></i> ' . $langs->trans("KSEF_PRODUCTION_WARNING");
+print '</div>';
+
+print '<script type="text/javascript">
+$(document).ready(function() {
+    $("#KSEF_ENVIRONMENT").on("change", function() {
+        if ($(this).val() == "PRODUCTION") {
+            $("#production_warning").show();
+        } else {
+            $("#production_warning").hide();
+        }
+    });
+});
+</script>';
+
 print '</td></tr>';
 
 print '</table>';
@@ -489,6 +580,52 @@ $array_colors = array(
     '#6f42c1' => $langs->trans('KSEF_Purple'),
 );
 print $form->selectarray('KSEF_BUTTON_COLOR', $array_colors, $conf->global->KSEF_BUTTON_COLOR ?? '#dc3545');
+print '</td></tr>';
+
+print '</table>';
+
+// Optional Fields
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_FA3_OPTIONAL_FIELDS") . '</td></tr>';
+
+// NrKlienta/Customer code
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA'), $langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_NRKLIENTA" id="KSEF_FA3_INCLUDE_NRKLIENTA" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_NRKLIENTA) ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_NRKLIENTA">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// Indeks/Product reference code
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_INDEKS'), $langs->trans('KSEF_FA3_INCLUDE_INDEKS_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_INDEKS" id="KSEF_FA3_INCLUDE_INDEKS" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS) ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// GTIN/Barcode/EAN
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_GTIN'), $langs->trans('KSEF_FA3_INCLUDE_GTIN_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_GTIN" id="KSEF_FA3_INCLUDE_GTIN" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_GTIN) ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_GTIN">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// P_8A/Unit of measure
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_UNIT'), $langs->trans('KSEF_FA3_INCLUDE_UNIT_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_UNIT" id="KSEF_FA3_INCLUDE_UNIT" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_UNIT) ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_UNIT">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// OpisRachunku/Bank account description
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_BANK_DESC'), $langs->trans('KSEF_FA3_INCLUDE_BANK_DESC_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_BANK_DESC" id="KSEF_FA3_INCLUDE_BANK_DESC" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_BANK_DESC) ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_BANK_DESC">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
 print '</table>';

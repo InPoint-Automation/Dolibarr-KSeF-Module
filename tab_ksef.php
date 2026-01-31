@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2025 InPoint Automation Sp z o.o.
+/* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -87,7 +87,7 @@ print '<td class="nobordernopadding valignmiddle col-title">';
 print '<div class="titre inline-block">' . $langs->trans("KSEF_SubmissionHistory") . '</div>';
 print '</td></tr></tbody></table>';
 
-$sql = "SELECT rowid, ksef_reference, ksef_number, status, environment, date_submission, error_code, error_message";
+$sql = "SELECT rowid, ksef_reference, ksef_number, status, environment, date_submission, date_acceptance, error_code, error_message, error_details, retry_count, fa3_xml, upo_xml";
 $sql .= " FROM " . MAIN_DB_PREFIX . "ksef_submissions";
 $sql .= " WHERE fk_facture = " . (int)$object->id;
 $sql .= " ORDER BY date_submission DESC";
@@ -103,6 +103,7 @@ if ($resql) {
     print '<th>' . $langs->trans("Status") . '</th>';
     print '<th>' . $langs->trans("KSEF_Environment") . '</th>';
     print '<th>' . $langs->trans("KSEF_Number") . '</th>';
+    print '<th class="center">#</th>';
     print '<th>' . $langs->trans("Error") . '</th>';
     print '<th class="center">' . $langs->trans("Action") . '</th>';
     print '</tr>';
@@ -113,29 +114,58 @@ if ($resql) {
         while ($obj = $db->fetch_object($resql)) {
             print '<tr class="oddeven">';
 
-            print '<td>' . dol_print_date($obj->date_submission, 'dayhour') . '</td>';
+            print '<td class="nowraponall">' . dol_print_date($obj->date_submission, 'dayhour') . '</td>';
             print '<td>' . ksefGetStatusBadge($obj->status) . '</td>';
             print '<td>' . ksefGetEnvironmentBadge($obj->environment) . '</td>';
             print '<td>' . ($obj->ksef_number ? $obj->ksef_number : '-') . '</td>';
+            print '<td class="center">' . (($obj->retry_count ?? 0) + 1) . '</td>';
 
             print '<td>';
             if ($obj->error_code) {
-                print '<strong>' . $obj->error_code . '</strong>: ' . dol_trunc($ksefClient->getErrorDescription($obj->error_code), 50);
+                print '<strong>' . $obj->error_code . '</strong>: ' . dol_trunc($ksefClient->getErrorDescription($obj->error_code), 60);
             } elseif ($obj->error_message) {
-                print dol_trunc($obj->error_message, 50);
+                print dol_trunc($obj->error_message, 80);
+            }
+
+            if (!empty($obj->error_details)) {
+                $errorDetails = json_decode($obj->error_details, true);
+                if ($errorDetails) {
+                    if (isset($errorDetails['code']) && $errorDetails['code'] == 440) {
+                        $originalKsef = $errorDetails['original_ksef_number'] ?? null;
+                        print '<br><span class="badge badge-warning">' . $langs->trans("KSEF_DuplicateInvoiceNumber") . '</span>';
+                        if ($originalKsef) {
+                            print '<br><small class="opacitymedium">' . $langs->trans("KSEF_InvoiceNumberUsedBy") . ': <strong>' . $originalKsef . '</strong></small>';
+                        }
+                    }
+                    elseif (isset($errorDetails['raw_response']['status']['code']) && $errorDetails['raw_response']['status']['code'] == 440) {
+                        $originalKsef = $errorDetails['raw_response']['status']['extensions']['originalKsefNumber'] ?? null;
+                        print '<br><span class="badge badge-warning">' . $langs->trans("KSEF_DuplicateInvoiceNumber") . '</span>';
+                        if ($originalKsef) {
+                            print '<br><small class="opacitymedium">' . $langs->trans("KSEF_InvoiceNumberUsedBy") . ': <strong>' . $originalKsef . '</strong></small>';
+                        }
+                    }
+                    elseif (!empty($errorDetails['raw_response']['status']['description'])) {
+                        print '<br><small class="opacitymedium">' . dol_trunc($errorDetails['raw_response']['status']['description'], 80) . '</small>';
+                    }
+                    elseif (!empty($errorDetails['details']) && is_array($errorDetails['details'])) {
+                        print '<br><small class="opacitymedium">' . dol_trunc(implode('; ', $errorDetails['details']), 80) . '</small>';
+                    }
+                }
             }
             print '</td>';
 
-            print '<td class="center">';
-            print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_xml&sub_id=' . $obj->rowid . '" class="butAction" title="' . $langs->trans("KSEF_DownloadFA3XML") . '">XML</a>';
-            if ($obj->status == 'ACCEPTED') {
-                print ' <a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_upo&sub_id=' . $obj->rowid . '" class="butAction" title="' . $langs->trans("KSEF_DownloadUPO") . '">UPO</a>';
+            print '<td class="center nowraponall">';
+            if (!empty($obj->fa3_xml)) {
+                print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_xml&sub_id=' . $obj->rowid . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadFA3XML") . '">XML</a> ';
+            }
+            if ($obj->status == 'ACCEPTED' && !empty($obj->upo_xml)) {
+                print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_upo&sub_id=' . $obj->rowid . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadUPO") . '">UPO</a>';
             }
             print '</td>';
             print '</tr>';
         }
     } else {
-        print '<tr><td colspan="6" class="opacitymedium">' . $langs->trans("NoRecordFound") . '</td></tr>';
+        print '<tr><td colspan="7" class="opacitymedium">' . $langs->trans("NoRecordFound") . '</td></tr>';
     }
     print '</table></div>';
     $db->free($resql);

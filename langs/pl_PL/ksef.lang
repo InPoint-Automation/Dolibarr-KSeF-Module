@@ -82,6 +82,14 @@ KSEF_EXCLUDED_CUSTOMERS_Help=Lista kontrahentów wykluczonych z wysyłki do KSeF
 KSEF_EXCLUDED_CUSTOMERS_INFO=Lista ID kontrahentów oddzielonych przecinkami
 KSEF_SelectCustomer=Wybierz kontrahenta
 KSEF_PleaseSelectCustomer=Proszę wybrać kontrahenta
+KSEF_COMPANY_KRS=KRS firmy
+KSEF_COMPANY_KRS_Help=Automatycznie pobierane z Identyfikatora zawodowego 2 (KRS). Numer Krajowego Rejestru Sądowego.
+KSEF_COMPANY_REGON=REGON firmy
+KSEF_COMPANY_REGON_Help=Automatycznie pobierane z Identyfikatora zawodowego 3 (REGON). Numer identyfikacyjny REGON.
+KSEF_COMPANY_BDO=BDO firmy
+KSEF_COMPANY_BDO_Help=Automatycznie pobierane z Identyfikatora zawodowego 4 (BDO). Numer rejestrowy BDO.
+KSEF_Optional=Opcjonalne
+KSEF_PRODUCTION_WARNING=Środowisko produkcyjne — wysyłaj tylko oficjalne faktury. Wysłanych faktur nie można cofnąć.
 
 # ============================================
 # Features
@@ -109,6 +117,21 @@ KSEF_Yellow=Żółty
 KSEF_Orange=Pomarańczowy
 KSEF_Purple=Fioletowy
 KSEF_Cyan=Cyjan
+
+# ============================================
+# FA3 Optional Fields
+# ============================================
+KSEF_FA3_OPTIONAL_FIELDS=Opcjonalne pola FA(3)
+KSEF_FA3_INCLUDE_NRKLIENTA=Dołącz kod klienta (NrKlienta)
+KSEF_FA3_INCLUDE_NRKLIENTA_Help=Dołącz kod klienta z Dolibarr do pliku XML faktury FA3. Odpowiada to polu NrKlienta w sekcji Podmiot2 (nabywca).
+KSEF_FA3_INCLUDE_INDEKS=Dołącz kod produktu (Indeks)
+KSEF_FA3_INCLUDE_INDEKS_Help=Dołącz kod referencyjny produktu w pozycjach faktury. Odpowiada to polu Indeks w sekcji FaWiersz.
+KSEF_FA3_INCLUDE_GTIN=Dołącz kod GTIN/EAN
+KSEF_FA3_INCLUDE_GTIN_Help=Dołącz kody kreskowe produktów jako GTIN w pozycjach faktury. Włącz tylko jeśli Twoje kody kreskowe to prawidłowe kody GTIN/EAN (nie kody wewnętrzne).
+KSEF_FA3_INCLUDE_UNIT=Dołącz jednostkę miary (P_8A)
+KSEF_FA3_INCLUDE_UNIT_Help=Dołącz jednostkę miary produktów w pozycjach faktury. Odpowiada to polu P_8A w sekcji FaWiersz.
+KSEF_FA3_INCLUDE_BANK_DESC=Dołącz opis rachunku bankowego
+KSEF_FA3_INCLUDE_BANK_DESC_Help=Dołącz etykietę/opis rachunku bankowego w sekcji płatności. Włącz tylko jeśli nazwy rachunków są odpowiednie do widoczności zewnętrznej (nie nazwy tylko do użytku wewnętrznego).
 
 # ============================================
 # Connection & Testing
@@ -180,6 +203,12 @@ KSEF_TestNow=Testuj teraz
 KSEF_Troubleshooting=Rozwiązywanie problemów
 KSEF_ViewingErrorDetails=Przeglądanie szczegółów błędów
 KSEF_ErrorDetailsLocation=Aby zobaczyć szczegółowe informacje o błędzie
+KSEF_GenerateKSeFPDF=Generuj PDF w stylu KSeF
+KSEF_PDFRequiresSubmission=Faktura musi być najpierw wysłana do KSeF
+KSEF_PDFRequiresAccepted=Faktura musi mieć status ACCEPTED w KSeF
+KSEF_PDFRequiresOnline=Faktura musi być wysłana online (nie w trybie offline)
+KSEF_PDFGeneratedSuccess=PDF w stylu KSeF wygenerowany pomyślnie: %s
+KSEF_PDFGenerationError=Błąd generowania PDF w stylu KSeF
 
 # ============================================
 # Dashboard / Home (ksefindex.php)
@@ -281,6 +310,15 @@ KSEF_KSEFNumber=Numer KSeF
 KSEF_KSEFStatus=Status KSeF
 KSEF_KSEFSubmissionDate=Data wysyłki KSeF
 KSEF_KSEFReference=Referencja KSeF
+KSEF_ExtraFieldNumber=Numer KSeF
+KSEF_ExtraFieldStatus=Status KSeF
+KSEF_ExtraFieldSubmissionDate=Data wysłania do KSeF
+KSEF_StatusPending=Oczekująca
+KSEF_StatusAccepted=Zaakceptowana
+KSEF_StatusRejected=Odrzucona
+KSEF_StatusFailed=Błąd
+KSEF_StatusOffline=Tryb offline
+KSEF_StatusValidationFailed=Błąd walidacji
 
 # ============================================
 # Issue Solutions
@@ -488,6 +526,10 @@ KSEF_UploadFailed=Wysłanie do KSeF nie powiodło się
 KSEF_UploadPending=Wysłano, oczekiwanie na potwierdzenie
 KSEF_OnlineSubmissionSuccess=Wysyłka online powiodła się
 KSEF_OnlineRetryFailed=Ponowienie online nie powiodło się, faktura offline pozostaje ważna
+KSEF_DuplicateInvoiceNumber=Duplikat numeru faktury
+KSEF_InvoiceNumberUsedBy=Ten numer faktury został już użyty przez
+KSEF_Retries=Próby
+
 
 # ============================================
 # Failure Dialog
@@ -504,3 +546,104 @@ KSEF_ModifyWarningTitle=Ostrzeżenie KSeF
 KSEF_ModifyWarningKSeF=Ta faktura została już wysłana do KSeF z numerem %s. Modyfikacja NIE zaktualizuje wpisu w KSeF. Może być konieczne wystawienie faktury korygującej.
 KSEF_ModifyWarningOffline=Dla tego dokumentu została wygenerowana faktura offline. Modyfikacja unieważni kody QR na wydrukowanym PDF i może spowodować problemy z zgodnością.
 KSEF_ModifyInfoFailed=Poprzednia próba wysłania do KSeF nie powiodła się. Modyfikacja faktury będzie wymagała nowego wysłania.
+
+# ============================================
+# Incoming Invoices - General
+# ============================================
+KSEF_IncomingInvoices=Faktury przychodzące
+KSEF_IncomingInvoice=Faktura przychodząca
+KSEF_NoIncomingInvoices=Nie znaleziono faktur przychodzących
+KSEF_TopSellers=Główni dostawcy
+
+# ============================================
+# Incoming Invoices - Fetch & Sync
+# ============================================
+KSEF_FetchFromKSeF=Pobierz z KSeF
+KSEF_DateFrom=Data od
+KSEF_DateTo=Data do
+KSEF_DateType=Typ daty
+KSEF_DateTypeIssue=Data wystawienia (P_1)
+KSEF_DateTypeInvoicing=Data przyjęcia w KSeF
+KSEF_FetchInvoices=Pobierz faktury
+KSEF_FetchResults=Znaleziono %s faktur: %s nowych, %s już w systemie
+KSEF_FetchErrors=Błędy podczas pobierania
+KSEF_SyncFromKSeF=Synchronizuj z KSeF
+KSEF_SyncNow=Synchronizuj teraz
+KSEF_SyncContinuationPoint=Punkt kontynuacji
+KSEF_LastSync=Ostatnia synchronizacja
+KSEF_LastSyncResult=Ostatni wynik
+KSEF_SyncNotInitialized=Synchronizacja nie została zainicjowana. Kliknij „Synchronizuj teraz", aby rozpocząć.
+KSEF_SyncResults=Zsynchronizowano %s nowych, %s istniejących (z %s łącznie)
+KSEF_SyncResultShort=+%s nowych, %s istniejących (%s łącznie)
+KSEF_SyncTruncated=Dostępne są kolejne dane — synchronizuj ponownie, aby kontynuować.
+KSEF_SyncErrors=Błędów podczas synchronizacji: %s
+KSEF_RateLimitActive=Limit zapytań: odczekaj %s
+KSEF_ResetSyncState=Resetuj synchronizację
+KSEF_ResetDaysBack=Dni wstecz
+KSEF_ConfirmResetSync=Zresetować stan synchronizacji? Spowoduje to ponowne pobranie faktur z podanej liczby dni wstecz.
+KSEF_SyncStateReset=Stan synchronizacji zresetowany. Następna synchronizacja pobierze faktury z ostatnich %s dni.
+KSEF_FetchInProgress=Pobieranie faktur z KSeF...
+KSEF_FetchCompleted=Pobieranie zakończone
+KSEF_FetchFailed=Pobieranie nie powiodło się
+KSEF_FetchAlreadyInProgress=Pobieranie już trwa
+KSEF_FetchReset=Stan pobierania zresetowany
+KSEF_ElapsedTime=Czas
+KSEF_NewInvoices=Nowe
+KSEF_ExistingInvoices=Istniejące
+KSEF_ConfirmCancelFetch=Anulować bieżące pobieranie?
+KSEF_ResetAndRetry=Resetuj i spróbuj ponownie
+NotSet=Nie ustawiono
+
+# ============================================
+# Incoming Invoices - Invoice Details
+# ============================================
+KSEF_InvoiceDetails=Szczegóły faktury
+KSEF_Seller=Sprzedawca
+KSEF_Buyer=Nabywca (my)
+KSEF_KSEFInformation=Informacje KSeF
+KSEF_Information=Informacje KSeF
+KSEF_FetchedOn=Pobrano
+KSEF_XMLCreated=Data utworzenia XML
+KSEF_SystemInfo=Informacje systemowe
+KSEF_SaleDate=Data sprzedaży
+KSEF_Totals=Podsumowanie
+KSEF_Net=Netto
+KSEF_NetExempt=Netto (zwolnione)
+KSEF_LineItems=Pozycje faktury
+KSEF_VatSummary=Podsumowanie VAT
+KSEF_VATBreakdown=Zestawienie VAT
+KSEF_VATExempt=Zwolnione
+KSEF_PaymentInfo=Informacje o płatności
+KSEF_CorrectsInvoice=Koryguje fakturę
+KSEF_OriginalKsefNumber=Oryginalny numer KSeF
+
+# ============================================
+# Incoming Invoices - Actions & Status
+# ============================================
+KSEF_ImportStatus=Status importu
+KSEF_ImportStatusNEW=Nowa
+KSEF_ImportStatusIMPORTED=Zaimportowana
+KSEF_ImportStatusSKIPPED=Pominięta
+KSEF_ImportStatusERROR=Błąd
+KSEF_SkipInvoice=Pomiń fakturę
+KSEF_UnskipInvoice=Oznacz jako nową
+KSEF_ImportToDolibarr=Importuj do Dolibarr
+KSEF_ImportFeatureComingSoon=Funkcja importu wkrótce dostępna
+KSEF_ImportFeatureDescription=Możliwość automatycznego importu faktur przychodzących z KSeF jako faktur zakupowych w Dolibarr będzie dostępna w przyszłej wersji. Na razie możesz przeglądać szczegóły faktur i ręcznie tworzyć odpowiadające im faktury zakupowe.
+KSEF_ImportComingSoon=Ta funkcja będzie dostępna w przyszłej wersji
+KSEF_ViewLinkedInvoice=Zobacz powiązaną fakturę
+KSEF_AlreadyImported=Już zaimportowana do Dolibarr
+KSEF_ComingSoon=Dostępne w przyszłej wersji
+KSEF_ViewRawXml=Zobacz XML
+KSEF_DownloadXml=Pobierz XML
+KSEF_XMLMetadata=Metadane XML
+KSEF_DownloadPdf=Generuj PDF
+KSEF_DownloadPdfTooltip=Generuj podgląd PDF z kodem QR
+KSEF_VisualizationError=Nie udało się wygenerować podglądu faktury
+KSEF_ViewOnPortal=Zobacz w portalu KSeF
+KSEF_ClearAll=Usuń wszystkie rekordy
+KSEF_ConfirmClearAll=Usunąć WSZYSTKIE faktury przychodzące dla środowiska %s? Tej operacji nie można cofnąć.
+KSEF_ClearedRecords=Usunięto %s rekordów faktur przychodzących ze środowiska %s
+RecordsDeleted=Usunięto %s rekordów
+ConfirmDeleteIncomingInvoice=Usunąć fakturę przychodzącą %s?
+NotInSystem=brak w systemie

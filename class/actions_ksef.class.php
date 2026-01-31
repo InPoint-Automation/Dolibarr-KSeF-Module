@@ -1,5 +1,5 @@
 <?php
-/* Copyright (C) 2025 InPoint Automation Sp z o.o.
+/* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as
@@ -37,7 +37,7 @@ class ActionsKSEF
     }
 
     /**
-     * @brief Adds customer exclusion to PDF generation options
+     * @brief Adds customer exclusion info and PDF generation button
      * @param $parameters Hook parameters
      * @param $object Invoice object
      * @return int Status code
@@ -45,7 +45,7 @@ class ActionsKSEF
      */
     public function formBuilddocOptions($parameters, &$object)
     {
-        global $conf, $langs;
+        global $conf, $langs, $db;
 
         if (empty($conf->ksef) || empty($conf->ksef->enabled)) {
             return 0;
@@ -56,24 +56,71 @@ class ActionsKSEF
             return 0;
         }
 
+        $langs->load("ksef@ksef");
+        $out = '';
+
+        // is customer is excluded
+        $is_excluded = false;
         if (!empty($conf->global->KSEF_EXCLUDED_CUSTOMERS)) {
             $excluded = array_map('trim', explode(',', $conf->global->KSEF_EXCLUDED_CUSTOMERS));
-
-            if (in_array($object->socid, $excluded)) {
-                $langs->load("ksef@ksef");
-                $this->resprints = '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium"><i class="fa fa-info-circle"></i> ' . $langs->trans('KSEF_CustomerExcludedInfo') . '</span></td></tr>';
-                return 1;
-            }
+            $is_excluded = in_array($object->socid, $excluded);
         }
 
-        if (!empty($object->array_options['options_ksef_number'])) {
-            $langs->load("ksef@ksef");
-            $out = '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium" style="color: #28a745;"><i class="fa fa-check-circle"></i> ' . $langs->trans('KSEF_IncludedInPDF') . ': <strong>' . htmlspecialchars($object->array_options['options_ksef_number']) . '</strong></span></td></tr>';
+        if ($is_excluded) {
+            $out .= '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium"><i class="fa fa-info-circle"></i> ' . $langs->trans('KSEF_CustomerExcludedInfo') . '</span></td></tr>';
             $this->resprints = $out;
             return 1;
         }
 
-        return 0;
+        // Check submission status
+        dol_include_once('/ksef/class/ksef_submission.class.php');
+        $submission = new KsefSubmission($db);
+        $has_submission = ($submission->fetchByInvoice($object->id) > 0);
+
+        $has_real_ksef_number = $has_submission &&
+            !empty($submission->ksef_number) &&
+            strpos($submission->ksef_number, 'OFFLINE') === false &&
+            strpos($submission->ksef_number, 'PENDING') === false &&
+            strpos($submission->ksef_number, 'ERROR') === false;
+
+        $is_accepted = $has_submission && $submission->status == 'ACCEPTED' && $has_real_ksef_number;
+
+        $out .= '<tr class="oddeven"><td colspan="5" style="padding: 4px 8px;">';
+        $out .= '<div style="display: flex; align-items: center; gap: 8px;">';
+        $out .= '<span style="font-size: 0.9em;">' . $langs->trans('KSEF_GenerateKSeFPDF') . '</span>';
+
+        if ($is_accepted) {
+            $out .= '<input type="button" class="button buttongen reposition nomargintop nomarginbottom" ';
+            $out .= 'style="background: #a94442; border-color: #8c2e2e; color: #fff; border-radius: 0;" ';
+            $out .= 'value="' . $langs->trans('Generate') . '" ';
+            $out .= 'onclick="window.location.href=\'' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_generate_pdf&token=' . newToken() . '\'" />';
+        } else {
+            $tooltip = '';
+            if (!$has_submission) {
+                $tooltip = $langs->trans('KSEF_PDFRequiresSubmission');
+            } elseif ($submission->status == 'PENDING') {
+                $tooltip = $langs->trans('KSEF_PDFRequiresAccepted');
+            } elseif ($submission->status == 'OFFLINE') {
+                $tooltip = $langs->trans('KSEF_PDFRequiresOnline');
+            } elseif (in_array($submission->status, array('FAILED', 'REJECTED', 'TIMEOUT'))) {
+                $tooltip = $langs->trans('KSEF_PDFRequiresAccepted');
+            } else {
+                $tooltip = $langs->trans('KSEF_PDFRequiresAccepted');
+            }
+            $out .= '<input type="button" class="button buttongen reposition nomargintop nomarginbottom classfortooltip" ';
+            $out .= 'style="background: #a94442; border-color: #8c2e2e; color: #fff; border-radius: 0; opacity: 0.5; cursor: not-allowed;" ';
+            $out .= 'value="' . $langs->trans('Generate') . '" title="' . dol_escape_htmltag($tooltip) . '" disabled />';
+        }
+
+        $out .= '</div>';
+        $out .= '</td></tr>';
+
+        if (!empty($object->array_options['options_ksef_number'])) {
+            $out .= '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium" style="color: #28a745;"><i class="fa fa-check-circle"></i> ' . $langs->trans('KSEF_IncludedInPDF') . ': <strong>' . htmlspecialchars($object->array_options['options_ksef_number']) . '</strong></span></td></tr>';
+        }
+
+        $this->resprints = $out;
+        return 1;
     }
 
     /**
@@ -371,6 +418,63 @@ class ActionsKSEF
             if ($action == 'download_upo') {
                 setEventMessages($langs->trans("KSEF_UPONotAvailable"), null, 'warnings');
             }
+        }
+
+        // KSeF-style PDF
+        if ($action == 'ksef_generate_pdf' && !empty($object->id)) {
+            $langs->load("ksef@ksef");
+
+            $submission = new KsefSubmission($db);
+            if ($submission->fetchByInvoice($object->id) <= 0) {
+                setEventMessages($langs->trans('KSEF_PDFRequiresSubmission'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            $has_real_ksef_number = !empty($submission->ksef_number) &&
+                strpos($submission->ksef_number, 'OFFLINE') === false &&
+                strpos($submission->ksef_number, 'PENDING') === false &&
+                strpos($submission->ksef_number, 'ERROR') === false;
+
+            if ($submission->status != 'ACCEPTED' || !$has_real_ksef_number) {
+                setEventMessages($langs->trans('KSEF_PDFRequiresAccepted'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            try {
+                dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
+
+                $invoiceData = $this->createPdfDataFromSubmission($submission, $object);
+
+                $pdfGenerator = new KsefInvoicePdf($db);
+                $pdfContent = $pdfGenerator->generate($invoiceData);
+
+                if ($pdfContent === false) {
+                    throw new Exception($pdfGenerator->error ?: 'PDF generation failed');
+                }
+
+                $outputDir = $conf->facture->dir_output . '/' . $object->ref;
+                if (!is_dir($outputDir)) {
+                    dol_mkdir($outputDir);
+                }
+
+                $filename = $object->ref . '_ksef.pdf';
+                $filepath = $outputDir . '/' . $filename;
+
+                if (file_put_contents($filepath, $pdfContent) === false) {
+                    throw new Exception('Failed to save PDF file');
+                }
+
+                setEventMessages($langs->trans('KSEF_PDFGeneratedSuccess', $filename), null, 'mesgs');
+
+            } catch (Exception $e) {
+                dol_syslog("ActionsKSEF::doActions ksef_generate_pdf error: " . $e->getMessage(), LOG_ERR);
+                setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . $e->getMessage(), null, 'errors');
+            }
+
+            header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+            exit;
         }
 
         if ($action == 'ksef_submit' && !empty($user->rights->facture->creer)) {
@@ -1239,5 +1343,75 @@ class ActionsKSEF
         }
 
         return 0;
+    }
+
+    /**
+     * @brief Creates a data object from KsefSubmission for PDF generation
+     * @param KsefSubmission $submission The submission object
+     * @param Facture $invoice The invoice object
+     * @return object Object for PDF generator
+     * @called_by doActions() for ksef_generate_pdf action
+     * @calls FA3Parser::parse()
+     */
+    private function createPdfDataFromSubmission($submission, $invoice)
+    {
+        $data = new stdClass();
+        $data->rowid = $submission->rowid;
+        $data->ksef_number = $submission->ksef_number;
+        $data->fa3_xml = $submission->fa3_xml;
+        $data->environment = $submission->environment;
+        $data->invoice_number = $invoice->ref;
+        $data->invoice_type = 'VAT';
+        $data->invoice_date = $invoice->date;
+        $data->total_gross = $invoice->total_ttc;
+        $data->total_net = $invoice->total_ht;
+        $data->total_vat = $invoice->total_tva;
+        $data->currency = $invoice->multicurrency_code ?: 'PLN';
+
+        if (!empty($submission->fa3_xml)) {
+            dol_include_once('/ksef/class/fa3_parser.class.php');
+
+            $parser = new FA3Parser($this->db);
+            $parsed = $parser->parse($submission->fa3_xml);
+
+            if ($parsed) {
+                if (!empty($parsed['invoice']['number'])) {
+                    $data->invoice_number = $parsed['invoice']['number'];
+                }
+                if (!empty($parsed['invoice']['type'])) {
+                    $data->invoice_type = $parsed['invoice']['type'];
+                }
+                if (!empty($parsed['invoice']['date'])) {
+                    $data->invoice_date = $parsed['invoice']['date'];
+                }
+                if (!empty($parsed['invoice']['sale_date'])) {
+                    $data->sale_date = $parsed['invoice']['sale_date'];
+                }
+                if (!empty($parsed['invoice']['currency'])) {
+                    $data->currency = $parsed['invoice']['currency'];
+                }
+                if ($parsed['invoice']['total_gross'] > 0) {
+                    $data->total_gross = $parsed['invoice']['total_gross'];
+                }
+                if ($parsed['invoice']['total_net'] > 0) {
+                    $data->total_net = $parsed['invoice']['total_net'];
+                }
+                if ($parsed['invoice']['total_vat'] > 0) {
+                    $data->total_vat = $parsed['invoice']['total_vat'];
+                }
+
+                $data->seller_nip = $parsed['seller']['nip'] ?? null;
+                $data->seller_name = $parsed['seller']['name'] ?? null;
+                $data->seller_country = $parsed['seller']['country'] ?? 'PL';
+                $data->seller_address = $parsed['seller']['address'] ?? null;
+
+                $data->buyer_nip = $parsed['buyer']['nip'] ?? null;
+                $data->buyer_name = $parsed['buyer']['name'] ?? null;
+            } else {
+                dol_syslog("ActionsKSEF::createPdfDataFromSubmission FA3Parser error: " . $parser->error, LOG_WARNING);
+            }
+        }
+
+        return $data;
     }
 }
