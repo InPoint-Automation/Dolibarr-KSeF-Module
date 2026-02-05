@@ -104,6 +104,8 @@ KSEF_AUTO_SUBMIT_Help=Automatically send invoices to KSeF when validated
 KSEF_ExcludeFromKSEF=Exclude from KSeF
 KSEF_ExcludeFromKSEFHelp=Do not submit invoices for this customer to KSeF
 KSEF_NotApplicableNotCustomer=Not applicable - this third party is not a customer. KSeF exclusion only applies to customers you issue invoices to.
+KSEF_EnableMulticurrencyForForeignInvoices=Enable the Multicurrency module to support foreign currency invoices with NBP exchange rates
+KSEF_EnableCSRFProtection=Enable CSRF token protection (set MAIN_SECURITY_CSRF_WITH_TOKEN in Home - Setup - Other)
 
 # ============================================
 # UI Settings
@@ -123,21 +125,26 @@ KSEF_Cyan=Cyan
 # ============================================
 KSEF_FA3_OPTIONAL_FIELDS=FA(3) Optional Fields
 KSEF_FA3_INCLUDE_NRKLIENTA=Include Customer Code (NrKlienta)
-KSEF_FA3_INCLUDE_NRKLIENTA_Help=Include the Dolibarr customer code in the FA3 invoice XML. This maps to the NrKlienta field in Podmiot2 (buyer) section.
+KSEF_FA3_INCLUDE_NRKLIENTA_Help=Include the Dolibarr customer code in the FA3 invoice XML.
 KSEF_FA3_INCLUDE_INDEKS=Include Product Code (Indeks)
-KSEF_FA3_INCLUDE_INDEKS_Help=Include the product reference code in invoice line items. This maps to the Indeks field in FaWiersz section.
+KSEF_FA3_INCLUDE_INDEKS_Help=Include the product reference code in invoice line items.
 KSEF_FA3_INCLUDE_GTIN=Include GTIN/EAN Barcode
 KSEF_FA3_INCLUDE_GTIN_Help=Include product barcodes as GTIN in invoice line items. Enable only if your barcodes are valid GTIN/EAN codes (not internal codes).
 KSEF_FA3_INCLUDE_UNIT=Include Unit of Measure (P_8A)
-KSEF_FA3_INCLUDE_UNIT_Help=Include the unit of measure for products in invoice line items. This maps to the P_8A field in FaWiersz section.
+KSEF_FA3_INCLUDE_UNIT_Help=Include the unit of measure for products in invoice line items.
 KSEF_FA3_INCLUDE_BANK_DESC=Include Bank Account Description
 KSEF_FA3_INCLUDE_BANK_DESC_Help=Include the bank account label/description in payment section. Enable only if your account labels are suitable for external visibility (not internal-only names).
-
+KSEF_ConfigureOfflineCertificate=Configure offline signing certificate for KSeF unavailability periods (tryb awaryjny)
+KSEF_FA3_PLACE_OF_ISSUE=Place of Issue (P_1M)
+KSEF_FA3_PLACE_OF_ISSUE_Help=Optional field indicating the city/location where the invoice was issued.
+KSEF_FA3_PLACE_OF_ISSUE_DISABLED=Disabled
+KSEF_FA3_PLACE_OF_ISSUE_COMPANY=From company address (city)
+KSEF_FA3_PLACE_OF_ISSUE_CUSTOM=Custom value
+KSEF_FA3_PLACE_OF_ISSUE_CUSTOM_Placeholder=Enter city name...
 
 # ============================================
 # Connection & Testing
 # ============================================
-KSEF_TestConnection=Test Connection
 KSEF_TEST_CONNECTION=Test Connection
 KSEF_TEST_TOKEN_AUTH=Test Token Authentication
 KSEF_CONNECTION_SUCCESS=Connection successful
@@ -180,38 +187,6 @@ KSEF_Test_NIPConfigured=NIP Configured
 KSEF_Test_NIPInvalid=NIP Invalid
 
 # ============================================
-# Workflow & Usage
-# ============================================
-KSEF_HowToUsePage=Usage Guide
-KSEF_QuickStartGuide=Quick Start Guide
-KSEF_ConfigureModule=Configure Module
-KSEF_ModuleSetup=Module Setup
-KSEF_GoToSetup=Go to Setup
-KSEF_UsingTheModule=Using the Module
-KSEF_SubmitInvoice=Submit Invoice
-KSEF_SubmittingInvoices=Submitting Invoices
-KSEF_SubmitInvoiceSteps=Steps to submit an invoice
-KSEF_OpenAnyInvoice=Open any invoice (date should be today)
-KSEF_OpenInvoiceCard=Open invoice card
-KSEF_OpenValidatedInvoice=Open a validated invoice
-KSEF_ClickKSEFButton=Click the "Validate and Upload to KSeF" button to submit
-KSEF_ClickRedKSEFButton=Click the red KSeF button
-KSEF_ClickInfoIcon=Click the info icon
-KSEF_WaitForConfirmation=Wait for confirmation
-KSEF_ScrollToKSEFSection=Scroll to KSeF section
-KSEF_ConfigureNow=Configure now
-KSEF_TestNow=Test Now
-KSEF_Troubleshooting=Troubleshooting
-KSEF_ViewingErrorDetails=Viewing Error Details
-KSEF_ErrorDetailsLocation=To see detailed error information
-KSEF_GenerateKSeFPDF=Generate KSeF-style PDF
-KSEF_PDFRequiresSubmission=Invoice must be submitted to KSeF first
-KSEF_PDFRequiresAccepted=Invoice must have ACCEPTED status in KSeF
-KSEF_PDFRequiresOnline=Invoice must be submitted online (not offline mode)
-KSEF_PDFGeneratedSuccess=KSeF-style PDF generated successfully: %s
-KSEF_PDFGenerationError=Error generating KSeF-style PDF
-
-# ============================================
 # Dashboard / Home (ksefindex.php)
 # ============================================
 KSEF_Statistics=Statistics
@@ -228,6 +203,149 @@ KSEF_SetupRequired=Setup required
 KSEF_SetupRequiredDesc=Configure Company NIP and authentication before using KSeF
 KSEF_MandatoryWarning=Mandatory KSeF notice
 KSEF_MandatoryWarningDesc=KSeF will be mandatory in %d days. Configure your system now.
+KSEF_OutgoingInvoices=Outgoing Invoices
+KSEF_Sent=Sent
+KSEF_Ready=Ready
+KSEF_CertificateExpiresInDays=Certificate expires in %d days
+KSEF_NeedsAttention=Needs Attention
+KSEF_OfflineDeadlineSoon=Offline invoices - deadline approaching
+KSEF_FailedCanRetry=Failed - can retry
+KSEF_AwaitingConfirmation=Awaiting confirmation
+KSEF_NewToReview=New invoices to review
+KSEF_ImportErrors=Import errors
+KSEF_RecentIncoming=Recent Incoming
+KSEF_ViewAll=View all
+
+# ============================================
+# How to Use
+# ============================================
+
+# Quick Start Section
+KSEF_HowToUse=How to Use
+KSEF_HowToUsePage=Usage Guide
+KSEF_QuickStartGuide=Quick Start Guide
+KSEF_GetCredentials=Get Your Credentials
+KSEF_GetCredentialsDesc=You need either an authorization token or a qualified certificate from the KSeF portal. Certificates are preferred - tokens are being phased out at the end of 2026, and you'll need a certificate anyway if you want offline invoice capability.
+KSEF_Portals=KSeF Portals
+KSEF_CurrentEnvironment=current
+KSEF_Important=Important
+KSEF_PermissionsWarning=After generating your token or registering your certificate, make sure you configure the proper permissions in the KSeF portal under "Uprawnienia". Having valid credentials isn't enough - you need upload/download permissions assigned to them. This is a common oversight that results in authentication errors.
+
+KSEF_ConfigureModule=Configure Module
+KSEF_ConfigureModuleDesc=Go to Setup and enter your company NIP and your token or certificate. The NIP should auto-populate from your company settings if you've already configured it there.
+KSEF_DefaultEnvironmentNote=The module defaults to Demo environment to prevent accidentally submitting official invoices while testing. Switch to Production (and upload the production certificates) once you're confident everything works correctly.
+KSEF_ModuleSetup=Module Setup
+KSEF_GoToSetup=Go to Setup
+
+KSEF_TestConnection=Test Connection
+KSEF_TestConnectionDesc=Use the test buttons to verify your connection and authentication work before attempting to submit invoices.
+KSEF_TestNow=Test Now
+
+KSEF_SubmitFirstInvoice=Submit Your First Invoice
+KSEF_SubmitFirstInvoiceDesc=Open any validated invoice and click the KSeF button. If it comes back as ACCEPTED with a KSeF number, you're good to go. You can view the uploaded XML, the UPO, and generate either a Dolibarr PDF or a KSeF-app style PDF as needed.
+
+# Configuration Section
+KSEF_ConfigurationSection=Configuration
+KSEF_Environments=Environments
+KSEF_ENV_TEST_FullDesc=Submit fake invoices to fake companies with fake company information (e.g. company with NIP 9999999999) with non-secure certificate or token generated from publicly accessible test portal, just for testing the system out.
+KSEF_ENV_DEMO_FullDesc=Submit fake invoices to fake companies with real company information and your Demo certificate or token, for testing system and verifying functionality. Invoices here are not legally binding.
+KSEF_ENV_PRODUCTION_FullDesc=Submit real invoices with real company information and your Production certificate or token. These are legally binding invoices.
+
+KSEF_Authentication=Authentication
+KSEF_AuthenticationDesc=Certificates are the better choice, however tokens work fine for now but lose validity at the end of 2026. Offline invoicing requires an offline certificate regardless.
+
+KSEF_OptionalFields=Optional Fields
+KSEF_OptionalFieldsDesc=The setup page has toggles for optional FA(3) fields like customer codes, product references, GTINs, and units of measure. Enable these if you have the data in Dolibarr and want it included in your KSeF submissions.
+
+KSEF_CompanyIdentifiers=Company Identifiers
+KSEF_CompanyIdentifiersDesc=NIP is required. KRS, REGON, and BDO are optional and will auto-populate from your company settings if configured there.
+
+# Sending Invoices Section
+KSEF_SendingInvoices=Sending Invoices
+KSEF_UsingTheModule=Using the Module
+KSEF_SubmitInvoice=Submit Invoice
+KSEF_SubmittingInvoices=Submitting Invoices
+KSEF_TheWorkflow=The Workflow
+KSEF_Workflow_Step1=Create or open an invoice
+KSEF_Workflow_Step2=Add fields as needed
+KSEF_Workflow_Step3=Click the KSeF button
+KSEF_Workflow_Step4=Wait for confirmation
+KSEF_SubmitInvoiceSteps=Steps to submit an invoice
+KSEF_OpenAnyInvoice=Open any invoice (date should be today)
+KSEF_OpenInvoiceCard=Open invoice card
+KSEF_OpenValidatedInvoice=Open a validated invoice
+KSEF_ClickKSEFButton=Click the "Validate and Upload to KSeF" button to submit
+KSEF_ClickRedKSEFButton=Click the red KSeF button
+KSEF_WaitForConfirmation=Wait for confirmation
+
+KSEF_ValidateAndUpload_Desc=On draft invoices, handles validation and upload in one step
+KSEF_UploadToKSEF_Desc=On validated invoices, uploads to KSeF
+
+KSEF_Statuses=Statuses
+KSEF_STATUS_ACCEPTED_Desc=Invoice received a KSeF number, you're done
+KSEF_STATUS_PENDING_Desc=Still processing, check back shortly
+KSEF_STATUS_REJECTED_Desc=Check the error details and retry
+KSEF_STATUS_OFFLINE_Desc=KSeF was unavailable, invoice saved locally with a deadline to submit online later
+
+KSEF_ForeignCurrencyInvoices=Foreign Currency Invoices
+KSEF_ForeignCurrencyDesc=For invoices in EUR or other non-PLN currencies, you need to fetch the NBP exchange rate before submitting and must have the multicurrency module enabled. When this is true, there is a button on the invoice card that pulls the rate from the last working day before the invoice date. Submission is blocked until the NBP exchange rate is pulled. You can choose whether to change the PLN price or the foreign currency price when exchange rate differs from the previous in settings, similar to multicurrency.
+
+KSEF_AfterAcceptance=After Acceptance
+KSEF_AfterAcceptanceDesc=Once accepted, you can generate a KSeF-style PDF visualization from the invoice card. If you have QR codes enabled in settings, the KSeF number also gets added to your regular invoice PDFs.
+
+KSEF_CheckingStatusDesc=The KSeF tab on any invoice card shows all submission attempts for that invoice. The global Status page shows submissions across all invoices and highlights common errors:
+
+# PDF Generation
+KSEF_GenerateKSeFPDF=Generate KSeF-style PDF
+KSEF_PDFRequiresSubmission=Invoice must be submitted to KSeF first
+KSEF_PDFRequiresAccepted=Invoice must have ACCEPTED status in KSeF
+KSEF_PDFRequiresOnline=Invoice must be submitted online (not offline mode)
+KSEF_PDFGeneratedSuccess=KSeF-style PDF generated successfully: %s
+KSEF_PDFGenerationError=Error generating KSeF-style PDF
+KSEF_QRVerificationInstruction=Can't scan the code from the image? Click the verification link to verify the invoice!
+KSEF_QRCodeII=QR Code II
+KSEF_QRCodeIIUnavailable=Unavailable - certificate not configured
+
+# Receiving Invoices Section
+KSEF_ReceivingInvoices=Receiving Invoices
+KSEF_ReceivingInvoicesDesc=Invoices that suppliers send you via KSeF can be synced into Dolibarr.
+KSEF_Receiving_Step1=Go to the Incoming Invoices page:
+KSEF_Receiving_Step2=Click "Sync from KSeF"
+KSEF_Receiving_Step3=New invoices appear in the list
+KSEF_ReceivingActions=For each invoice you can view the full details, download the original XML, download a PDF visualization, or verify it directly on the KSeF portal.
+
+KSEF_ImportingToDolibarr=Importing to Dolibarr
+KSEF_ImportingToDolibarrDesc=Automatic import to supplier invoices is still in development. For now, download the PDF visualization and create your supplier invoice manually using that as your source document. This saves you from having to log into the KSeF portal separately to view what your suppliers sent you.
+
+# Customer Exclusions Section
+KSEF_CustomerExclusions=Customer Exclusions
+KSEF_CustomerExclusionsDesc=Some customers don't need invoices sent to KSeF. You can exclude specific customers either from the module settings page or directly on the third party card using the exclusion checkbox.
+
+# Troubleshooting Section
+KSEF_Troubleshooting=Troubleshooting
+KSEF_FindingErrorDetails=Finding Error Details
+KSEF_FindingErrorDetailsDesc=Open the invoice, go to the KSeF tab, and view the error code and message. The global Status page also shows common errors across all submissions from the past 30 days:
+KSEF_ViewingErrorDetails=Viewing Error Details
+KSEF_ErrorDetailsLocation=To see detailed error information
+KSEF_ClickInfoIcon=Click the info icon
+KSEF_ScrollToKSEFSection=Scroll to KSeF section
+KSEF_ConfigureNow=Configure now
+
+KSEF_CommonIssues=Common Issues
+
+KSEF_Issue_DuplicateNumber=Duplicate invoice number (Error 440)
+KSEF_Issue_DuplicateNumber_Desc=This invoice number was already used in KSeF. Common in test/demo environments since data persists between sessions. Change the invoice number and retry.
+
+KSEF_Issue_AuthFailed_Desc=First, verify your token or certificate hasn't expired. If credentials are valid, the most common cause is missing permissions in the KSeF portal. Go to "Moje uprawnienia" in the KSeF application and verify you have upload/download permissions configured. Valid authentication alone isn't sufficient - permissions must be explicitly assigned.
+
+KSEF_Issue_NBPMissing=NBP rate missing
+KSEF_Issue_NBPMissing_Desc=Foreign currency invoice without an exchange rate. Use the fetch button on the invoice card to pull the rate from NBP.
+
+KSEF_Issue_Timeout_Desc=KSeF didn't respond in time. The submission might still be processing on their end. Check the status or retry.
+
+KSEF_RetryLimits=Retry Limits
+KSEF_RetryLimitsDesc=Failed submissions can be retried up to 30 times before being marked as permanently failed. Each attempt is logged in the submission history.
+
 
 # ============================================
 # Invoice Tab (tab_ksef.php)
@@ -251,7 +369,6 @@ KSEF_StatusUpdated=Status updated
 KSEF_VerifyOnKSEFPortal=Verify on KSeF portal
 KSEF_ViewAllAttemptsOnInvoice=View all attempts on this invoice
 KSEF_ViewAllSubmissions=View all submissions
-KSEF_RetrySubmission=Retry Submission
 KSEF_CheckStatus=Check status
 KSEF_ViewErrorDetails=View error details
 KSEF_DownloadKSEFZip=Download invoices with KSeF data (ZIP)
@@ -272,7 +389,6 @@ KSEF_STATUS_TIMEOUT=Timeout
 # Actions & Buttons (actions_ksef.class.php)
 # ============================================
 KSEF_SubmitToKSEF=Submit to KSeF
-KSEF_UploadToKSEF=Upload to KSeF
 KSEF_ValidateAndUpload=Validate and Upload to KSeF
 KSEF_ValidatingAndSubmitting=Validating and submitting to KSeF
 KSEF_SubmittingToKSEF=Submitting to KSeF
@@ -320,6 +436,30 @@ KSEF_StatusRejected=Rejected
 KSEF_StatusFailed=Failed
 KSEF_StatusOffline=Offline
 KSEF_StatusValidationFailed=Validation Failed
+
+# ============================================
+# Currency
+# ============================================
+KSEF_ExtraFieldKursData=NBP Rate Date
+KSEF_ExtraFieldKursDataHelp=NBP exchange rate date for foreign currency invoice (last working day before sale date)
+KSEF_NBPRate=NBP Rate
+KSEF_NBPRateFromDate=from %s
+KSEF_NBPRateRequired=NBP rate missing for foreign currency invoice. Fetch rate before KSeF submission.
+KSEF_NBPCurrencyNotSupported=Currency %s is not supported by NBP
+KSEF_NBPNoRateForDate=No NBP rate available for the specified date
+KSEF_NBPRateMissing=Rate Missing
+KSEF_RefreshNBPRate=Refresh
+KSEF_FetchNBPRate=Fetch NBP Rate
+KSEF_RefreshNBPRateTooltip=Fetch latest NBP exchange rate for this invoice date
+KSEF_FetchNBPRateTooltip=Fetch NBP exchange rate from National Bank of Poland
+KSEF_NBPRateNotNeeded=NBP exchange rate is not needed for PLN invoices
+KSEF_NBPRateFetched=NBP exchange rate fetched successfully: %s from %s
+KSEF_NBPRateFetchError=Failed to fetch NBP exchange rate: %s
+KSEF_MULTICURRENCY_CONFIG=Multicurrency / NBP Settings
+KSEF_NBP_RATE_MODE=NBP Rate Application Mode
+KSEF_NBP_RATE_MODE_KEEP_BASE=Keep base currency amounts (PLN) - recalculate foreign currency (EUR/etc)
+KSEF_NBP_RATE_MODE_KEEP_FOREIGN=Keep foreign currency amounts (EUR/etc) - recalculate PLN
+KSEF_MulticurrencyRefreshDisabled=Disabled for KSeF - Use "Fetch NBP Rate" button in the NBP Rate Date field instead
 
 # ============================================
 # Issue Solutions
@@ -647,3 +787,62 @@ KSEF_ClearedRecords=Cleared %s incoming invoice records from %s environment
 RecordsDeleted=%s records deleted
 ConfirmDeleteIncomingInvoice=Delete incoming invoice %s?
 NotInSystem=not in system
+
+
+KSEF_BASIC_CONFIG=Basic Configuration
+KSEF_MenuSubmissionStatus=Submission Status
+KSEF_MenuConfiguration=Configuration
+
+# ============================================
+# About Page - System Requirements
+# ============================================
+KSEF_Note=Note
+
+# Requirement Labels
+KSEF_Req_PHPVersion=PHP Version
+KSEF_Req_PHPVersionDesc=PHP 7.4 or higher required
+KSEF_Req_OpenSSL=OpenSSL Extension
+KSEF_Req_OpenSSLDesc=Required for encryption and secure communications
+KSEF_Req_cURL=cURL Extension
+KSEF_Req_cURLDesc=Required for API communications with KSeF
+KSEF_Req_DOM=DOM Extension
+KSEF_Req_DOMDesc=Required for XML processing
+KSEF_Req_Mbstring=Multibyte String Extension
+KSEF_Req_MbstringDesc=Required for handling invoice data and Polish characters
+KSEF_Req_JSON=JSON Extension
+KSEF_Req_JSONDesc=Required for KSeF API request/response processing
+KSEF_Req_Zip=Zip Extension
+KSEF_Req_ZipDesc=Required for unpacking incoming invoice packages from KSeF (ZipArchive)
+KSEF_Req_phpseclib=phpseclib Library
+KSEF_Req_phpseclibDesc=Cryptographic library for RSA encryption, included in module
+KSEF_Req_TCPDF=TCPDF Library
+KSEF_Req_TCPDFDesc=Required for QR code generation on PDFs
+KSEF_Req_TCPDF2DMissing=(2D barcode support missing)
+KSEF_Req_BarcodeModule=Barcode Module
+KSEF_Req_BarcodeModuleDesc=Dolibarr Barcode module (recommended for QR codes)
+KSEF_Req_MulticurrencyModule=Multicurrency Module
+KSEF_Req_MulticurrencyModuleDesc=Dolibarr Multicurrency module (required for foreign currency invoices with NBP exchange rates)
+KSEF_Req_CompanyNIP=Company NIP
+KSEF_Req_CompanyNIPDesc=Polish tax identification number
+KSEF_Req_KSeFAuth=KSeF Authentication
+KSEF_Req_KSeFAuthDesc=Token or valid certificate required for API access
+KSEF_Req_OfflineCert=Offline Signing Certificate
+KSEF_Req_OfflineCertDesc=Required for issuing invoices during KSeF unavailability (tryb awaryjny)
+KSEF_Req_Environment=Environment
+KSEF_Req_EnvironmentDesc=Current KSeF environment
+KSEF_Req_CSRF=CSRF Protection
+KSEF_Req_CSRFDesc=Cross-Site Request Forgery token protection (recommended for security)
+
+# Authentication Values
+KSEF_AuthValue_Token=Token
+KSEF_AuthValue_Certificate=Certificate
+KSEF_AuthValue_TokenAndCert=Token + Certificate
+KSEF_AuthValue_CertExpires=(cert expires: %s)
+KSEF_AuthValue_Expired=(EXPIRED: %s)
+KSEF_AuthValue_Expires=(expires: %s)
+
+# Certificate Status Values
+KSEF_CertValue_ValidUntil=Valid until: %s
+KSEF_CertValue_Expired=EXPIRED: %s
+KSEF_CertValue_Configured=Configured
+KSEF_CertValue_NotConfigured=Not configured

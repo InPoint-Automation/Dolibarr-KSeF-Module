@@ -444,8 +444,8 @@ class KsefIncoming extends CommonObject
         $this->buyer_name = $parsedData['buyer']['name'] ?? '';
         $this->invoice_number = $parsedData['invoice']['number'] ?? '';
         $this->invoice_type = $parsedData['invoice']['type'] ?? 'VAT';
-        $this->invoice_date = $parsedData['invoice']['date'] ?? null;
-        $this->sale_date = $parsedData['invoice']['sale_date'] ?? null;
+        $this->invoice_date = !empty($parsedData['invoice']['date']) ? strtotime($parsedData['invoice']['date']) : null;
+        $this->sale_date = !empty($parsedData['invoice']['sale_date']) ? strtotime($parsedData['invoice']['sale_date']) : null;
         $this->currency = $parsedData['invoice']['currency'] ?? 'PLN';
         $this->total_net = $parsedData['invoice']['total_net'] ?? 0;
         $this->total_vat = $parsedData['invoice']['total_vat'] ?? 0;
@@ -456,16 +456,17 @@ class KsefIncoming extends CommonObject
         if (!empty($parsedData['lines'])) {
             $this->line_items = json_encode($parsedData['lines']);
         }
-        $this->payment_due_date = $parsedData['payment']['due_date'] ?? null;
-        $this->payment_method = $parsedData['payment']['method'] ?? '';
-        $this->bank_account = $parsedData['payment']['bank_account'] ?? '';
+        $this->payment_due_date = !empty($parsedData['payment']['due_date']) ? strtotime($parsedData['payment']['due_date']) : null;
+        $this->payment_method = $parsedData['payment']['method'] ?? null;
+        $this->bank_account = $parsedData['payment']['bank_account'] ?? null;
         if (!empty($parsedData['correction'])) {
-            $this->corrected_ksef_number = $parsedData['correction']['ksef_number'] ?? '';
-            $this->corrected_invoice_number = $parsedData['correction']['invoice_number'] ?? '';
-            $this->corrected_invoice_date = $parsedData['correction']['invoice_date'] ?? null;
+            $firstCorrected = $parsedData['correction']['corrected_invoices'][0] ?? array();
+            $this->corrected_ksef_number = $firstCorrected['ksef_number'] ?? null;
+            $this->corrected_invoice_number = $firstCorrected['invoice_number'] ?? null;
+            $this->corrected_invoice_date = !empty($firstCorrected['invoice_date']) ? strtotime($firstCorrected['invoice_date']) : null;
         }
         $this->fa3_xml = $rawXml;
-        $this->fa3_creation_date = $parsedData['header']['creation_date'] ?? null;
+        $this->fa3_creation_date = !empty($parsedData['header']['creation_date']) ? strtotime($parsedData['header']['creation_date']) : null;
         $this->fa3_system_info = $parsedData['header']['system_info'] ?? '';
         $this->fetch_date = dol_now();
         $this->environment = $environment;

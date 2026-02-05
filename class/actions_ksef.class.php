@@ -72,6 +72,13 @@ class ActionsKSEF
             return 1;
         }
 
+        // Display NBP rate info for foreign invoices
+        dol_include_once('/ksef/lib/ksef.lib.php');
+        dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
+        if (class_exists('KsefNbpCurrencyRate')) {
+            $this->displayNBPRateInfo($parameters, $object);
+        }
+
         // Check submission status
         dol_include_once('/ksef/class/ksef_submission.class.php');
         $submission = new KsefSubmission($db);
@@ -119,7 +126,7 @@ class ActionsKSEF
             $out .= '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium" style="color: #28a745;"><i class="fa fa-check-circle"></i> ' . $langs->trans('KSEF_IncludedInPDF') . ': <strong>' . htmlspecialchars($object->array_options['options_ksef_number']) . '</strong></span></td></tr>';
         }
 
-        $this->resprints = $out;
+        $this->resprints .= $out;
         return 1;
     }
 
@@ -482,6 +489,15 @@ class ActionsKSEF
 
             if (ksefIsCustomerExcluded($object->socid)) {
                 setEventMessages($langs->trans('KSEF_CustomerExcluded'), null, 'warnings');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            // Check NBP rate for foreig invoices
+            dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
+            $nbpChecker = new KsefNbpCurrencyRate($db);
+            if ($nbpChecker->invoiceNeedsNBPRate($object) && !$nbpChecker->invoiceHasNBPRate($object)) {
+                setEventMessages($langs->trans('KSEF_NBPRateRequired'), null, 'errors');
                 header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
                 exit;
             }
@@ -992,6 +1008,15 @@ class ActionsKSEF
                 }
             }
 
+            // Check NBP rate for foreign invoices
+            dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
+            $nbpChecker = new KsefNbpCurrencyRate($db);
+            if ($nbpChecker->invoiceNeedsNBPRate($object) && !$nbpChecker->invoiceHasNBPRate($object)) {
+                setEventMessages($langs->trans('KSEF_NBPRateRequired'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
             if ($object->validate($user) > 0) {
 
                 // Release session lock to prevent blocking
@@ -1058,6 +1083,40 @@ class ActionsKSEF
 
             } else {
                 setEventMessages($object->error, $object->errors, 'errors');
+            }
+
+            header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+            exit;
+        }
+
+        // NBP rate
+        if ($action == 'ksef_fetch_nbp_rate' && !empty($user->rights->facture->creer)) {
+            $langs->load("ksef@ksef");
+            dol_include_once('/ksef/lib/ksef.lib.php');
+            dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
+
+            $nbp = new KsefNbpCurrencyRate($db);
+
+            if (!$nbp->invoiceNeedsNBPRate($object)) {
+                setEventMessages($langs->trans('KSEF_NBPRateNotNeeded'), null, 'warnings');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            $result = $nbp->fetchAndStoreForInvoice($object, $user);
+
+            if ($result !== false) {
+                setEventMessages(
+                    $langs->trans('KSEF_NBPRateFetched', $result['rate'], $result['date']),
+                    null,
+                    'mesgs'
+                );
+            } else {
+                setEventMessages(
+                    $langs->trans('KSEF_NBPRateFetchError', $nbp->error),
+                    null,
+                    'errors'
+                );
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1414,4 +1473,105 @@ class ActionsKSEF
 
         return $data;
     }
+
+    /**
+     * @brief Displays NBP exchange rate info and button
+     * @param array $parameters Hook parameters
+     * @param Facture $object Invoice object
+     * @return int Status code
+     * @called_by formBuilddocOptions hook
+     */
+    public function displayNBPRateInfo($parameters, &$object)
+    {
+        global $conf, $langs, $db, $user;
+
+        if (empty($conf->ksef) || empty($conf->ksef->enabled)) {
+            return 0;
+        }
+
+        $contextArray = explode(':', $parameters['context']);
+        if (!in_array('invoicecard', $contextArray)) {
+            return 0;
+        }
+
+        // must have multicurrency enabled
+        if (empty($conf->multicurrency) || empty($conf->multicurrency->enabled)) {
+            return 0;
+        }
+
+        $langs->load("ksef@ksef");
+        dol_include_once('/ksef/lib/ksef.lib.php');
+        dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
+
+        $nbp = new KsefNbpCurrencyRate($db);
+
+        if (!$nbp->invoiceNeedsNBPRate($object)) {
+            return 0;
+        }
+
+        $invoiceCurrency = $nbp->getInvoiceCurrency($object);
+        $rateInfo = $nbp->getFormattedRateInfo($object);
+        $canEdit = !empty($user->rights->facture->creer);
+        $isDraft = ($object->statut == Facture::STATUS_DRAFT);
+
+        $nbpContent = '';
+
+        if (!empty($rateInfo['date'])) {
+            $nbpContent .= '<span style="color: #28a745;"><i class="fa fa-check-circle"></i> ';
+            $nbpContent .= htmlspecialchars($rateInfo['date']);
+            $nbpContent .= '</span>';
+            if ($canEdit && $isDraft) {
+                $nbpContent .= ' <a class="button buttongen reposition" style="padding: 2px 8px; font-size: 0.85em; margin-left: 10px;" ';
+                $nbpContent .= 'href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_fetch_nbp_rate&token=' . newToken() . '" ';
+                $nbpContent .= 'title="' . dol_escape_htmltag($langs->trans('KSEF_RefreshNBPRateTooltip')) . '">';
+                $nbpContent .= '<i class="fa fa-refresh"></i> ' . $langs->trans('KSEF_RefreshNBPRate') . '</a>';
+            }
+        } else {
+            $nbpContent .= '<span style="color: #dc3545;"><i class="fa fa-exclamation-triangle"></i> ';
+            $nbpContent .= $langs->trans('KSEF_NBPRateMissing');
+            $nbpContent .= '</span>';
+
+            if ($canEdit) {
+                $nbpContent .= ' <a class="button buttongen reposition" style="padding: 2px 8px; font-size: 0.85em; margin-left: 10px; background: #28a745; border-color: #28a745; color: white;" ';
+                $nbpContent .= 'href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_fetch_nbp_rate&token=' . newToken() . '" ';
+                $nbpContent .= 'title="' . dol_escape_htmltag($langs->trans('KSEF_FetchNBPRateTooltip')) . '">';
+                $nbpContent .= '<i class="fa fa-download"></i> ' . $langs->trans('KSEF_FetchNBPRate') . '</a>';
+            }
+        }
+
+        $disabledTooltip = $langs->trans('KSEF_MulticurrencyRefreshDisabled');
+
+        $out = '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var nbpCell = jQuery("td[id^=\'facture_extras_ksef_kurs_data_\']");
+    if (nbpCell.length > 0) {
+        var newContent = ' . json_encode($nbpContent) . ';
+        var hiddenInput = nbpCell.find("input[type=\'hidden\']");
+        if (hiddenInput.length > 0) {
+            nbpCell.html("").append(hiddenInput).append(newContent);
+        } else {
+            nbpCell.html(newContent);
+        }
+    }
+
+    // Disable the multicurrency module rate refresh button on ksef invoices
+    var multicurrencyRefreshLink = jQuery("a[href*=\'action=actualizemulticurrencyrate\']");
+    if (multicurrencyRefreshLink.length > 0) {
+        multicurrencyRefreshLink.removeAttr("href");
+        multicurrencyRefreshLink.css({
+            "opacity": "0.5",
+            "cursor": "not-allowed",
+            "pointer-events": "none"
+        });
+        multicurrencyRefreshLink.attr("title", ' . json_encode($disabledTooltip) . ');
+        multicurrencyRefreshLink.find("span.fas").attr("title", ' . json_encode($disabledTooltip) . ');
+        multicurrencyRefreshLink.addClass("classfortooltip");
+    }
+});
+</script>';
+
+        $this->resprints .= $out;
+        return 0;
+    }
+
 }

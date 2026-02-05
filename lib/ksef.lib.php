@@ -40,7 +40,7 @@ define('KSEF_FA3_SCHEMA_VERSION', '1-0E');
 function ksefGetPortalBaseUrl($environment = null)
 {
     if (empty($environment)) {
-        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
     }
 
     switch (strtoupper($environment)) {
@@ -62,7 +62,7 @@ function ksefGetPortalBaseUrl($environment = null)
 function ksefGetQrBaseUrl($environment = null)
 {
     if (empty($environment)) {
-        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
     }
 
     switch (strtoupper($environment)) {
@@ -153,7 +153,7 @@ function ksefValidateNIP($nip)
     }
 
     $checksum = $sum % 11;
-    if ($checksum == 10) $checksum = 0;
+    if ($checksum == 10) return false;
 
     return ($checksum == (int)$nip[9]);
 }
@@ -215,7 +215,7 @@ function ksefGetVerificationURL($ksef_number, $invoice_hash = null, $environment
     global $conf, $mysoc;
 
     if (empty($environment)) {
-        $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
+        $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'DEMO';
     }
 
     $base_url = ksefGetQrBaseUrl($environment);
@@ -260,7 +260,8 @@ function ksefGetVerificationURL($ksef_number, $invoice_hash = null, $environment
         throw new Exception("Invoice hash is required for verification URL");
     }
 
-    return $base_url . '/client-app/invoice/' . $nip . '/' . $formattedDate . '/' . $base64Url;
+    // return $base_url . '/client-app/invoice/' . $nip . '/' . $formattedDate . '/' . $base64Url;
+    return $base_url . '/invoice/' . $nip . '/' . $formattedDate . '/' . $base64Url;
 }
 
 /**
@@ -1204,34 +1205,31 @@ function ksef_incoming_prepare_head($object)
  */
 function ksefGetVerificationUrlFromXml($ksef_number, $fa3_xml, $environment = null)
 {
-    global $conf;
-
     if (empty($ksef_number) || empty($fa3_xml)) {
         return '';
     }
 
-    if (empty($environment)) {
-        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
-    }
+    $hash = base64_encode(hash('sha256', $fa3_xml, true));
 
-    $baseUrl = ksefGetQrBaseUrl($environment);
-
-    $parts = explode('-', $ksef_number);
-    $nip = $parts[0] ?? '';
-
-    if (empty($nip)) {
+    try {
+        return ksefGetVerificationURL($ksef_number, $hash, $environment);
+    } catch (Exception $e) {
+        dol_syslog("ksefGetVerificationUrlFromXml: " . $e->getMessage(), LOG_WARNING);
         return '';
     }
+}
 
-    $dateStr = $parts[1] ?? '';
-    if (strlen($dateStr) == 8) {
-        $formattedDate = substr($dateStr, 6, 2) . '-' . substr($dateStr, 4, 2) . '-' . substr($dateStr, 0, 4);
-    } else {
-        $formattedDate = date('d-m-Y');
+/**
+ * Get effective invoice currency for KSeF
+ * @param Facture $invoice Invoice object
+ * @return string Currency code
+ */
+function ksefGetInvoiceCurrency($invoice)
+{
+    if (!empty($invoice->multicurrency_code)) {
+        return $invoice->multicurrency_code;
     }
 
-    $rawHash = hash('sha256', $fa3_xml, true);
-    $hashBase64Url = rtrim(strtr(base64_encode($rawHash), '+/', '-_'), '=');
-
-    return $baseUrl . '/client-app/invoice/' . $nip . '/' . $formattedDate . '/' . $hashBase64Url;
+    global $conf;
+    return !empty($conf->currency) ? $conf->currency : 'EUR';
 }

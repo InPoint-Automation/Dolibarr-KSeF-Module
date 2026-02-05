@@ -21,6 +21,11 @@
  * \brief   KSEF How-To Page
  */
 
+// CSRF Check
+if (!defined('CSRFCHECK_WITH_TOKEN')) {
+    define('CSRFCHECK_WITH_TOKEN', '1');
+}
+
 $res = 0;
 if (!$res && !empty($_SERVER["CONTEXT_DOCUMENT_ROOT"])) {
     $res = @include $_SERVER["CONTEXT_DOCUMENT_ROOT"] . "/main.inc.php";
@@ -63,10 +68,13 @@ $backtopage = GETPOST('backtopage', 'alpha');
 
 $page_name = "KSEF_HowToUse";
 
+// Get current environment
+$current_env = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'DEMO';
+
 if ($action == 'testconnection') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
-    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
+    $environment = $current_env;
 
     try {
         $client = new KsefClient($db, $environment);
@@ -101,7 +109,7 @@ if ($action == 'testconnection') {
 if ($action == 'testcertauth') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
-    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
+    $environment = $current_env;
 
     $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
             !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
@@ -114,7 +122,7 @@ if ($action == 'testcertauth') {
     }
 
     $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'certificate', 'chaine', 0, '', $conf->entity);
+    $conf->global->KSEF_AUTH_METHOD = 'certificate';
 
     try {
         $client = new KsefClient($db, $environment);
@@ -140,7 +148,7 @@ if ($action == 'testcertauth') {
         );
     }
 
-    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', $orig_method, 'chaine', 0, '', $conf->entity);
+    $conf->global->KSEF_AUTH_METHOD = $orig_method;
 
     header("Location: " . $_SERVER["PHP_SELF"]);
     exit;
@@ -149,7 +157,10 @@ if ($action == 'testcertauth') {
 if ($action == 'testtokenauth') {
     dol_include_once('/ksef/class/ksef_client.class.php');
 
-    $environment = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'PRODUCTION';
+    $environment = $current_env;
+
+    $orig_method = $conf->global->KSEF_AUTH_METHOD;
+    $conf->global->KSEF_AUTH_METHOD = 'token';
 
     try {
         dol_syslog("Testing KSeF token authentication with $environment environment", LOG_INFO);
@@ -177,6 +188,8 @@ if ($action == 'testtokenauth') {
         );
     }
 
+    $conf->global->KSEF_AUTH_METHOD = $orig_method;
+
     header("Location: " . $_SERVER["PHP_SELF"]);
     exit;
 }
@@ -191,153 +204,244 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'howtouse', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-print '<span class="opacitymedium">' . $langs->trans("KSEF_HowToUsePage") . '</span><br><br>';
+$has_token = !empty($conf->global->KSEF_AUTH_TOKEN);
+$has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
+        !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
+        !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
 
 ?>
 
-<table class="noborder centpercent">
-    <tr class="liste_titre">
-        <th>
-            <span class="fa fa-bolt paddingright"></span>
-            <?php echo $langs->trans("KSEF_QuickStartGuide"); ?>
-        </th>
-    </tr>
-    <tr class="oddeven">
-        <td>
-            <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                <div style="flex: 1; min-width: 200px; padding: 15px; background: #f8f9fa; border-left: 4px solid #dc3545;">
-                    <h4 style="margin-top: 0;">1. <?php echo $langs->trans("KSEF_GetToken"); ?></h4>
-                    <p><?php echo $langs->trans("KSEF_VisitKSEFPortal"); ?>:<br>
-                        <a href="https://ksef.mf.gov.pl" target="_blank">ksef.mf.gov.pl</a></p>
-                    <p><?php echo $langs->trans("KSEF_GenerateTokenInPortal"); ?></p>
-                </div>
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fa fa-bolt paddingright"></span><?php echo $langs->trans("KSEF_QuickStartGuide"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #dc3545;">
+                        <h4 style="margin-top: 0;">1. <?php echo $langs->trans("KSEF_GetCredentials"); ?></h4>
+                        <p><?php echo $langs->trans("KSEF_GetCredentialsDesc"); ?></p>
+                        <p><strong><?php echo $langs->trans("KSEF_Portals"); ?>:</strong></p>
+                        <?php
+                        $portals = array(
+                                'PRODUCTION' => array('url' => 'https://ap.ksef.mf.gov.pl/web/', 'label' => $langs->trans('KSEF_ENV_PRODUCTION')),
+                                'DEMO' => array('url' => 'https://ap-demo.ksef.mf.gov.pl/web/', 'label' => $langs->trans('KSEF_ENV_DEMO')),
+                                'TEST' => array('url' => 'https://ap-test.ksef.mf.gov.pl/web/', 'label' => $langs->trans('KSEF_ENV_TEST')),
+                        );
+                        foreach ($portals as $env => $portal) {
+                            $is_active = ($env === $current_env);
+                            $style = $is_active ? 'font-weight: bold;' : 'opacity: 0.5;';
+                            $icon = $is_active ? '<span class="fa fa-check-circle" style="color: #28a745;"></span> ' : '';
+                            print '<div style="' . $style . ' margin-bottom: 4px;">';
+                            print $icon . '<a href="' . $portal['url'] . '" target="_blank">' . $portal['label'] . '</a>';
+                            if ($is_active) {
+                                print ' <small>(' . $langs->trans("KSEF_CurrentEnvironment") . ')</small>';
+                            }
+                            print '</div>';
+                        }
+                        ?>
 
-                <div style="flex: 1; min-width: 200px; padding: 15px; background: #f8f9fa; border-left: 4px solid #fd7e14;">
-                    <h4 style="margin-top: 0;">2. <?php echo $langs->trans("KSEF_ConfigureModule"); ?></h4>
-                    <p>
-                        <a href="<?php echo dol_buildpath('/ksef/admin/setup.php', 1); ?>"><?php echo $langs->trans("KSEF_GoToSetup"); ?></a>
-                    </p>
-                    <p><?php echo $langs->trans("KSEF_EnterNIPAndToken"); ?></p>
-                </div>
+                        <div style="margin-top: 12px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
+                            <span class="fa fa-exclamation-triangle" style="color: #856404;"></span>
+                            <strong><?php echo $langs->trans("KSEF_Important"); ?>:</strong>
+                            <?php echo $langs->trans("KSEF_PermissionsWarning"); ?>
+                        </div>
+                    </div>
 
-                <div style="flex: 1; min-width: 200px; padding: 15px; background: #f8f9fa; border-left: 4px solid #ffc107;">
-                    <h4 style="margin-top: 0;">3. <?php echo $langs->trans("KSEF_TestConnection"); ?></h4>
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #fd7e14;">
+                        <h4 style="margin-top: 0;">2. <?php echo $langs->trans("KSEF_ConfigureModule"); ?></h4>
+                        <p><?php echo $langs->trans("KSEF_ConfigureModuleDesc"); ?></p>
+                        <p><?php echo $langs->trans("KSEF_DefaultEnvironmentNote"); ?></p>
+                        <p><a href="<?php echo dol_buildpath('/ksef/admin/setup.php', 1); ?>" class="button small">
+                                <span class="fa fa-cog paddingright"></span><?php echo $langs->trans("KSEF_GoToSetup"); ?>
+                            </a></p>
+                    </div>
 
-                    <?php
-                    $has_token = !empty($conf->global->KSEF_AUTH_TOKEN);
-                    $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
-                            !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
-                            !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
-                    ?>
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #ffc107;">
+                        <h4 style="margin-top: 0;">3. <?php echo $langs->trans("KSEF_TestConnection"); ?></h4>
+                        <p><?php echo $langs->trans("KSEF_TestConnectionDesc"); ?></p>
 
-                    <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testconnection&token=<?php echo newToken(); ?>"
-                       class="button small" style="margin-bottom: 8px; display: block;">
-                        <span class="fa fa-plug paddingright"></span>
-                        <?php echo $langs->trans("KSEF_TEST_CONNECTION"); ?>
-                    </a>
-
-                    <?php if ($has_token) { ?>
-                        <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testtokenauth&token=<?php echo newToken(); ?>"
+                        <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testconnection&token=<?php echo newToken(); ?>"
                            class="button small" style="margin-bottom: 8px; display: block;">
-                            <span class="fa fa-key paddingright"></span>
-                            <?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+                            <span class="fa fa-plug paddingright"></span><?php echo $langs->trans("KSEF_TEST_CONNECTION"); ?>
                         </a>
-                    <?php } else { ?>
-                        <span class="button small butActionRefused classfortooltip"
-                              style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
-                              title="<?php echo $langs->trans('KSEF_ConfigureTokenFirst'); ?>">
-                            <span class="fa fa-key paddingright"></span>
-                            <?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+
+                        <?php if ($has_token) { ?>
+                            <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testtokenauth&token=<?php echo newToken(); ?>"
+                               class="button small" style="margin-bottom: 8px; display: block;">
+                                <span class="fa fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+                            </a>
+                        <?php } else { ?>
+                            <span class="button small butActionRefused classfortooltip"
+                                  style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
+                                  title="<?php echo $langs->trans('KSEF_ConfigureTokenFirst'); ?>">
+                            <span class="fa fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
                         </span>
-                        <small class="opacitymedium"><?php echo $langs->trans('KSEF_TokenNotConfigured'); ?></small>
-                    <?php } ?>
+                        <?php } ?>
 
-                    <?php if ($has_auth_cert) { ?>
-                        <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testcertauth&token=<?php echo newToken(); ?>"
-                           class="button small" style="margin-bottom: 8px; display: block;">
-                            <span class="fa fa-certificate paddingright"></span>
-                            <?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
-                        </a>
-                    <?php } else { ?>
-                        <span class="button small butActionRefused classfortooltip"
-                              style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
-                              title="<?php echo $langs->trans('KSEF_ConfigureCertificateFirst'); ?>">
-                            <span class="fa fa-certificate paddingright"></span>
-                            <?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
+                        <?php if ($has_auth_cert) { ?>
+                            <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testcertauth&token=<?php echo newToken(); ?>"
+                               class="button small" style="margin-bottom: 8px; display: block;">
+                                <span class="fa fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
+                            </a>
+                        <?php } else { ?>
+                            <span class="button small butActionRefused classfortooltip"
+                                  style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
+                                  title="<?php echo $langs->trans('KSEF_ConfigureCertificateFirst'); ?>">
+                            <span class="fa fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
                         </span>
-                        <small class="opacitymedium"><?php echo $langs->trans('KSEF_CertificateNotConfigured'); ?></small>
-                    <?php } ?>
+                        <?php } ?>
+                    </div>
+
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #28a745;">
+                        <h4 style="margin-top: 0;">4. <?php echo $langs->trans("KSEF_SubmitFirstInvoice"); ?></h4>
+                        <p><?php echo $langs->trans("KSEF_SubmitFirstInvoiceDesc"); ?></p>
+                    </div>
+
                 </div>
+            </td>
+        </tr>
+    </table>
 
-                <div style="flex: 1; min-width: 200px; padding: 15px; background: #f8f9fa; border-left: 4px solid #28a745;">
-                    <h4 style="margin-top: 0;">4. <?php echo $langs->trans("KSEF_SubmitInvoice"); ?></h4>
-                    <p><?php echo $langs->trans("KSEF_OpenAnyInvoice"); ?></p>
-                    <p><?php echo $langs->trans("KSEF_ClickKSEFButton"); ?></p>
-                </div>
-            </div>
+    <br>
 
-        </td>
-    </tr>
-</table>
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fa fa-cog paddingright"></span><?php echo $langs->trans("KSEF_ConfigurationSection"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <h4><?php echo $langs->trans("KSEF_Environments"); ?></h4>
+                <ul>
+                    <li><strong><?php echo $langs->trans("KSEF_ENV_TEST"); ?></strong> — <?php echo $langs->trans("KSEF_ENV_TEST_FullDesc"); ?></li>
+                    <li><strong><?php echo $langs->trans("KSEF_ENV_DEMO"); ?></strong> — <?php echo $langs->trans("KSEF_ENV_DEMO_FullDesc"); ?></li>
+                    <li><strong><?php echo $langs->trans("KSEF_ENV_PRODUCTION"); ?></strong> — <?php echo $langs->trans("KSEF_ENV_PRODUCTION_FullDesc"); ?></li>
+                </ul>
 
-<br>
+                <h4><?php echo $langs->trans("KSEF_Authentication"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_AuthenticationDesc"); ?></p>
 
-<table class="noborder centpercent">
-    <tr class="liste_titre">
-        <th>
-            <span class="fa fa-file-invoice paddingright"></span>
-            <?php echo $langs->trans("KSEF_UsingTheModule"); ?>
-        </th>
-    </tr>
-    <tr class="oddeven">
-        <td>
-            <h4><?php echo $langs->trans("KSEF_SubmittingInvoices"); ?></h4>
-            <p><?php echo $langs->trans("KSEF_SubmitInvoiceSteps"); ?>:</p>
-            <ol>
-                <li><?php echo $langs->trans("KSEF_OpenValidatedInvoice"); ?></li>
-                <li><?php echo $langs->trans("KSEF_ClickRedKSEFButton"); ?></li>
-                <li><?php echo $langs->trans("KSEF_WaitForConfirmation"); ?></li>
-            </ol>
+                <h4><?php echo $langs->trans("KSEF_OptionalFields"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_OptionalFieldsDesc"); ?></p>
 
-            <h4><?php echo $langs->trans("KSEF_CheckingStatus"); ?></h4>
-            <ul>
-                <li><span class="badge badge-status4"><?php echo $langs->trans("KSEF_ACCEPTED"); ?></span>
-                    — <?php echo $langs->trans("KSEF_InvoiceAccepted"); ?></li>
-                <li><span class="badge badge-status8"><?php echo $langs->trans("KSEF_REJECTED"); ?></span>
-                    — <?php echo $langs->trans("KSEF_FixAndRetry"); ?></li>
-                <li><span class="badge badge-status3"><?php echo $langs->trans("KSEF_PENDING"); ?></span>
-                    — <?php echo $langs->trans("KSEF_BeingProcessed"); ?></li>
-            </ul>
+                <h4><?php echo $langs->trans("KSEF_CompanyIdentifiers"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_CompanyIdentifiersDesc"); ?></p>
+            </td>
+        </tr>
+    </table>
 
-            <p><?php echo $langs->trans("KSEF_ViewAllSubmissions"); ?>: <a
-                        href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_SubmissionStatus"); ?></a>
-            </p>
-        </td>
-    </tr>
-</table>
+    <br>
 
-<br>
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fa fa-file-invoice paddingright"></span><?php echo $langs->trans("KSEF_SendingInvoices"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <h4><?php echo $langs->trans("KSEF_TheWorkflow"); ?></h4>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_Workflow_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Workflow_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Workflow_Step3"); ?>
+                        <ul>
+                            <li><strong><?php echo $langs->trans("KSEF_ValidateAndUpload"); ?></strong> — <?php echo $langs->trans("KSEF_ValidateAndUpload_Desc"); ?></li>
+                            <li><strong><?php echo $langs->trans("KSEF_UploadToKSEF"); ?></strong> — <?php echo $langs->trans("KSEF_UploadToKSEF_Desc"); ?></li>
+                        </ul>
+                    </li>
+                    <li><?php echo $langs->trans("KSEF_Workflow_Step4"); ?></li>
+                </ol>
 
-<table class="noborder centpercent">
-    <tr class="liste_titre">
-        <th>
-            <span class="fa fa-wrench paddingright"></span>
-            <?php echo $langs->trans("KSEF_Troubleshooting"); ?>
-        </th>
-    </tr>
-    <tr class="oddeven">
-        <td>
-            <h4><?php echo $langs->trans("KSEF_ViewingErrorDetails"); ?></h4>
-            <p><?php echo $langs->trans("KSEF_ErrorDetailsLocation"); ?>:</p>
-            <ol>
-                <li><?php echo $langs->trans("KSEF_OpenInvoiceCard"); ?></li>
-                <li><?php echo $langs->trans("KSEF_ScrollToKSEFSection"); ?></li>
-                <li><?php echo $langs->trans("KSEF_ClickInfoIcon"); ?> (<span class="fa fa-info-circle"></span>)</li>
-            </ol>
-        </td>
-    </tr>
-</table>
+                <h4><?php echo $langs->trans("KSEF_Statuses"); ?></h4>
+                <ul style="list-style: none; padding-left: 0;">
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status4"><?php echo $langs->trans("KSEF_STATUS_ACCEPTED"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_ACCEPTED_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status3"><?php echo $langs->trans("KSEF_STATUS_PENDING"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_PENDING_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_REJECTED"); ?></span> / <span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_FAILED"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_REJECTED_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status1"><?php echo $langs->trans("KSEF_STATUS_OFFLINE"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_OFFLINE_Desc"); ?></li>
+                </ul>
 
+                <h4><?php echo $langs->trans("KSEF_ForeignCurrencyInvoices"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_ForeignCurrencyDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_AfterAcceptance"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_AfterAcceptanceDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_CheckingStatus"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_CheckingStatusDesc"); ?>
+                    <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_SubmissionStatus"); ?></a>
+                </p>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fa fa-download paddingright"></span><?php echo $langs->trans("KSEF_ReceivingInvoices"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_ReceivingInvoicesDesc"); ?></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_Receiving_Step1"); ?>
+                        <a href="<?php echo dol_buildpath('/ksef/incoming_list.php', 1); ?>"><?php echo $langs->trans("KSEF_IncomingInvoices"); ?></a>
+                    </li>
+                    <li><?php echo $langs->trans("KSEF_Receiving_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Receiving_Step3"); ?></li>
+                </ol>
+                <p><?php echo $langs->trans("KSEF_ReceivingActions"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_ImportingToDolibarr"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_ImportingToDolibarrDesc"); ?></p>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fa fa-user-slash paddingright"></span><?php echo $langs->trans("KSEF_CustomerExclusions"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_CustomerExclusionsDesc"); ?></p>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fa fa-wrench paddingright"></span><?php echo $langs->trans("KSEF_Troubleshooting"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <h4><?php echo $langs->trans("KSEF_FindingErrorDetails"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_FindingErrorDetailsDesc"); ?>
+                    <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_SubmissionStatus"); ?></a>
+                </p>
+
+                <h4><?php echo $langs->trans("KSEF_CommonIssues"); ?></h4>
+
+                <p><strong><?php echo $langs->trans("KSEF_Issue_DuplicateNumber"); ?></strong><br>
+                    <?php echo $langs->trans("KSEF_Issue_DuplicateNumber_Desc"); ?></p>
+
+                <p><strong><?php echo $langs->trans("KSEF_Issue_AuthFailed"); ?></strong><br>
+                    <?php echo $langs->trans("KSEF_Issue_AuthFailed_Desc"); ?></p>
+
+                <p><strong><?php echo $langs->trans("KSEF_Issue_NBPMissing"); ?></strong><br>
+                    <?php echo $langs->trans("KSEF_Issue_NBPMissing_Desc"); ?></p>
+
+                <p><strong><?php echo $langs->trans("KSEF_Issue_Timeout"); ?></strong><br>
+                    <?php echo $langs->trans("KSEF_Issue_Timeout_Desc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_RetryLimits"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_RetryLimitsDesc"); ?></p>
+            </td>
+        </tr>
+    </table>
 
 <?php
 

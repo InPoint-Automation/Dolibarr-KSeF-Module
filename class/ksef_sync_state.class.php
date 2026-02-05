@@ -22,6 +22,7 @@
  */
 
 require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
+require_once DOL_DOCUMENT_ROOT . '/core/lib/security.lib.php';
 
 class KsefSyncState
 {
@@ -54,6 +55,7 @@ class KsefSyncState
 
     const CONST_PREFIX = 'KSEF_SYNC_';
     const FETCH_TIMEOUT_SECONDS = 1200;
+    const PROCESS_TIMEOUT_SECONDS = 900;
 
 
     public function __construct($db)
@@ -89,8 +91,8 @@ class KsefSyncState
         $this->fetch_reference = getDolGlobalString($this->getConstName('FETCH_REF'), '');
         $this->fetch_status = getDolGlobalString($this->getConstName('FETCH_STATUS'), '');
         $this->fetch_started = getDolGlobalInt($this->getConstName('FETCH_STARTED'), 0);
-        $this->fetch_key = getDolGlobalString($this->getConstName('FETCH_KEY'), '');
-        $this->fetch_iv = getDolGlobalString($this->getConstName('FETCH_IV'), '');
+        $this->fetch_key = dol_decode(getDolGlobalString($this->getConstName('FETCH_KEY'), ''));
+        $this->fetch_iv = dol_decode(getDolGlobalString($this->getConstName('FETCH_IV'), ''));
         $this->fetch_error = getDolGlobalString($this->getConstName('FETCH_ERROR'), '');
 
         $this->process_file = getDolGlobalString($this->getConstName('PROC_FILE'), '');
@@ -121,8 +123,8 @@ class KsefSyncState
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_REF'), $this->fetch_reference ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_STATUS'), $this->fetch_status ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_STARTED'), $this->fetch_started ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
-        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_KEY'), $this->fetch_key ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
-        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_IV'), $this->fetch_iv ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_KEY'), dol_encode($this->fetch_key ?: ''), 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_IV'), dol_encode($this->fetch_iv ?: ''), 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_ERROR'), $this->fetch_error ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
 
         if (dolibarr_set_const($this->db, $this->getConstName('PROC_FILE'), $this->process_file ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
@@ -161,6 +163,18 @@ class KsefSyncState
     public function isProcessingInProgress()
     {
         return !empty($this->process_file) && file_exists($this->process_file);
+    }
+
+    public function isProcessingTimedOut()
+    {
+        if (!$this->isProcessingInProgress()) {
+            return false;
+        }
+        $mtime = @filemtime($this->process_file);
+        if ($mtime === false) {
+            return true;
+        }
+        return (dol_now() - $mtime) > self::PROCESS_TIMEOUT_SECONDS;
     }
 
     public function clearProcessingState()
@@ -229,8 +243,21 @@ class KsefSyncState
 
     public function canSyncNow()
     {
-        if ($this->isFetchInProgress()) return false;
-        if ($this->isProcessingInProgress()) return false;
+        if ($this->isFetchInProgress()) {
+            if ($this->isFetchTimedOut()) {
+                $this->fetch_status = self::FETCH_STATUS_TIMEOUT;
+                $this->clearFetchState();
+            } else {
+                return false;
+            }
+        }
+        if ($this->isProcessingInProgress()) {
+            if ($this->isProcessingTimedOut()) {
+                $this->clearProcessingState();
+            } else {
+                return false;
+            }
+        }
         if ($this->isRateLimited()) return false;
         return true;
     }

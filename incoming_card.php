@@ -39,6 +39,19 @@
  * see https://github.com/Dolibarr/dolibarr/blob/develop/htdocs/fourn/facture/card.php
  */
 
+// CSRF check
+if (!defined('CSRFCHECK_WITH_TOKEN')) {
+    define('CSRFCHECK_WITH_TOKEN', '1');
+}
+
+// Prevent token renewal for actions that exit without page reload
+$action_raw = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
+if (in_array($action_raw, array('download_xml', 'view_xml', 'download_pdf'))) {
+    if (!defined('NOTOKENRENEWAL')) {
+        define('NOTOKENRENEWAL', '1');
+    }
+}
+
 $res = 0;
 if (!$res && !empty($_SERVER["CONTEXT_DOCUMENT_ROOT"])) $res = @include $_SERVER["CONTEXT_DOCUMENT_ROOT"] . "/main.inc.php";
 if (!$res && file_exists("../main.inc.php")) $res = @include "../main.inc.php";

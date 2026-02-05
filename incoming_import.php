@@ -21,6 +21,11 @@
  * \brief   Import KSeF incoming invoice to Dolibarr (placeholder)
  */
 
+// CSRF check
+if (!defined('CSRFCHECK_WITH_TOKEN')) {
+    define('CSRFCHECK_WITH_TOKEN', '1');
+}
+
 $res = 0;
 if (!$res && !empty($_SERVER["CONTEXT_DOCUMENT_ROOT"])) $res = @include $_SERVER["CONTEXT_DOCUMENT_ROOT"] . "/main.inc.php";
 if (!$res && file_exists("../main.inc.php")) $res = @include "../main.inc.php";
@@ -60,7 +65,7 @@ $form = new Form($db);
 // Permissions
 $usercanwrite = $user->hasRight('ksef', 'write');
 
-$hookmanager->initHooks(array('ksef_incominginmport', 'globalcard'));
+$hookmanager->initHooks(array('ksef_incomingimport', 'globalcard'));
 
 
 /*

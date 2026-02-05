@@ -34,6 +34,10 @@ class FA3Builder
     private $buyerName;
     private $lastXmlHash;
     private $lastCreationDate;
+    private $currentInvoiceCurrency;
+    private $currentKursWaluty;
+    private $currentCustomerCountry;
+    private $currentCustomerIsEU;
 
     public function __construct($db)
     {
@@ -97,7 +101,7 @@ class FA3Builder
             }
 
             $this->buildNaglowek($xml, $faktura, $invoice, $options);
-            $this->buildPodmiot1($xml, $faktura, $mysoc);
+            $this->buildPodmiot1($xml, $faktura, $mysoc, $customer);
             $this->buildPodmiot2($xml, $faktura, $customer);
             $this->buildFa($xml, $faktura, $invoice, $originalInvoice);
             $this->buildStopka($xml, $faktura);
@@ -181,16 +185,30 @@ class FA3Builder
      * @param $xml DOMDocument
      * @param $parent Parent element
      * @param $mysoc Company object
+     * @param $customer Customer object
      * @called_by buildFromInvoice()
      * @calls ksefCleanNIP(), xmlSafe()
      */
-    private function buildPodmiot1($xml, $parent, $mysoc)
+    private function buildPodmiot1($xml, $parent, $mysoc, $customer)
     {
         global $conf;
 
         // Seller
         $podmiot1 = $xml->createElement('Podmiot1');
         $parent->appendChild($podmiot1);
+
+        // Check if buyer is not PL
+        $buyerCountry = !empty($customer->country_code) ? strtoupper($customer->country_code) : 'PL';
+        $isForeignBuyer = ($buyerCountry != 'PL');
+
+        // PrefiksPodatnika - VAT prefix if buyer is foreign AND seller has valid EU VAT ID in tva_intra
+        if ($isForeignBuyer && !empty($mysoc->tva_intra)) {
+            $vatIntra = strtoupper(trim($mysoc->tva_intra));
+            if (preg_match('/^([A-Z]{2})/', $vatIntra, $matches)) {
+                $vatPrefix = $matches[1];
+                $podmiot1->appendChild($xml->createElement('PrefiksPodatnika', $vatPrefix));
+            }
+        }
 
         // Identification
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
@@ -217,16 +235,34 @@ class FA3Builder
 
         $adres->appendChild($xml->createElement('KodKraju', $mysoc->country_code ?: 'PL'));
 
+        // AdresL1: Street address
         $address = !empty($mysoc->address) ? $this->xmlSafe($mysoc->address) : 'ul. Testowa 1';
-        $adresL1 = $address;
+        $adres->appendChild($xml->createElement('AdresL1', $address));
 
-        if (!empty($mysoc->zip) && !empty($mysoc->town)) {
-            $adresL1 .= ', ' . $this->xmlSafe($mysoc->zip) . ' ' . $this->xmlSafe($mysoc->town);
-        } elseif (!empty($mysoc->town)) {
-            $adresL1 .= ', ' . $this->xmlSafe($mysoc->town);
+        // AdresL2: Postal code + city
+        $adresL2Parts = array();
+        if (!empty($mysoc->zip)) {
+            $adresL2Parts[] = $this->xmlSafe($mysoc->zip);
+        }
+        if (!empty($mysoc->town)) {
+            $adresL2Parts[] = $this->xmlSafe($mysoc->town);
+        }
+        if (!empty($adresL2Parts)) {
+            $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
         }
 
-        $adres->appendChild($xml->createElement('AdresL1', $adresL1));
+        // DaneKontaktowe: Contact information
+        if (!empty($mysoc->email) || !empty($mysoc->phone)) {
+            $daneKontakt = $xml->createElement('DaneKontaktowe');
+            $podmiot1->appendChild($daneKontakt);
+
+            if (!empty($mysoc->email)) {
+                $daneKontakt->appendChild($xml->createElement('Email', $this->xmlSafe($mysoc->email)));
+            }
+            if (!empty($mysoc->phone)) {
+                $daneKontakt->appendChild($xml->createElement('Telefon', $this->xmlSafe($mysoc->phone)));
+            }
+        }
     }
 
     /**
@@ -235,7 +271,7 @@ class FA3Builder
      * @param $parent Parent element
      * @param $customer Customer object
      * @called_by buildFromInvoice()
-     * @calls ksefCleanNIP(), xmlSafe(), getEntityFlags()
+     * @calls ksefCleanNIP(), xmlSafe(), getEntityFlags(), isEUCountry()
      */
     private function buildPodmiot2($xml, $parent, $customer)
     {
@@ -245,21 +281,36 @@ class FA3Builder
         $podmiot2 = $xml->createElement('Podmiot2');
         $parent->appendChild($podmiot2);
 
-        // Identification
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
         $podmiot2->appendChild($daneIdent);
+
+        $countryCode = $customer->country_code ?: 'PL';
+        $isPolish = ($countryCode === 'PL');
+        $isEU = $this->isEUCountry($countryCode);
 
         $nip = ksefCleanNIP($customer->idprof1);
         if (empty($nip)) {
             $nip = ksefCleanNIP($customer->tva_intra);
         }
-        if (!empty($nip) && $customer->country_code == 'PL') {
+
+        if ($isPolish && !empty($nip)) {
             $daneIdent->appendChild($xml->createElement('NIP', $nip));
-        } elseif (!empty($customer->idprof1)) {
-            $nrID = $xml->createElement('NrID', $this->xmlSafe($customer->idprof1));
-            $nrID->setAttribute('kodKraju', $customer->country_code ?: 'XX');
-            $daneIdent->appendChild($nrID);
+        } elseif ($isEU && !empty($customer->tva_intra)) {
+            $vatNumber = ksefCleanNIP($customer->tva_intra);
+            if (strlen($vatNumber) > 2 && preg_match('/^[A-Z]{2}/', $vatNumber)) {
+                $vatNumber = substr($vatNumber, 2);
+            }
+            $daneIdent->appendChild($xml->createElement('KodUE', $countryCode));
+            if (!empty($vatNumber)) {
+                $daneIdent->appendChild($xml->createElement('NrVatUE', $vatNumber));
+            }
+        } elseif (!$isPolish && !empty($customer->idprof1)) {
+            $daneIdent->appendChild($xml->createElement('KodKraju', $countryCode));
+            $daneIdent->appendChild($xml->createElement('NrID', $this->xmlSafe($customer->idprof1)));
+        } else {
+            $daneIdent->appendChild($xml->createElement('BrakID', '1'));
         }
+
         $this->buyerName = $this->xmlSafe($customer->name);
         $daneIdent->appendChild($xml->createElement('Nazwa', $this->buyerName));
 
@@ -267,23 +318,44 @@ class FA3Builder
         $adres = $xml->createElement('Adres');
         $podmiot2->appendChild($adres);
 
-        $adres->appendChild($xml->createElement('KodKraju', $customer->country_code ?: 'PL'));
+        $adres->appendChild($xml->createElement('KodKraju', $countryCode));
 
+        // AdresL1: Street address
         $address = !empty($customer->address) ? $this->xmlSafe($customer->address) : 'Brak danych';
-        $adresL1 = $address;
+        $adres->appendChild($xml->createElement('AdresL1', $address));
 
-        if (!empty($customer->zip) && !empty($customer->town)) {
-            $adresL1 .= ', ' . $this->xmlSafe($customer->zip) . ' ' . $this->xmlSafe($customer->town);
-        } elseif (!empty($customer->town)) {
-            $adresL1 .= ', ' . $this->xmlSafe($customer->town);
+        // AdresL2: Postal code + city
+        $adresL2Parts = array();
+        if (!empty($customer->zip)) {
+            $adresL2Parts[] = $this->xmlSafe($customer->zip);
+        }
+        if (!empty($customer->town)) {
+            $adresL2Parts[] = $this->xmlSafe($customer->town);
+        }
+        if (!empty($adresL2Parts)) {
+            $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
         }
 
-        $adres->appendChild($xml->createElement('AdresL1', $adresL1));
+        // DaneKontaktowe: Contact information
+        if (!empty($customer->email) || !empty($customer->phone)) {
+            $daneKontakt = $xml->createElement('DaneKontaktowe');
+            $podmiot2->appendChild($daneKontakt);
+
+            if (!empty($customer->email)) {
+                $daneKontakt->appendChild($xml->createElement('Email', $this->xmlSafe($customer->email)));
+            }
+            if (!empty($customer->phone)) {
+                $daneKontakt->appendChild($xml->createElement('Telefon', $this->xmlSafe($customer->phone)));
+            }
+        }
 
         // NrKlienta: Customer code from Dolibarr
         if (!empty($conf->global->KSEF_FA3_INCLUDE_NRKLIENTA) && !empty($customer->code_client)) {
             $podmiot2->appendChild($xml->createElement('NrKlienta', $this->xmlSafe($customer->code_client)));
         }
+
+        $this->currentCustomerCountry = $countryCode;
+        $this->currentCustomerIsEU = $isEU;
 
         $flags = $this->getEntityFlags($customer);
         $podmiot2->appendChild($xml->createElement('JST', $flags['jst'])); // Local Gov Unit flag
@@ -301,24 +373,63 @@ class FA3Builder
      */
     private function buildFa($xml, $parent, $invoice, $originalInvoice = null)
     {
+        global $conf, $mysoc;
+
         $fa = $xml->createElement('Fa');
         $parent->appendChild($fa);
 
         $invoiceType = $this->getInvoiceType($invoice);
 
-        // Currency
-        $fa->appendChild($xml->createElement('KodWaluty', $invoice->multicurrency_code ?: 'PLN'));
+        dol_include_once('/ksef/lib/ksef.lib.php');
+
+        $invoiceCurrency = ksefGetInvoiceCurrency($invoice);
+
+        $kursWaluty = null;
+        if ($invoiceCurrency != 'PLN') {
+            if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+                $invoice->fetch_optionals();
+            }
+
+            $dolibarrRate = $invoice->multicurrency_tx ?? 0;
+            if ($dolibarrRate <= 0) {
+                throw new Exception("Brak kursu NBP dla faktury w walucie obcej ($invoiceCurrency). Pobierz kurs przed wysłaniem do KSeF.");
+            }
+
+            // Invert Dolibarr rate to get KSeF rate
+            $kursWaluty = 1 / $dolibarrRate;
+        }
+        $this->currentInvoiceCurrency = $invoiceCurrency;
+        $this->currentKursWaluty = $kursWaluty;
+        $useMulticurrency = ($invoiceCurrency != 'PLN');
+        $fa->appendChild($xml->createElement('KodWaluty', $invoiceCurrency));
+
         // P_1: Invoice Date
         $fa->appendChild($xml->createElement('P_1', dol_print_date($invoice->date, '%Y-%m-%d')));
+
+        // P_1M: Place of issue
+        $placeOfIssueMode = $conf->global->KSEF_FA3_PLACE_OF_ISSUE_MODE ?? 'disabled';
+        if ($placeOfIssueMode != 'disabled') {
+            $placeOfIssue = '';
+            if ($placeOfIssueMode == 'custom' && !empty($conf->global->KSEF_FA3_PLACE_OF_ISSUE_CUSTOM)) {
+                $placeOfIssue = $conf->global->KSEF_FA3_PLACE_OF_ISSUE_CUSTOM;
+            } elseif ($placeOfIssueMode == 'company' && !empty($mysoc->town)) {
+                $placeOfIssue = $mysoc->town;
+            }
+            if (!empty($placeOfIssue)) {
+                $fa->appendChild($xml->createElement('P_1M', $this->xmlSafe($placeOfIssue)));
+            }
+        }
+
         // P_2: Invoice Number
         $fa->appendChild($xml->createElement('P_2', $this->xmlSafe($invoice->ref)));
         // P_6: Sale Date
         $deliveryDate = !empty($invoice->date_livraison) ? $invoice->date_livraison : $invoice->date;
         $fa->appendChild($xml->createElement('P_6', dol_print_date($deliveryDate, '%Y-%m-%d')));
 
-        // Net/Tax Amounts (P_13_* / P_14_*)
-        $vatSummary = $this->calculateVatSummary($invoice);
+        // Net/Tax Amounts (P_13_* / P_14_*) - in invoice currency!!!!
+        $vatSummary = $this->calculateVatSummary($invoice, $useMulticurrency);
 
+        // P_13_x: Net amounts by VAT rate
         if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
             $fa->appendChild($xml->createElement('P_13_1', number_format($vatSummary['23']['net'] ?? $vatSummary['22']['net'], 2, '.', '')));
         }
@@ -332,7 +443,7 @@ class FA3Builder
             $fa->appendChild($xml->createElement('P_13_6_1', number_format($vatSummary['0']['net'], 2, '.', '')));
         }
 
-        // Tax Amounts
+        // P_14_x: VAT amounts by rate
         if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
             $fa->appendChild($xml->createElement('P_14_1', number_format($vatSummary['23']['vat'] ?? $vatSummary['22']['vat'], 2, '.', '')));
         }
@@ -343,8 +454,27 @@ class FA3Builder
             $fa->appendChild($xml->createElement('P_14_3', number_format($vatSummary['5']['vat'], 2, '.', '')));
         }
 
+        // P_14_xW: VAT amounts in PLN
+        if ($invoiceCurrency != 'PLN' && $kursWaluty > 0) {
+            if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
+                $vatInvoice = $vatSummary['23']['vat'] ?? $vatSummary['22']['vat'];
+                $vatPLN = $vatInvoice * $kursWaluty;
+                $fa->appendChild($xml->createElement('P_14_1W', number_format($vatPLN, 2, '.', '')));
+            }
+            if (isset($vatSummary['8']) || isset($vatSummary['7'])) {
+                $vatInvoice = $vatSummary['8']['vat'] ?? $vatSummary['7']['vat'];
+                $vatPLN = $vatInvoice * $kursWaluty;
+                $fa->appendChild($xml->createElement('P_14_2W', number_format($vatPLN, 2, '.', '')));
+            }
+            if (isset($vatSummary['5'])) {
+                $vatPLN = $vatSummary['5']['vat'] * $kursWaluty;
+                $fa->appendChild($xml->createElement('P_14_3W', number_format($vatPLN, 2, '.', '')));
+            }
+        }
+
         // P_15: Total Amount
-        $fa->appendChild($xml->createElement('P_15', number_format($invoice->total_ttc, 2, '.', '')));
+        $totalAmount = $useMulticurrency ? $invoice->multicurrency_total_ttc : $invoice->total_ttc;
+        $fa->appendChild($xml->createElement('P_15', number_format($totalAmount, 2, '.', '')));
 
         $this->buildAdnotacje($xml, $fa, $invoice);
 
@@ -369,14 +499,20 @@ class FA3Builder
      * @return array VAT summary array
      * @called_by buildFa()
      */
-    private function calculateVatSummary($invoice)
+    private function calculateVatSummary($invoice, $useMulticurrency = false)
     {
         $summary = array();
         foreach ($invoice->lines as $line) {
             $rate = number_format($line->tva_tx, 0);
             if (!isset($summary[$rate])) $summary[$rate] = array('net' => 0, 'vat' => 0);
-            $summary[$rate]['net'] += $line->total_ht;
-            $summary[$rate]['vat'] += $line->total_tva;
+
+            if ($useMulticurrency) {
+                $summary[$rate]['net'] += $line->multicurrency_total_ht;
+                $summary[$rate]['vat'] += $line->multicurrency_total_tva;
+            } else {
+                $summary[$rate]['net'] += $line->total_ht;
+                $summary[$rate]['vat'] += $line->total_tva;
+            }
         }
         return $summary;
     }
@@ -507,14 +643,25 @@ class FA3Builder
             $faWiersz->appendChild($xml->createElement('P_8B', number_format($line->qty, 2, '.', '')));
 
             // P_9A: Unit Net Price
-            $faWiersz->appendChild($xml->createElement('P_9A', number_format($line->subprice, 2, '.', '')));
+            $unitPrice = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
+                ? $line->multicurrency_subprice
+                : $line->subprice;
+            $faWiersz->appendChild($xml->createElement('P_9A', number_format($unitPrice, 2, '.', '')));
 
             // P_11: Net Line Total
-            $faWiersz->appendChild($xml->createElement('P_11', number_format($line->total_ht, 2, '.', '')));
+            $lineTotal = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
+                ? $line->multicurrency_total_ht
+                : $line->total_ht;
+            $faWiersz->appendChild($xml->createElement('P_11', number_format($lineTotal, 2, '.', '')));
 
-            // P_12: VAT Rate (Integer)
-            $vatRate = number_format($line->tva_tx, 0, '.', '');
+            // P_12: VAT Rate
+            $vatRate = $this->mapVatRateToKSeF($line->tva_tx, $line);
             $faWiersz->appendChild($xml->createElement('P_12', $vatRate));
+
+            // KursWaluty: Exchange rate per line
+            if (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN' && !empty($this->currentKursWaluty)) {
+                $faWiersz->appendChild($xml->createElement('KursWaluty', number_format($this->currentKursWaluty, 6, '.', '')));
+            }
         }
     }
 
@@ -707,5 +854,69 @@ class FA3Builder
             libxml_clear_errors();
         }
         return $valid;
+    }
+
+    /**
+     * @brief Checks if country is EU member state
+     * @param string $countryCode ISO 2-letter country code
+     * @return bool True if EU member
+     * @called_by buildPodmiot2()
+     */
+    private function isEUCountry($countryCode)
+    {
+        $euCountries = array(
+            'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+            'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL',
+            'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'
+        );
+        return in_array(strtoupper($countryCode), $euCountries);
+    }
+
+    /**
+     * @brief Maps VAT rate to KSeF P_12 value
+     * @param float $vatRate VAT rate from invoice line
+     * @param object $line Invoice line object (for additional context)
+     * @return string KSeF P_12 value
+     * @called_by buildFaWiersz()
+     */
+    private function mapVatRateToKSeF($vatRate, $line = null)
+    {
+        $rateInt = (int) round($vatRate);
+        if (in_array($rateInt, array(23, 22, 8, 7, 5, 4, 3))) {
+            return (string) $rateInt;
+        }
+
+        if ($rateInt == 0) {
+            // Check if this is exempt (zw)
+            if (!empty($line->vat_src_code) && stripos($line->vat_src_code, 'ZW') !== false) {
+                return 'zw';
+            }
+
+            if (!empty($line->vat_src_code) && (stripos($line->vat_src_code, 'RC') !== false || stripos($line->vat_src_code, 'OO') !== false)) {
+                return 'oo';
+            }
+
+            if (!empty($line->vat_src_code) && stripos($line->vat_src_code, 'NP') !== false) {
+                return 'np I';
+            }
+
+            if (!empty($this->currentCustomerCountry)) {
+                if ($this->currentCustomerCountry === 'PL') {
+                    return '0 KR';
+                } elseif ($this->currentCustomerIsEU) {
+                    return '0 WDT';
+                } else {
+                    return '0 EX';
+                }
+            }
+
+            return '0 KR';
+        }
+
+        if ($vatRate > 0) {
+            return (string) $rateInt;
+        }
+
+        return 'np I';
     }
 }

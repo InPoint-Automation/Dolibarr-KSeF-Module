@@ -21,6 +21,19 @@
  * \brief   List and sync incoming invoices from KSeF
  */
 
+// CSRF check
+if (!defined('CSRFCHECK_WITH_TOKEN')) {
+    define('CSRFCHECK_WITH_TOKEN', '1');
+}
+
+// Prevent token renewal for actions that exit without page reload
+$action_raw = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
+if (in_array($action_raw, array('check_fetch_status', 'init_fetch', 'download_xml', 'download_pdf'))) {
+    if (!defined('NOTOKENRENEWAL')) {
+        define('NOTOKENRENEWAL', '1');
+    }
+}
+
 $res = 0;
 if (!$res && !empty($_SERVER["CONTEXT_DOCUMENT_ROOT"])) $res = @include $_SERVER["CONTEXT_DOCUMENT_ROOT"] . "/main.inc.php";
 if (!$res && file_exists("../main.inc.php")) $res = @include "../main.inc.php";
@@ -313,6 +326,7 @@ print '<script>
     var startTime = ' . ($syncState->isFetchInProgress() ? (int)$syncState->fetch_started : 'null') . ';
     var isPolling = ' . ($isPolling ? 'true' : 'false') . ';
     var token = "' . newToken() . '";
+    var ajaxToken = "' . currentToken() . '";
     var baseUrl = "' . $_SERVER["PHP_SELF"] . '";
 
     var langFetchInProgress = "' . dol_escape_js($langs->trans('KSEF_FetchInProgress')) . '";
@@ -365,7 +379,7 @@ print '<script>
     }
 
     function poll() {
-        fetch(baseUrl + "?action=check_fetch_status&token=" + token)
+        fetch(baseUrl + "?action=check_fetch_status&token=" + ajaxToken)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             console.log("KSeF poll:", data);
@@ -404,7 +418,7 @@ print '<script>
         }
 
         // Call init_fetch AJAX endpoint
-        fetch(baseUrl + "?action=init_fetch&token=" + token)
+        fetch(baseUrl + "?action=init_fetch&token=" + ajaxToken)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             console.log("KSeF init:", data);
@@ -496,14 +510,14 @@ if ($user->hasRight('ksef', 'write')) {
 }
 print '</div>';
 
-print '</div>'; // fichethirdleft
+print '</div>';
 
 // Statistics Panel
 print '<div class="fichetwothirdright">';
 
 print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder nohover centpercent">';
-print '<tr class="liste_titre"><th colspan="2">' . $langs->trans("Statistics") . ' (' . $langs->trans("Last30Days") . ')</th></tr>';
+print '<tr class="liste_titre"><th colspan="2">' . $langs->trans("Statistics") . ' (' . $langs->trans("KSEF_Last30Days") . ')</th></tr>';
 
 print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("Total") . '</td>';
 print '<td class="right"><strong>' . (int)($stats['total'] ?? 0) . '</strong></td></tr>';
@@ -537,8 +551,8 @@ if ($user->admin) {
     print '</div>';
 }
 
-print '</div>'; // fichetwothirdright
-print '</div>'; // fichecenter
+print '</div>';
+print '</div>';
 
 print '<div class="clearboth"></div>';
 print '<br>';

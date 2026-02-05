@@ -59,6 +59,7 @@ class KsefSubmission extends CommonObject
     const STATUS_OFFLINE = 'OFFLINE';
     const STATUS_FAILED = 'FAILED';
     const STATUS_TIMEOUT = 'TIMEOUT';
+    const MAX_RETRY_COUNT = 30;
 
     public function __construct($db)
     {
@@ -361,7 +362,7 @@ class KsefSubmission extends CommonObject
         if ($environment) $sql .= " AND environment = '" . $this->db->escape($environment) . "'";
 
         $sql .= " AND date_submission > " . (dol_now() - $max_age);
-        $sql .= " AND retry_count < 5";
+        $sql .= " AND retry_count < " . self::MAX_RETRY_COUNT;
         $sql .= " ORDER BY date_submission ASC";
 
         $resql = $this->db->query($sql);
@@ -571,7 +572,7 @@ class KsefSubmission extends CommonObject
             }
         }
 
-        if ($this->retry_count >= 100) {
+        if ($this->retry_count >= self::MAX_RETRY_COUNT) {
             return false;
         }
 
@@ -597,7 +598,7 @@ class KsefSubmission extends CommonObject
             }
         }
 
-        if ($this->retry_count >= 10) {
+        if ($this->retry_count >= self::MAX_RETRY_COUNT) {
             return $langs->trans('KSEF_TooManyRetries');
         }
 

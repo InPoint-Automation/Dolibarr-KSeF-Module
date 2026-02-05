@@ -23,6 +23,11 @@
 
 class FA3Parser
 {
+    // Payment status
+    const PAYMENT_PAID = 'paid';
+    const PAYMENT_PARTIAL = 'partial';
+    const PAYMENT_UNPAID = 'unpaid';
+
     private $db;
     public $error;
     public $errors = array();
@@ -60,15 +65,24 @@ class FA3Parser
             $xpath = new DOMXPath($doc);
             $xpath->registerNamespace('fa', KSEF_FA3_NAMESPACE);
 
+            $invoice = $this->parseFa($xpath);
+            $lineData = $this->parseFaWiersz($xpath);
+
             $result = array(
                 'header' => $this->parseNaglowek($xpath),
                 'seller' => $this->parsePodmiot1($xpath),
                 'buyer' => $this->parsePodmiot2($xpath),
-                'invoice' => $this->parseFa($xpath),
+                'invoice' => $invoice,
                 'vat_summary' => $this->parseVatSummary($xpath),
-                'lines' => $this->parseFaWiersz($xpath),
+                'lines' => $lineData['lines'],
+                'lines_before' => $lineData['lines_before'],
                 'payment' => $this->parsePlatnosc($xpath),
                 'correction' => $this->parseDaneFaKorygowanej($xpath),
+                'registries' => $this->parseRegistries($xpath),
+                'stopka' => $this->parseStopka($xpath),
+                'additional_info' => $this->parseAdditionalInfo($invoice),
+                'additional_desc' => $this->parseAdditionalDesc($xpath),
+                'exchange_rate' => $this->parseExchangeRate($xpath, $lineData['lines']),
             );
 
             return $result;
@@ -110,10 +124,7 @@ class FA3Parser
 
         $header['form_variant'] = $this->getValue($xpath, '//fa:Naglowek/fa:WariantFormularza');
 
-        $dateStr = $this->getValue($xpath, '//fa:Naglowek/fa:DataWytworzeniaFa');
-        if ($dateStr) {
-            $header['creation_date'] = strtotime($dateStr);
-        }
+        $header['creation_date'] = $this->getValue($xpath, '//fa:Naglowek/fa:DataWytworzeniaFa', null);
 
         $header['system_info'] = $this->getValue($xpath, '//fa:Naglowek/fa:SystemInfo');
 
@@ -135,6 +146,8 @@ class FA3Parser
             'name' => '',
             'country' => 'PL',
             'address' => '',
+            'email' => null,
+            'phone' => null,
         );
 
         $seller['nip'] = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:NIP');
@@ -144,8 +157,14 @@ class FA3Parser
 
         $adresL2 = $this->getValue($xpath, '//fa:Podmiot1/fa:Adres/fa:AdresL2');
         if ($adresL2) {
-            $seller['address'] .= ', ' . $adresL2;
+            $seller['address'] .= "\n" . $adresL2;
         }
+
+        // Contact info
+        $email = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneKontaktowe/fa:Email', null);
+        if ($email) $seller['email'] = $email;
+        $phone = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneKontaktowe/fa:Telefon', null);
+        if ($phone) $seller['phone'] = $phone;
 
         return $seller;
     }
@@ -167,6 +186,11 @@ class FA3Parser
             'address' => '',
             'jst' => '',
             'gv' => '',
+            'email' => null,
+            'phone' => null,
+            'customer_number' => null,
+            'kod_ue' => null,
+            'nr_vat_ue' => null,
         );
 
         // NIP
@@ -184,6 +208,12 @@ class FA3Parser
 
         $buyer['name'] = $this->getValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:Nazwa');
 
+        // EU buyer identification
+        $kodUE = $this->getValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:KodUE', null);
+        if ($kodUE) $buyer['kod_ue'] = $kodUE;
+        $nrVatUE = $this->getValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:NrVatUE', null);
+        if ($nrVatUE) $buyer['nr_vat_ue'] = $nrVatUE;
+
         // Address
         $adresKodKraju = $this->getValue($xpath, '//fa:Podmiot2/fa:Adres/fa:KodKraju');
         if ($adresKodKraju) {
@@ -193,12 +223,22 @@ class FA3Parser
         $buyer['address'] = $this->getValue($xpath, '//fa:Podmiot2/fa:Adres/fa:AdresL1');
         $adresL2 = $this->getValue($xpath, '//fa:Podmiot2/fa:Adres/fa:AdresL2');
         if ($adresL2) {
-            $buyer['address'] .= ', ' . $adresL2;
+            $buyer['address'] .= "\n" . $adresL2;
         }
 
         // Entity flags
         $buyer['jst'] = $this->getValue($xpath, '//fa:Podmiot2/fa:JST');
         $buyer['gv'] = $this->getValue($xpath, '//fa:Podmiot2/fa:GV');
+
+        // Contact info
+        $email = $this->getValue($xpath, '//fa:Podmiot2/fa:DaneKontaktowe/fa:Email', null);
+        if ($email) $buyer['email'] = $email;
+        $phone = $this->getValue($xpath, '//fa:Podmiot2/fa:DaneKontaktowe/fa:Telefon', null);
+        if ($phone) $buyer['phone'] = $phone;
+
+        // Customer number
+        $nrKlienta = $this->getValue($xpath, '//fa:Podmiot2/fa:NrKlienta', null);
+        if ($nrKlienta) $buyer['customer_number'] = $nrKlienta;
 
         return $buyer;
     }
@@ -222,21 +262,25 @@ class FA3Parser
             'total_net' => 0.0,
             'total_vat' => 0.0,
             'total_gross' => 0.0,
+            'place_of_issue' => null,
+            'fp_flag' => false,
+            'total_amount' => null,
         );
 
         $invoice['currency'] = $this->getValue($xpath, '//fa:Fa/fa:KodWaluty', 'PLN');
         $invoice['number'] = $this->getValue($xpath, '//fa:Fa/fa:P_2');
         $invoice['type'] = $this->getValue($xpath, '//fa:Fa/fa:RodzajFaktury', 'VAT');
 
-        $p1 = $this->getValue($xpath, '//fa:Fa/fa:P_1');
-        if ($p1) {
-            $invoice['date'] = strtotime($p1);
-        }
+        $invoice['date'] = $this->getValue($xpath, '//fa:Fa/fa:P_1', null);
+        $invoice['sale_date'] = $this->getValue($xpath, '//fa:Fa/fa:P_6', null);
 
-        $p6 = $this->getValue($xpath, '//fa:Fa/fa:P_6');
-        if ($p6) {
-            $invoice['sale_date'] = strtotime($p6);
-        }
+        // Place of issue
+        $p1m = $this->getValue($xpath, '//fa:Fa/fa:P_1M', null);
+        if ($p1m) $invoice['place_of_issue'] = $p1m;
+
+        // FP flag (art. 109)
+        $fp = $this->getValue($xpath, '//fa:Fa/fa:FP');
+        $invoice['fp_flag'] = ($fp === '1');
 
         $totalNet = 0.0;
         $totalVat = 0.0;
@@ -257,6 +301,8 @@ class FA3Parser
         $invoice['total_vat'] = $totalVat;
 
         // P_15: Total
+        $p15raw = $this->getValue($xpath, '//fa:Fa/fa:P_15', null);
+        if ($p15raw) $invoice['total_amount'] = $p15raw;
         $p15 = $this->getDecimal($xpath, '//fa:Fa/fa:P_15');
         $invoice['total_gross'] = $p15 ?: ($totalNet + $totalVat);
 
@@ -279,21 +325,33 @@ class FA3Parser
         $net23 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_1');
         $vat23 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_1');
         if ($net23 > 0 || $vat23 > 0) {
-            $summary['23'] = array('net' => $net23, 'vat' => $vat23);
+            $summary['23'] = array('net' => $net23, 'vat' => $vat23, 'vat_pln' => null);
+            $vatPln23 = $this->getValue($xpath, '//fa:Fa/fa:P_14_1W', null);
+            if ($vatPln23 !== null && $vatPln23 !== '') {
+                $summary['23']['vat_pln'] = (float)$vatPln23;
+            }
         }
 
         // 8% rate (P_13_2 / P_14_2)
         $net8 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_2');
         $vat8 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_2');
         if ($net8 > 0 || $vat8 > 0) {
-            $summary['8'] = array('net' => $net8, 'vat' => $vat8);
+            $summary['8'] = array('net' => $net8, 'vat' => $vat8, 'vat_pln' => null);
+            $vatPln8 = $this->getValue($xpath, '//fa:Fa/fa:P_14_2W', null);
+            if ($vatPln8 !== null && $vatPln8 !== '') {
+                $summary['8']['vat_pln'] = (float)$vatPln8;
+            }
         }
 
         // 5% rate (P_13_3 / P_14_3)
         $net5 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_3');
         $vat5 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_3');
         if ($net5 > 0 || $vat5 > 0) {
-            $summary['5'] = array('net' => $net5, 'vat' => $vat5);
+            $summary['5'] = array('net' => $net5, 'vat' => $vat5, 'vat_pln' => null);
+            $vatPln5 = $this->getValue($xpath, '//fa:Fa/fa:P_14_3W', null);
+            if ($vatPln5 !== null && $vatPln5 !== '') {
+                $summary['5']['vat_pln'] = (float)$vatPln5;
+            }
         }
 
         // 0% rate (P_13_6_1)
@@ -308,6 +366,12 @@ class FA3Parser
             $summary['zw'] = array('net' => $netZw, 'vat' => 0.0);
         }
 
+        // Not subject to tax (P_13_6_3)
+        $netNp = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_3');
+        if ($netNp > 0) {
+            $summary['np'] = array('net' => $netNp, 'vat' => 0.0);
+        }
+
         return $summary;
     }
 
@@ -315,24 +379,46 @@ class FA3Parser
     /**
      * @brief Parse invoice line items (FaWiersz)
      * @param $xpath DOMXPath object
-     * @return array Line items
+     * @return array Array with 'lines' and 'lines_before'
      * @called_by parse()
      */
     private function parseFaWiersz($xpath)
     {
         $lines = array();
+        $linesBefore = array();
 
         $faWierszNodes = $xpath->query('//fa:Fa/fa:FaWiersz');
+        $hasStanPrzed = false;
+
+        foreach ($faWierszNodes as $node) {
+            foreach ($node->childNodes as $child) {
+                if ($child->nodeType === XML_ELEMENT_NODE && $child->localName === 'StanPrzed') {
+                    $hasStanPrzed = true;
+                    break 2;
+                }
+            }
+        }
 
         foreach ($faWierszNodes as $node) {
             $line = array(
                 'line_num' => 0,
+                'uuid' => null,
+                'indeks' => null,
+                'gtin' => null,
+                'cn' => null,
                 'description' => '',
                 'quantity' => 0.0,
-                'unit_price' => 0.0,
+                'unit' => null,
+                'unit_price_net' => 0.0,
+                'unit_price_gross' => null,
+                'discount' => null,
                 'net_amount' => 0.0,
+                'gross_amount' => null,
                 'vat_rate' => 0,
+                'kurs_waluty' => null,
             );
+
+            $isBefore = false;
 
             foreach ($node->childNodes as $child) {
                 if ($child->nodeType !== XML_ELEMENT_NODE) continue;
@@ -341,28 +427,64 @@ class FA3Parser
                     case 'NrWierszaFa':
                         $line['line_num'] = (int)$child->textContent;
                         break;
+                    case 'UU_ID':
+                        $line['uuid'] = trim($child->textContent);
+                        break;
+                    case 'Indeks':
+                        $line['indeks'] = trim($child->textContent);
+                        break;
+                    case 'GTIN':
+                        $line['gtin'] = trim($child->textContent);
+                        break;
                     case 'P_7':
                         $line['description'] = $child->textContent;
                         break;
                     case 'P_8B':
                         $line['quantity'] = (float)$child->textContent;
                         break;
+                    case 'P_8A':
+                        $line['unit'] = trim($child->textContent);
+                        break;
                     case 'P_9A':
-                        $line['unit_price'] = (float)$child->textContent;
+                        $line['unit_price_net'] = (float)$child->textContent;
+                        break;
+                    case 'P_9B':
+                        $line['unit_price_gross'] = (float)$child->textContent;
+                        break;
+                    case 'P_10':
+                        $line['discount'] = trim($child->textContent);
                         break;
                     case 'P_11':
                         $line['net_amount'] = (float)$child->textContent;
                         break;
+                    case 'P_11A':
+                        $line['gross_amount'] = (float)$child->textContent;
+                        break;
                     case 'P_12':
                         $line['vat_rate'] = (int)$child->textContent;
+                        break;
+                    case 'CN':
+                        $line['cn'] = trim($child->textContent);
+                        break;
+                    case 'KursWaluty':
+                        $line['kurs_waluty'] = trim($child->textContent);
+                        break;
+                    case 'StanPrzed':
+                        if ($child->textContent === '1') {
+                            $isBefore = true;
+                        }
                         break;
                 }
             }
 
-            $lines[] = $line;
+            if ($hasStanPrzed && $isBefore) {
+                $linesBefore[] = $line;
+            } else {
+                $lines[] = $line;
+            }
         }
 
-        return $lines;
+        return array('lines' => $lines, 'lines_before' => $linesBefore);
     }
 
 
@@ -377,21 +499,66 @@ class FA3Parser
     {
         $payment = array(
             'due_date' => null,
-            'method' => '',
-            'bank_account' => '',
+            'due_date_description' => null,
+            'method' => null,
+            'bank_account' => null,
+            'status' => self::PAYMENT_UNPAID,
+            'payment_date' => null,
+            'bank_swift' => null,
+            'bank_name' => null,
+            'bank_own_account' => null,
+            'bank_description' => null,
         );
 
         // Due date
-        $termin = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:TerminPlatnosci/fa:Termin');
+        $termin = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:TerminPlatnosci/fa:Termin', null);
         if ($termin) {
-            $payment['due_date'] = strtotime($termin);
+            $payment['due_date'] = $termin;
+        } else {
+            // Check for TerminOpis (relative due date like "14 days from invoice date")
+            $ilosc = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:TerminPlatnosci/fa:TerminOpis/fa:Ilosc', null);
+            $jednostka = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:TerminPlatnosci/fa:TerminOpis/fa:Jednostka', null);
+            $zdarzenie = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:TerminPlatnosci/fa:TerminOpis/fa:ZdarzeniePoczatkowe', null);
+
+            if ($ilosc && $jednostka) {
+                $payment['due_date_description'] = $ilosc . ' ' . $jednostka . ($zdarzenie ? ' ' . $zdarzenie : '');
+            }
+
+            // Fall back to Fa/TerminPlatnosci
+            $terminFa = $this->getValue($xpath, '//fa:Fa/fa:TerminPlatnosci', null);
+            if ($terminFa) {
+                $payment['due_date'] = $terminFa;
+            }
         }
 
         // Payment method code
-        $payment['method'] = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:FormaPlatnosci');
+        $method = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:FormaPlatnosci', null);
+        if ($method) $payment['method'] = $method;
 
-        // Bank account
-        $payment['bank_account'] = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:NrRB');
+        // Payment status
+        $zaplacono = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:Zaplacono');
+        $czesciowa = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:ZnacznikZaplatyCzesciowej');
+        if ($zaplacono === '1') {
+            $payment['status'] = self::PAYMENT_PAID;
+        } elseif ($czesciowa === '1') {
+            $payment['status'] = self::PAYMENT_PARTIAL;
+        }
+
+        // Payment date
+        $dataZaplaty = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:DataZaplaty', null);
+        if ($dataZaplaty) $payment['payment_date'] = $dataZaplaty;
+
+        // Bank account — full details
+        $nrRB = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:NrRB', null);
+        if ($nrRB) $payment['bank_account'] = $nrRB;
+        $swift = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:SWIFT', null);
+        if ($swift) $payment['bank_swift'] = $swift;
+        $bankName = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:NazwaBanku', null);
+        if ($bankName) $payment['bank_name'] = $bankName;
+        $ownAccount = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:RachunekWlasnyBanku', null);
+        if ($ownAccount) $payment['bank_own_account'] = $ownAccount;
+        $description = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:OpisRachunku', null);
+        if ($description) $payment['bank_description'] = $description;
 
         return $payment;
     }
@@ -400,7 +567,7 @@ class FA3Parser
     /**
      * @brief Parse correction reference (DaneFaKorygowanej)
      * @param $xpath DOMXPath object
-     * @return array|null Correction reference or null if not a correction
+     * @return array|null Correction data with reason, type, and corrected_invoices[], or null if not a correction
      * @called_by parse()
      * @calls getValue()
      */
@@ -408,25 +575,166 @@ class FA3Parser
     {
         $daneFaKor = $xpath->query('//fa:Fa/fa:DaneFaKorygowanej');
         if ($daneFaKor->length == 0) {
-            return null;
+            // Check if correction reason/type exist
+            $reason = $this->getValue($xpath, '//fa:Fa/fa:PrzyczynaKorekty', null);
+            $type = $this->getValue($xpath, '//fa:Fa/fa:TypKorekty', null);
+            if (empty($reason) && empty($type)) {
+                return null;
+            }
+            return array(
+                'reason' => $reason,
+                'type' => $type,
+                'corrected_invoices' => array(),
+            );
         }
 
         $correction = array(
-            'invoice_date' => null,
-            'invoice_number' => '',
-            'ksef_number' => '',
+            'reason' => null,
+            'type' => null,
+            'corrected_invoices' => array(),
         );
 
-        // invoice date
-        $dateStr = $this->getValue($xpath, '//fa:Fa/fa:DaneFaKorygowanej/fa:DataWystFaKorygowanej');
-        if ($dateStr) {
-            $correction['invoice_date'] = strtotime($dateStr);
+        // Correction reason and type
+        $reason = $this->getValue($xpath, '//fa:Fa/fa:PrzyczynaKorekty', null);
+        if ($reason) $correction['reason'] = $reason;
+        $type = $this->getValue($xpath, '//fa:Fa/fa:TypKorekty', null);
+        if ($type) $correction['type'] = $type;
+
+        // Multiple corrected invoices
+        foreach ($daneFaKor as $node) {
+            $inv = array(
+                'invoice_date' => null,
+                'invoice_number' => null,
+                'ksef_number' => null,
+            );
+
+            foreach ($node->childNodes as $child) {
+                if ($child->nodeType !== XML_ELEMENT_NODE) continue;
+
+                switch ($child->localName) {
+                    case 'DataWystFaKorygowanej':
+                        $inv['invoice_date'] = trim($child->textContent);
+                        break;
+                    case 'NrFaKorygowanej':
+                        $inv['invoice_number'] = trim($child->textContent);
+                        break;
+                    case 'NrKSeFFaKorygowanej':
+                        $inv['ksef_number'] = trim($child->textContent);
+                        break;
+                }
+            }
+
+            $correction['corrected_invoices'][] = $inv;
         }
 
-        $correction['invoice_number'] = $this->getValue($xpath, '//fa:Fa/fa:DaneFaKorygowanej/fa:NrFaKorygowanej');
-        $correction['ksef_number'] = $this->getValue($xpath, '//fa:Fa/fa:DaneFaKorygowanej/fa:NrKSeFFaKorygowanej');
-
         return $correction;
+    }
+
+
+    /**
+     * @brief Parse registries section (Stopka/Rejestry)
+     * @param $xpath DOMXPath object
+     * @return array Registry data
+     * @called_by parse()
+     * @calls getValue()
+     */
+    private function parseRegistries($xpath)
+    {
+        return array(
+            'krs' => $this->getValue($xpath, '//fa:Stopka/fa:Rejestry/fa:KRS', null),
+            'regon' => $this->getValue($xpath, '//fa:Stopka/fa:Rejestry/fa:REGON', null),
+            'bdo' => $this->getValue($xpath, '//fa:Stopka/fa:Rejestry/fa:BDO', null),
+            'pelna_nazwa' => $this->getValue($xpath, '//fa:Stopka/fa:Rejestry/fa:PelnaNazwa', null),
+        );
+    }
+
+
+    /**
+     * @brief Parse stopka (footer) information
+     * @param $xpath DOMXPath object
+     * @return array Array of stopka text entries
+     * @called_by parse()
+     */
+    private function parseStopka($xpath)
+    {
+        $items = array();
+        $nodes = $xpath->query('//fa:Stopka/fa:Informacje/fa:StopkaFaktury');
+        foreach ($nodes as $node) {
+            $text = trim($node->textContent);
+            if ($text !== '') {
+                $items[] = $text;
+            }
+        }
+        return $items;
+    }
+
+
+    /**
+     * @brief Build additional info array
+     * @param $invoice Parsed invoice array
+     * @return array Additional info strings
+     * @called_by parse()
+     */
+    private function parseAdditionalInfo($invoice)
+    {
+        $info = array();
+        if (!empty($invoice['fp_flag'])) {
+            $info[] = 'Faktura, o której mowa w art. 109 ust. 3d ustawy';
+        }
+        return $info;
+    }
+
+
+    /**
+     * @brief Parse additional description entries
+     * @param $xpath DOMXPath object
+     * @return array Array of key-value pairs
+     * @called_by parse()
+     */
+    private function parseAdditionalDesc($xpath)
+    {
+        $items = array();
+        $nodes = $xpath->query('//fa:Fa/fa:DodatkowyOpis');
+        foreach ($nodes as $node) {
+            $key = null;
+            $value = null;
+            foreach ($node->childNodes as $child) {
+                if ($child->nodeType !== XML_ELEMENT_NODE) continue;
+                if ($child->localName === 'Klucz') $key = trim($child->textContent);
+                if ($child->localName === 'Wartosc') $value = trim($child->textContent);
+            }
+            if ($key && $value) {
+                $items[] = array('key' => $key, 'value' => $value);
+            }
+        }
+        return $items;
+    }
+
+
+    /**
+     * @brief Parse exchange rate data for multicurrency invoices
+     * @param $xpath DOMXPath object
+     * @param $lines Parsed after-state lines
+     * @return array Exchange rate info
+     * @called_by parse()
+     */
+    private function parseExchangeRate($xpath, $lines)
+    {
+        $data = array(
+            'rate' => null,
+        );
+
+        // Get exchange rate from first line item
+        if (!empty($lines)) {
+            foreach ($lines as $line) {
+                if (!empty($line['kurs_waluty'])) {
+                    $data['rate'] = $line['kurs_waluty'];
+                    break;
+                }
+            }
+        }
+
+        return $data;
     }
 
 

@@ -23,6 +23,11 @@
  * \brief   KSEF configuration page
  */
 
+// CSRF Check
+if (!defined('CSRFCHECK_WITH_TOKEN')) {
+    define('CSRFCHECK_WITH_TOKEN', '1');
+}
+
 $res = 0;
 if (!$res && !empty($_SERVER["CONTEXT_DOCUMENT_ROOT"])) {
     $res = @include $_SERVER["CONTEXT_DOCUMENT_ROOT"] . "/main.inc.php";
@@ -184,6 +189,20 @@ if ($action == 'update') {
 
     $fa3_bankdesc_val = GETPOST('KSEF_FA3_INCLUDE_BANK_DESC', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_BANK_DESC', $fa3_bankdesc_val, 'chaine', 0, '', $conf->entity);
+
+    // Place of Issue
+    $place_of_issue_mode = GETPOST('KSEF_FA3_PLACE_OF_ISSUE_MODE', 'alpha');
+    if (in_array($place_of_issue_mode, array('disabled', 'company', 'custom'))) {
+        dolibarr_set_const($db, 'KSEF_FA3_PLACE_OF_ISSUE_MODE', $place_of_issue_mode, 'chaine', 0, '', $conf->entity);
+    }
+    $place_of_issue_custom = GETPOST('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM', 'alphanohtml');
+    dolibarr_set_const($db, 'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM', trim($place_of_issue_custom), 'chaine', 0, '', $conf->entity);
+
+    // NBP Rate Mode
+    $nbp_rate_mode = GETPOST('KSEF_NBP_RATE_MODE', 'alpha');
+    if (in_array($nbp_rate_mode, array('keep_base', 'keep_foreign'))) {
+        dolibarr_set_const($db, 'KSEF_NBP_RATE_MODE', $nbp_rate_mode, 'chaine', 0, '', $conf->entity);
+    }
 
     if (!$error) {
         setEventMessages($langs->trans("SetupSaved"), null, 'mesgs');
@@ -396,7 +415,7 @@ if ($action == 'testconnection') {
 if ($action == 'testtokenauth') {
     $environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
     $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'token', 'chaine', 0, '', $conf->entity);
+    $conf->global->KSEF_AUTH_METHOD = 'token';
 
     try {
         $client = new KsefClient($db, $environment);
@@ -409,14 +428,14 @@ if ($action == 'testtokenauth') {
         setEventMessages($langs->trans('KSEF_AUTH_ERROR') . ': ' . $e->getMessage(), null, 'errors');
     }
 
-    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', $orig_method, 'chaine', 0, '', $conf->entity);
+    $conf->global->KSEF_AUTH_METHOD = $orig_method;
 }
 
 // Test certificate authentication
 if ($action == 'testcertauth') {
     $environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
     $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'certificate', 'chaine', 0, '', $conf->entity);
+    $conf->global->KSEF_AUTH_METHOD = 'certificate';
 
     try {
         $client = new KsefClient($db, $environment);
@@ -428,7 +447,7 @@ if ($action == 'testcertauth') {
     } catch (Exception $e) {
         setEventMessages($langs->trans('KSEF_CERT_AUTH_ERROR') . ': ' . $e->getMessage(), null, 'errors');
     }
-    dolibarr_set_const($db, 'KSEF_AUTH_METHOD', $orig_method, 'chaine', 0, '', $conf->entity);
+    $conf->global->KSEF_AUTH_METHOD = $orig_method;
 }
 
 $form = new Form($db);
@@ -531,9 +550,9 @@ $array_env = array(
     'DEMO' => $langs->trans('KSEF_ENV_DEMO') . ' (ksef-demo.mf.gov.pl)',
     'PRODUCTION' => $langs->trans('KSEF_ENV_PRODUCTION') . ' (ksef.mf.gov.pl)'
 );
-print $form->selectarray('KSEF_ENVIRONMENT', $array_env, $conf->global->KSEF_ENVIRONMENT ?? 'PRODUCTION');
+print $form->selectarray('KSEF_ENVIRONMENT', $array_env, $conf->global->KSEF_ENVIRONMENT ?? 'DEMO');
 
-$current_env = $conf->global->KSEF_ENVIRONMENT ?? 'PRODUCTION';
+$current_env = $conf->global->KSEF_ENVIRONMENT ?? 'DEMO';
 print '<div id="production_warning" class="warning" style="margin-top: 10px; padding: 8px 12px; display: ' . ($current_env == 'PRODUCTION' ? 'block' : 'none') . ';">';
 print '<i class="fa fa-exclamation-triangle"></i> ' . $langs->trans("KSEF_PRODUCTION_WARNING");
 print '</div>';
@@ -626,6 +645,45 @@ print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_BANK_DESC'),
 print '<td>';
 print '<input type="checkbox" name="KSEF_FA3_INCLUDE_BANK_DESC" id="KSEF_FA3_INCLUDE_BANK_DESC" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_BANK_DESC) ? 'checked' : '') . '>';
 print ' <label for="KSEF_FA3_INCLUDE_BANK_DESC">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// P_1M/Place of Issue
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_PLACE_OF_ISSUE'), $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_Help')) . '</td>';
+print '<td>';
+$place_modes = array(
+    'disabled' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_DISABLED'),
+    'company' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_COMPANY'),
+    'custom' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM'),
+);
+$current_place_mode = $conf->global->KSEF_FA3_PLACE_OF_ISSUE_MODE ?? 'disabled';
+print $form->selectarray('KSEF_FA3_PLACE_OF_ISSUE_MODE', $place_modes, $current_place_mode, 0, 0, 0, 'onchange="togglePlaceOfIssueCustom()"', 0, 0, 0, '', 'minwidth200');
+print '<span id="place_of_issue_custom_wrapper" style="margin-left: 10px; ' . ($current_place_mode != 'custom' ? 'display:none;' : '') . '">';
+print '<input type="text" name="KSEF_FA3_PLACE_OF_ISSUE_CUSTOM" class="flat minwidth200" value="' . dol_escape_htmltag($conf->global->KSEF_FA3_PLACE_OF_ISSUE_CUSTOM ?? '') . '" placeholder="' . $langs->trans("KSEF_FA3_PLACE_OF_ISSUE_CUSTOM_Placeholder") . '">';
+print '</span>';
+print '</td></tr>';
+print '<script>
+function togglePlaceOfIssueCustom() {
+    var mode = document.querySelector(\'select[name="KSEF_FA3_PLACE_OF_ISSUE_MODE"]\').value;
+    var wrapper = document.getElementById("place_of_issue_custom_wrapper");
+    wrapper.style.display = (mode == "custom") ? "inline" : "none";
+}
+</script>';
+
+print '</table>';
+
+// Multicurrency Settings
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_MULTICURRENCY_CONFIG") . '</td></tr>';
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_NBP_RATE_MODE'), $langs->trans('KSEF_NBP_RATE_MODE_Help')) . '</td>';
+print '<td>';
+$nbp_modes = array(
+    'keep_base' => $langs->trans('KSEF_NBP_RATE_MODE_KEEP_BASE'),
+    'keep_foreign' => $langs->trans('KSEF_NBP_RATE_MODE_KEEP_FOREIGN'),
+);
+$current_mode = $conf->global->KSEF_NBP_RATE_MODE ?? 'keep_base';
+print $form->selectarray('KSEF_NBP_RATE_MODE', $nbp_modes, $current_mode, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
 print '</table>';

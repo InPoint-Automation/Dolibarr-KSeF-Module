@@ -44,7 +44,7 @@ KSEF_Configuration=Konfiguracja KSeF
 KSEF_ENV_DEMO=Demo
 KSEF_ENV_PRODUCTION=Produkcja
 KSEF_ENV_TEST=Test
-KSEF_ENVIRONMENT=Środowisko
+KSEF_Environment=Środowisko
 KSEF_ENVIRONMENT_Help=Wybierz TEST do testowania, PRODUKCJA dla rzeczywistych faktur
 
 # ============================================
@@ -104,6 +104,8 @@ KSEF_AUTO_SUBMIT_Help=Automatycznie wysyłaj faktury do KSeF po zatwierdzeniu
 KSEF_ExcludeFromKSEF=Wyklucz z KSeF
 KSEF_ExcludeFromKSEFHelp=Nie wysyłaj faktur dla tego kontrahenta do KSeF
 KSEF_NotApplicableNotCustomer=Nie dotyczy - ten kontrahent nie jest klientem. Wykluczenie z KSeF dotyczy tylko klientów, którym wystawiasz faktury.
+KSEF_EnableMulticurrencyForForeignInvoices=Włącz moduł Wielowalutowość, aby obsługiwać faktury w walutach obcych z kursami NBP
+KSEF_EnableCSRFProtection=Włącz ochronę tokenem CSRF (ustaw MAIN_SECURITY_CSRF_WITH_TOKEN w Strona główna - Ustawienia - Inne)
 
 # ============================================
 # UI Settings
@@ -123,20 +125,26 @@ KSEF_Cyan=Cyjan
 # ============================================
 KSEF_FA3_OPTIONAL_FIELDS=Opcjonalne pola FA(3)
 KSEF_FA3_INCLUDE_NRKLIENTA=Dołącz kod klienta (NrKlienta)
-KSEF_FA3_INCLUDE_NRKLIENTA_Help=Dołącz kod klienta z Dolibarr do pliku XML faktury FA3. Odpowiada to polu NrKlienta w sekcji Podmiot2 (nabywca).
+KSEF_FA3_INCLUDE_NRKLIENTA_Help=Dołącz kod klienta z Dolibarr do pliku XML faktury FA3.
 KSEF_FA3_INCLUDE_INDEKS=Dołącz kod produktu (Indeks)
-KSEF_FA3_INCLUDE_INDEKS_Help=Dołącz kod referencyjny produktu w pozycjach faktury. Odpowiada to polu Indeks w sekcji FaWiersz.
+KSEF_FA3_INCLUDE_INDEKS_Help=Dołącz kod referencyjny produktu w pozycjach faktury.
 KSEF_FA3_INCLUDE_GTIN=Dołącz kod GTIN/EAN
 KSEF_FA3_INCLUDE_GTIN_Help=Dołącz kody kreskowe produktów jako GTIN w pozycjach faktury. Włącz tylko jeśli Twoje kody kreskowe to prawidłowe kody GTIN/EAN (nie kody wewnętrzne).
 KSEF_FA3_INCLUDE_UNIT=Dołącz jednostkę miary (P_8A)
-KSEF_FA3_INCLUDE_UNIT_Help=Dołącz jednostkę miary produktów w pozycjach faktury. Odpowiada to polu P_8A w sekcji FaWiersz.
+KSEF_FA3_INCLUDE_UNIT_Help=Dołącz jednostkę miary produktów w pozycjach faktury.
 KSEF_FA3_INCLUDE_BANK_DESC=Dołącz opis rachunku bankowego
 KSEF_FA3_INCLUDE_BANK_DESC_Help=Dołącz etykietę/opis rachunku bankowego w sekcji płatności. Włącz tylko jeśli nazwy rachunków są odpowiednie do widoczności zewnętrznej (nie nazwy tylko do użytku wewnętrznego).
+KSEF_ConfigureOfflineCertificate=Skonfiguruj certyfikat podpisu offline dla trybu awaryjnego KSeF
+KSEF_FA3_PLACE_OF_ISSUE=Miejsce wystawienia (P_1M)
+KSEF_FA3_PLACE_OF_ISSUE_Help=Opcjonalne pole wskazujące miasto/lokalizację wystawienia faktury.
+KSEF_FA3_PLACE_OF_ISSUE_DISABLED=Wyłączone
+KSEF_FA3_PLACE_OF_ISSUE_COMPANY=Z adresu firmy (miasto)
+KSEF_FA3_PLACE_OF_ISSUE_CUSTOM=Wartość niestandardowa
+KSEF_FA3_PLACE_OF_ISSUE_CUSTOM_Placeholder=Wpisz nazwę miasta...
 
 # ============================================
 # Connection & Testing
 # ============================================
-KSEF_TestConnection=Testuj połączenie
 KSEF_TEST_CONNECTION=Testuj połączenie
 KSEF_TEST_TOKEN_AUTH=Testuj uwierzytelnianie tokenu
 KSEF_CONNECTION_SUCCESS=Połączenie udane
@@ -179,38 +187,6 @@ KSEF_Test_NIPConfigured=NIP skonfigurowany
 KSEF_Test_NIPInvalid=NIP nieprawidłowy
 
 # ============================================
-# Workflow & Usage
-# ============================================
-KSEF_HowToUsePage=Instrukcja użytkowania
-KSEF_QuickStartGuide=Przewodnik szybkiego startu
-KSEF_ConfigureModule=Konfiguruj moduł
-KSEF_ModuleSetup=Ustawienia modułu
-KSEF_GoToSetup=Przejdź do ustawień
-KSEF_UsingTheModule=Używanie modułu
-KSEF_SubmitInvoice=Wyślij fakturę
-KSEF_SubmittingInvoices=Wysyłanie faktur
-KSEF_SubmitInvoiceSteps=Kroki wysyłania faktury
-KSEF_OpenAnyInvoice=Otwórz dowolną fakturę (data powinna być dzisiejsza)
-KSEF_OpenInvoiceCard=Otwórz kartę faktury
-KSEF_OpenValidatedInvoice=Otwórz zatwierdzoną fakturę
-KSEF_ClickKSEFButton=Kliknij przycisk "Zatwierdź i prześlij do KSeF" aby wysłać
-KSEF_ClickRedKSEFButton=Kliknij czerwony przycisk KSeF
-KSEF_ClickInfoIcon=Kliknij ikonę informacji
-KSEF_WaitForConfirmation=Poczekaj na potwierdzenie
-KSEF_ScrollToKSEFSection=Przewiń do sekcji KSeF
-KSEF_ConfigureNow=Skonfiguruj teraz
-KSEF_TestNow=Testuj teraz
-KSEF_Troubleshooting=Rozwiązywanie problemów
-KSEF_ViewingErrorDetails=Przeglądanie szczegółów błędów
-KSEF_ErrorDetailsLocation=Aby zobaczyć szczegółowe informacje o błędzie
-KSEF_GenerateKSeFPDF=Generuj PDF w stylu KSeF
-KSEF_PDFRequiresSubmission=Faktura musi być najpierw wysłana do KSeF
-KSEF_PDFRequiresAccepted=Faktura musi mieć status ACCEPTED w KSeF
-KSEF_PDFRequiresOnline=Faktura musi być wysłana online (nie w trybie offline)
-KSEF_PDFGeneratedSuccess=PDF w stylu KSeF wygenerowany pomyślnie: %s
-KSEF_PDFGenerationError=Błąd generowania PDF w stylu KSeF
-
-# ============================================
 # Dashboard / Home (ksefindex.php)
 # ============================================
 KSEF_Statistics=Statystyki
@@ -227,6 +203,149 @@ KSEF_SetupRequired=Wymagana konfiguracja
 KSEF_SetupRequiredDesc=Skonfiguruj NIP firmy i uwierzytelnianie przed użyciem KSeF
 KSEF_MandatoryWarning=Powiadomienie o obowiązku KSeF
 KSEF_MandatoryWarningDesc=KSeF będzie obowiązkowy za %d dni. Skonfiguruj system teraz.
+KSEF_OutgoingInvoices=Faktury wychodzące
+KSEF_Sent=Wysłane
+KSEF_Ready=Gotowy
+KSEF_CertificateExpiresInDays=Certyfikat wygasa za %d dni
+KSEF_NeedsAttention=Wymaga uwagi
+KSEF_OfflineDeadlineSoon=Faktury offline - zbliża się termin
+KSEF_FailedCanRetry=Nieudane - można ponowić
+KSEF_AwaitingConfirmation=Oczekuje na potwierdzenie
+KSEF_NewToReview=Nowe faktury do przeglądu
+KSEF_ImportErrors=Błędy importu
+KSEF_RecentIncoming=Ostatnie przychodzące
+KSEF_ViewAll=Zobacz wszystkie
+
+# ============================================
+# How to Use
+# ============================================
+
+# Quick Start Section
+KSEF_HowToUse=Jak używać
+KSEF_HowToUsePage=Instrukcja obsługi
+KSEF_QuickStartGuide=Szybki start
+KSEF_GetCredentials=Uzyskaj dane uwierzytelniające
+KSEF_GetCredentialsDesc=Potrzebujesz tokena autoryzacyjnego lub certyfikatu kwalifikowanego z portalu KSeF. Certyfikaty są preferowane - tokeny tracą ważność pod koniec 2026, a certyfikat i tak będzie potrzebny do wystawiania faktur offline.
+KSEF_Portals=Portale KSeF
+KSEF_CurrentEnvironment=aktywny
+KSEF_Important=Ważne
+KSEF_PermissionsWarning=Po wygenerowaniu tokena lub rejestracji certyfikatu, skonfiguruj odpowiednie uprawnienia w portalu KSeF w sekcji "Uprawnienia". Same dane uwierzytelniające nie wystarczą - musisz mieć przypisane uprawnienia do wysyłania i pobierania faktur. To częsty błąd prowadzący do problemów z autoryzacją.
+
+KSEF_ConfigureModule=Konfiguracja modułu
+KSEF_ConfigureModuleDesc=Przejdź do Ustawień i wprowadź NIP firmy oraz token lub certyfikat. NIP powinien się uzupełnić automatycznie z ustawień firmy, jeśli został tam wcześniej skonfigurowany.
+KSEF_DefaultEnvironmentNote=Moduł domyślnie działa w środowisku Demo, aby zapobiec przypadkowemu wysłaniu oficjalnych faktur podczas testów. Przełącz na Produkcję (i wgraj certyfikaty produkcyjne) gdy wszystko działa poprawnie.
+KSEF_ModuleSetup=Ustawienia modułu
+KSEF_GoToSetup=Przejdź do ustawień
+
+KSEF_TestConnection=Test połączenia
+KSEF_TestConnectionDesc=Użyj przycisków testowych aby sprawdzić połączenie i uwierzytelnianie przed wysłaniem pierwszej faktury.
+KSEF_TestNow=Testuj teraz
+
+KSEF_SubmitFirstInvoice=Wyślij pierwszą fakturę
+KSEF_SubmitFirstInvoiceDesc=Otwórz zatwierdzoną fakturę i kliknij przycisk KSeF. Jeśli status zmieni się na ACCEPTED z numerem KSeF, wszystko działa. Możesz wyświetlić wysłany XML, UPO oraz wygenerować PDF w stylu Dolibarr lub w stylu aplikacji KSeF.
+
+# Configuration Section
+KSEF_ConfigurationSection=Konfiguracja
+KSEF_Environments=Środowiska
+KSEF_ENV_TEST_FullDesc=Wysyłaj fikcyjne faktury do fikcyjnych firm z fikcyjnymi danymi (np. NIP 9999999999) używając niezabezpieczonego certyfikatu lub tokena z publicznego portalu testowego. Służy do nauki systemu.
+KSEF_ENV_DEMO_FullDesc=Wysyłaj fikcyjne faktury do fikcyjnych firm używając prawdziwych danych firmy i certyfikatu/tokena Demo. Służy do testowania i weryfikacji działania. Faktury nie są prawnie wiążące.
+KSEF_ENV_PRODUCTION_FullDesc=Wysyłaj prawdziwe faktury z prawdziwymi danymi firmy i certyfikatem/tokenem produkcyjnym. Te faktury są prawnie wiążące.
+
+KSEF_Authentication=Uwierzytelnianie
+KSEF_AuthenticationDesc=Certyfikaty są lepszym wyborem, ale tokeny działają do końca 2026. Faktury offline wymagają certyfikatu offline niezależnie od wybranej metody.
+
+KSEF_OptionalFields=Pola opcjonalne
+KSEF_OptionalFieldsDesc=W ustawieniach można włączyć opcjonalne pola FA(3) takie jak kody klientów, indeksy produktów, GTIN i jednostki miary. Włącz je jeśli masz te dane w Dolibarr i chcesz je uwzględniać w wysyłkach do KSeF.
+
+KSEF_CompanyIdentifiers=Identyfikatory firmy
+KSEF_CompanyIdentifiersDesc=NIP jest wymagany. KRS, REGON i BDO są opcjonalne i uzupełnią się automatycznie z ustawień firmy, jeśli zostały tam skonfigurowane.
+
+# Sending Invoices Section
+KSEF_SendingInvoices=Wysyłanie faktur
+KSEF_UsingTheModule=Korzystanie z modułu
+KSEF_SubmitInvoice=Wyślij fakturę
+KSEF_SubmittingInvoices=Wysyłanie faktur
+KSEF_TheWorkflow=Proces wysyłki
+KSEF_Workflow_Step1=Utwórz lub otwórz fakturę
+KSEF_Workflow_Step2=Uzupełnij pola w razie potrzeby
+KSEF_Workflow_Step3=Kliknij przycisk KSeF
+KSEF_Workflow_Step4=Poczekaj na potwierdzenie
+KSEF_SubmitInvoiceSteps=Kroki wysyłki faktury
+KSEF_OpenAnyInvoice=Otwórz dowolną fakturę (data powinna być dzisiejsza)
+KSEF_OpenInvoiceCard=Otwórz kartę faktury
+KSEF_OpenValidatedInvoice=Otwórz zatwierdzoną fakturę
+KSEF_ClickKSEFButton=Kliknij przycisk "Zatwierdź i wyślij do KSeF"
+KSEF_ClickRedKSEFButton=Kliknij czerwony przycisk KSeF
+KSEF_WaitForConfirmation=Poczekaj na potwierdzenie
+
+KSEF_ValidateAndUpload_Desc=Dla faktur w wersji roboczej - zatwierdza i wysyła w jednym kroku
+KSEF_UploadToKSEF_Desc=Dla zatwierdzonych faktur - wysyła do KSeF
+
+KSEF_Statuses=Statusy
+KSEF_STATUS_ACCEPTED_Desc=Faktura otrzymała numer KSeF, gotowe
+KSEF_STATUS_PENDING_Desc=Wciąż przetwarzana, sprawdź za chwilę
+KSEF_STATUS_REJECTED_Desc=Sprawdź szczegóły błędu i spróbuj ponownie
+KSEF_STATUS_OFFLINE_Desc=KSeF był niedostępny, faktura zapisana lokalnie z terminem wysyłki online
+
+KSEF_ForeignCurrencyInvoices=Faktury walutowe
+KSEF_ForeignCurrencyDesc=Dla faktur w EUR lub innych walutach obcych musisz pobrać kurs NBP przed wysłaniem i mieć włączony moduł wielowalutowy. Na karcie faktury pojawi się przycisk pobierający kurs z ostatniego dnia roboczego przed datą faktury. Wysyłka jest zablokowana do czasu pobrania kursu NBP. W ustawieniach możesz wybrać czy przy różnicy kursu zmieniać kwotę PLN czy walutową.
+
+KSEF_AfterAcceptance=Po akceptacji
+KSEF_AfterAcceptanceDesc=Po zaakceptowaniu możesz wygenerować PDF w stylu KSeF z karty faktury. Jeśli masz włączone kody QR w ustawieniach, numer KSeF pojawi się również na standardowych PDF-ach faktur.
+
+KSEF_CheckingStatusDesc=Zakładka KSeF na karcie faktury pokazuje wszystkie próby wysyłki danej faktury. Strona Status pokazuje wysyłki wszystkich faktur i najczęstsze błędy:
+
+# PDF Generation
+KSEF_GenerateKSeFPDF=Generuj PDF w stylu KSeF
+KSEF_PDFRequiresSubmission=Faktura musi być najpierw wysłana do KSeF
+KSEF_PDFRequiresAccepted=Faktura musi mieć status ACCEPTED w KSeF
+KSEF_PDFRequiresOnline=Faktura musi być wysłana online (nie w trybie offline)
+KSEF_PDFGeneratedSuccess=PDF w stylu KSeF wygenerowany pomyślnie: %s
+KSEF_PDFGenerationError=Błąd generowania PDF w stylu KSeF
+KSEF_QRVerificationInstruction=Nie możesz zeskanować kodu z obrazu? Kliknij link weryfikacyjny aby zweryfikować fakturę!
+KSEF_QRCodeII=Kod QR II
+KSEF_QRCodeIIUnavailable=Niedostępny - brak skonfigurowanego certyfikatu
+
+# Receiving Invoices Section
+KSEF_ReceivingInvoices=Odbieranie faktur
+KSEF_ReceivingInvoicesDesc=Faktury wysłane przez dostawców przez KSeF można zsynchronizować z Dolibarr.
+KSEF_Receiving_Step1=Przejdź do strony Faktury przychodzące:
+KSEF_Receiving_Step2=Kliknij "Synchronizuj z KSeF"
+KSEF_Receiving_Step3=Nowe faktury pojawią się na liście
+KSEF_ReceivingActions=Dla każdej faktury możesz wyświetlić szczegóły, pobrać oryginalny XML, pobrać PDF lub sprawdzić na portalu KSeF.
+
+KSEF_ImportingToDolibarr=Import do Dolibarr
+KSEF_ImportingToDolibarrDesc=Automatyczny import do faktur dostawców jest w przygotowaniu. Na razie pobierz PDF i utwórz fakturę dostawcy ręcznie używając go jako dokumentu źródłowego. Dzięki temu nie musisz logować się osobno do portalu KSeF.
+
+# Customer Exclusions Section
+KSEF_CustomerExclusions=Wykluczenia klientów
+KSEF_CustomerExclusionsDesc=Niektórzy klienci nie potrzebują faktur wysyłanych do KSeF. Możesz wykluczyć wybranych klientów w ustawieniach modułu lub bezpośrednio na karcie kontrahenta używając pola wykluczenia.
+
+# Troubleshooting Section
+KSEF_Troubleshooting=Rozwiązywanie problemów
+KSEF_FindingErrorDetails=Szukanie szczegółów błędu
+KSEF_FindingErrorDetailsDesc=Otwórz fakturę, przejdź do zakładki KSeF i sprawdź kod i treść błędu. Strona Status pokazuje też najczęstsze błędy z ostatnich 30 dni:
+KSEF_ViewingErrorDetails=Przeglądanie szczegółów błędu
+KSEF_ErrorDetailsLocation=Aby zobaczyć szczegóły błędu
+KSEF_ClickInfoIcon=Kliknij ikonę informacji
+KSEF_ScrollToKSEFSection=Przewiń do sekcji KSeF
+KSEF_ConfigureNow=Konfiguruj teraz
+
+KSEF_CommonIssues=Częste problemy
+
+KSEF_Issue_DuplicateNumber=Duplikat numeru faktury (Błąd 440)
+KSEF_Issue_DuplicateNumber_Desc=Ten numer faktury był już użyty w KSeF. Częste w środowiskach test/demo gdzie dane się zachowują między sesjami. Zmień numer faktury i spróbuj ponownie.
+
+KSEF_Issue_AuthFailed_Desc=Najpierw sprawdź czy token lub certyfikat nie wygasł. Jeśli dane są poprawne, najczęstszą przyczyną są brakujące uprawnienia w portalu KSeF. Wejdź w "Moje uprawnienia" w aplikacji KSeF i sprawdź czy masz skonfigurowane uprawnienia do wysyłania i pobierania. Samo uwierzytelnienie nie wystarczy - uprawnienia muszą być jawnie przypisane.
+
+KSEF_Issue_NBPMissing=Brak kursu NBP
+KSEF_Issue_NBPMissing_Desc=Faktura walutowa bez kursu wymiany. Użyj przycisku pobierania kursu na karcie faktury.
+
+KSEF_Issue_Timeout_Desc=KSeF nie odpowiedział w czasie. Wysyłka może wciąż być przetwarzana po ich stronie. Sprawdź status lub spróbuj ponownie.
+
+KSEF_RetryLimits=Limity ponawiania
+KSEF_RetryLimitsDesc=Nieudane wysyłki można ponawiać do 30 razy zanim zostaną oznaczone jako trwale nieudane. Każda próba jest zapisywana w historii wysyłki.
+
 
 # ============================================
 # Invoice Tab (tab_ksef.php)
@@ -250,7 +369,6 @@ KSEF_StatusUpdated=Status zaktualizowany
 KSEF_VerifyOnKSEFPortal=Zweryfikuj w portalu KSeF
 KSEF_ViewAllAttemptsOnInvoice=Zobacz wszystkie próby dla tej faktury
 KSEF_ViewAllSubmissions=Zobacz wszystkie wysyłki
-KSEF_RetrySubmission=Ponów wysyłkę
 KSEF_CheckStatus=Sprawdź status
 KSEF_ViewErrorDetails=Zobacz szczegóły błędu
 KSEF_DownloadKSEFZip=Pobierz faktury z danymi KSeF (ZIP)
@@ -271,8 +389,7 @@ KSEF_STATUS_TIMEOUT=Przekroczono limit czasu
 # Actions & Buttons (actions_ksef.class.php)
 # ============================================
 KSEF_SubmitToKSEF=Wyślij do KSeF
-KSEF_UploadToKSEF=Prześlij do KSeF
-KSEF_ValidateAndUpload=Zatwierdź i prześlij do KSeF
+KSEF_ValidateAndUpload=Zatwierdź i wyślij do KSeF
 KSEF_ValidatingAndSubmitting=Zatwierdzanie i wysyłanie do KSeF
 KSEF_SubmittingToKSEF=Wysyłanie do KSeF
 KSEF_ViewSubmissionDetails=Zobacz szczegóły
@@ -319,6 +436,30 @@ KSEF_StatusRejected=Odrzucona
 KSEF_StatusFailed=Błąd
 KSEF_StatusOffline=Tryb offline
 KSEF_StatusValidationFailed=Błąd walidacji
+
+# ============================================
+# Currency
+# ============================================
+KSEF_ExtraFieldKursData=Data kursu NBP
+KSEF_ExtraFieldKursDataHelp=Data kursu wymiany NBP dla faktury w walucie obcej (ostatni dzień roboczy przed datą sprzedaży)
+KSEF_NBPRate=Kurs NBP
+KSEF_NBPRateFromDate=z dnia %s
+KSEF_NBPRateRequired=Brak kursu NBP dla faktury w walucie obcej. Pobierz kurs przed wysłaniem do KSeF.
+KSEF_NBPCurrencyNotSupported=Waluta %s nie jest obsługiwana przez NBP
+KSEF_NBPNoRateForDate=Brak kursu NBP dla podanej daty
+KSEF_NBPRateMissing=Brak kursu
+KSEF_RefreshNBPRate=Odśwież
+KSEF_FetchNBPRate=Pobierz kurs NBP
+KSEF_RefreshNBPRateTooltip=Pobierz aktualny kurs NBP dla daty faktury
+KSEF_FetchNBPRateTooltip=Pobierz kurs wymiany z Narodowego Banku Polskiego
+KSEF_NBPRateNotNeeded=Kurs NBP nie jest wymagany dla faktur w PLN
+KSEF_NBPRateFetched=Kurs NBP pobrany pomyślnie: %s z dnia %s
+KSEF_NBPRateFetchError=Nie udało się pobrać kursu NBP: %s
+KSEF_MULTICURRENCY_CONFIG=Wielowalutowość / Ustawienia NBP
+KSEF_NBP_RATE_MODE=Tryb stosowania kursu NBP
+KSEF_NBP_RATE_MODE_KEEP_BASE=Zachowaj kwoty w walucie bazowej (PLN) - przelicz walutę obcą (EUR/etc)
+KSEF_NBP_RATE_MODE_KEEP_FOREIGN=Zachowaj kwoty w walucie obcej (EUR/etc) - przelicz PLN
+KSEF_MulticurrencyRefreshDisabled=Wyłączone dla KSeF - Użyj przycisku "Pobierz kurs NBP" w polu Data kursu NBP
 
 # ============================================
 # Issue Solutions
@@ -530,7 +671,6 @@ KSEF_DuplicateInvoiceNumber=Duplikat numeru faktury
 KSEF_InvoiceNumberUsedBy=Ten numer faktury został już użyty przez
 KSEF_Retries=Próby
 
-
 # ============================================
 # Failure Dialog
 # ============================================
@@ -647,3 +787,62 @@ KSEF_ClearedRecords=Usunięto %s rekordów faktur przychodzących ze środowiska
 RecordsDeleted=Usunięto %s rekordów
 ConfirmDeleteIncomingInvoice=Usunąć fakturę przychodzącą %s?
 NotInSystem=brak w systemie
+
+
+KSEF_BASIC_CONFIG=Podstawowa konfiguracja
+KSEF_MenuSubmissionStatus=Status wysyłki
+KSEF_MenuConfiguration=Konfiguracja
+
+# ============================================
+# About Page - System Requirements
+# ============================================
+KSEF_Note=Uwaga
+
+# Requirement Labels
+KSEF_Req_PHPVersion=Wersja PHP
+KSEF_Req_PHPVersionDesc=Wymagany PHP 7.4 lub nowszy
+KSEF_Req_OpenSSL=Rozszerzenie OpenSSL
+KSEF_Req_OpenSSLDesc=Wymagane do szyfrowania i bezpiecznej komunikacji
+KSEF_Req_cURL=Rozszerzenie cURL
+KSEF_Req_cURLDesc=Wymagane do komunikacji API z KSeF
+KSEF_Req_DOM=Rozszerzenie DOM
+KSEF_Req_DOMDesc=Wymagane do przetwarzania XML
+KSEF_Req_Mbstring=Rozszerzenie Multibyte String
+KSEF_Req_MbstringDesc=Wymagane do obsługi danych faktur i polskich znaków
+KSEF_Req_JSON=Rozszerzenie JSON
+KSEF_Req_JSONDesc=Wymagane do przetwarzania żądań/odpowiedzi API KSeF
+KSEF_Req_Zip=Rozszerzenie Zip
+KSEF_Req_ZipDesc=Wymagane do rozpakowywania paczek faktur przychodzących z KSeF (ZipArchive)
+KSEF_Req_phpseclib=Biblioteka phpseclib
+KSEF_Req_phpseclibDesc=Biblioteka kryptograficzna do szyfrowania RSA, dołączona do modułu
+KSEF_Req_TCPDF=Biblioteka TCPDF
+KSEF_Req_TCPDFDesc=Wymagana do generowania kodów QR na PDF
+KSEF_Req_TCPDF2DMissing=(brak obsługi kodów 2D)
+KSEF_Req_BarcodeModule=Moduł Barcode
+KSEF_Req_BarcodeModuleDesc=Moduł kodów kreskowych Dolibarr (zalecany dla kodów QR)
+KSEF_Req_MulticurrencyModule=Moduł Multicurrency
+KSEF_Req_MulticurrencyModuleDesc=Moduł wielowalutowy Dolibarr (wymagany dla faktur walutowych z kursami NBP)
+KSEF_Req_CompanyNIP=NIP firmy
+KSEF_Req_CompanyNIPDesc=Numer identyfikacji podatkowej
+KSEF_Req_KSeFAuth=Uwierzytelnianie KSeF
+KSEF_Req_KSeFAuthDesc=Wymagany token lub ważny certyfikat do dostępu API
+KSEF_Req_OfflineCert=Certyfikat podpisu offline
+KSEF_Req_OfflineCertDesc=Wymagany do wystawiania faktur podczas niedostępności KSeF (tryb awaryjny)
+KSEF_Req_Environment=Środowisko
+KSEF_Req_EnvironmentDesc=Aktualne środowisko KSeF
+KSEF_Req_CSRF=Ochrona CSRF
+KSEF_Req_CSRFDesc=Ochrona tokenem przed Cross-Site Request Forgery (zalecana dla bezpieczeństwa)
+
+# Authentication Values
+KSEF_AuthValue_Token=Token
+KSEF_AuthValue_Certificate=Certyfikat
+KSEF_AuthValue_TokenAndCert=Token + Certyfikat
+KSEF_AuthValue_CertExpires=(certyfikat wygasa: %s)
+KSEF_AuthValue_Expired=(WYGASŁ: %s)
+KSEF_AuthValue_Expires=(wygasa: %s)
+
+# Certificate Status Values
+KSEF_CertValue_ValidUntil=Ważny do: %s
+KSEF_CertValue_Expired=WYGASŁ: %s
+KSEF_CertValue_Configured=Skonfigurowany
+KSEF_CertValue_NotConfigured=Nie skonfigurowany

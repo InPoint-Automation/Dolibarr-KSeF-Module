@@ -35,6 +35,7 @@ class KsefInvoicePdf
     private $contentWidth;
 
     private $pdf;
+    private $parsed = null;
 
     // Colors
     private $colorText = array(52, 58, 64);
@@ -69,6 +70,12 @@ class KsefInvoicePdf
         'CZ' => 'Czechy', 'SK' => 'Słowacja', 'AT' => 'Austria', 'IT' => 'Włochy',
         'ES' => 'Hiszpania', 'NL' => 'Holandia', 'BE' => 'Belgia', 'SE' => 'Szwecja',
         'DK' => 'Dania', 'FI' => 'Finlandia', 'NO' => 'Norwegia', 'CH' => 'Szwajcaria',
+        'LU' => 'Luksemburg', 'IE' => 'Irlandia', 'PT' => 'Portugalia', 'GR' => 'Grecja',
+        'HU' => 'Węgry', 'RO' => 'Rumunia', 'BG' => 'Bułgaria', 'HR' => 'Chorwacja',
+        'SI' => 'Słowenia', 'LT' => 'Litwa', 'LV' => 'Łotwa', 'EE' => 'Estonia',
+        'CY' => 'Cypr', 'MT' => 'Malta', 'US' => 'Stany Zjednoczone', 'CA' => 'Kanada',
+        'JP' => 'Japonia', 'CN' => 'Chiny', 'KR' => 'Korea Południowa', 'AU' => 'Australia',
+        'UA' => 'Ukraina', 'BY' => 'Białoruś', 'RU' => 'Rosja', 'TR' => 'Turcja',
     );
 
     public function __construct($db)
@@ -83,7 +90,10 @@ class KsefInvoicePdf
      * @param $outputPath Optional path to save PDF
      * @return string|bool PDF content as string, true if saved to file, false on error
      * @called_by KSEF::getIncomingInvoicePdf(), incoming_card.php
-     * @calls parseXmlData(), renderHeader(), renderCorrectionData(), renderSellerBuyer(), renderDetails(), renderPositionsTable(), renderGtinTable(), renderTotalAmount(), renderVatSummary(), renderAdditionalInfo(), renderAdditionalDesc(), renderPayment(), renderRegistries(), renderQrCode(), renderFooter()
+     * @calls renderHeader(), renderCorrectionData(), renderSellerBuyer(), renderDetails(),
+     * renderPositionsTable(), renderGtinTable(), renderTotalAmount(), renderVatSummary(),
+     * renderAdditionalInfo(), renderAdditionalDesc(), renderPayment(), renderRegistries(),
+     * renderQrCode(), renderFooter()
      */
     public function generate($incoming, $outputPath = '')
     {
@@ -95,9 +105,14 @@ class KsefInvoicePdf
         }
 
         require_once TCPDF_PATH . 'tcpdf.php';
+        dol_include_once('/ksef/class/fa3_parser.class.php');
 
         try {
-            $xmlData = $this->parseXmlData($incoming->fa3_xml);
+            $parser = new FA3Parser($this->db);
+            $this->parsed = $parser->parse($incoming->fa3_xml);
+            if (!$this->parsed) {
+                $this->parsed = $this->getEmptyParsed();
+            }
 
             $this->pdf = new TCPDF('P', 'mm', 'A4', true, 'UTF-8', false);
             $this->pdf->SetCreator('KSeF Module for Dolibarr');
@@ -119,56 +134,58 @@ class KsefInvoicePdf
             $y = $this->renderHeader($incoming, $y);
 
             // CORRECTION INVOICE DATA
-            if (!empty($xmlData['correctionData']['reason']) || !empty($xmlData['correctionData']['correctedInvoices'])) {
-                $y = $this->renderCorrectionData($xmlData['correctionData'], $y);
+            $correction = $this->parsed['correction'];
+            if (!empty($correction['reason']) || !empty($correction['corrected_invoices'])) {
+                $y = $this->renderCorrectionData($y);
             }
 
             // SELLER / BUYER
-            $y = $this->renderSellerBuyer($incoming, $xmlData, $y);
+            $y = $this->renderSellerBuyer($incoming, $y);
 
             // DETAILS
-            $y = $this->renderDetails($incoming, $xmlData, $y);
+            $y = $this->renderDetails($incoming, $y);
 
             // POSITIONS TABLE
-            $y = $this->renderPositionsTable($incoming, $xmlData, $y);
+            $y = $this->renderPositionsTable($incoming, $y);
 
             // GTIN/INDEKS TABLE
-            $y = $this->renderGtinTable($xmlData, $y);
+            $y = $this->renderGtinTable($y);
 
             // TOTAL AMOUNT
             $y = $this->renderTotalAmount($incoming, $y);
 
             // VAT SUMMARY
-            $y = $this->renderVatSummary($incoming, $xmlData, $y);
+            $y = $this->renderVatSummary($incoming, $y);
 
             // ADDITIONAL INFO
-            if (!empty($xmlData['additionalInfo'])) {
-                $y = $this->renderAdditionalInfo($xmlData['additionalInfo'], $y);
+            if (!empty($this->parsed['additional_info'])) {
+                $y = $this->renderAdditionalInfo($this->parsed['additional_info'], $y);
             }
 
             // ADDITIONAL DESC
-            if (!empty($xmlData['additionalDesc'])) {
-                $y = $this->renderAdditionalDesc($xmlData['additionalDesc'], $y);
+            if (!empty($this->parsed['additional_desc'])) {
+                $y = $this->renderAdditionalDesc($y);
             }
 
             // PAYMENT
-            $y = $this->renderPayment($incoming, $xmlData, $y);
+            $y = $this->renderPayment($incoming, $y);
 
             // REGISTRIES
-            if (!empty($xmlData['registries']['krs']) || !empty($xmlData['registries']['regon']) || !empty($xmlData['registries']['bdo'])) {
-                $y = $this->renderRegistries($xmlData['registries'], $y);
+            $reg = $this->parsed['registries'];
+            if (!empty($reg['krs']) || !empty($reg['regon']) || !empty($reg['bdo'])) {
+                $y = $this->renderRegistries($y);
             }
 
             // STOPKA INFO
-            if (!empty($xmlData['stopkaInfo'])) {
-                $y = $this->renderStopkaInfo($xmlData['stopkaInfo'], $y);
+            if (!empty($this->parsed['stopka'])) {
+                $y = $this->renderStopkaInfo($y);
             }
 
             // QR CODE
-            $y = $this->renderQrCode($incoming, $xmlData, $y);
+            $y = $this->renderQrCode($incoming, $y);
 
             // FOOTER
-            $this->renderFooter($xmlData);
+            $this->renderFooter();
 
             // Output
             if (!empty($outputPath)) {
@@ -291,9 +308,10 @@ class KsefInvoicePdf
      * @called_by generate()
      * @calls checkPageBreak(), drawLine(), renderLabelValueAt()
      */
-    private function renderCorrectionData($correctionData, $y)
+    private function renderCorrectionData($y)
     {
         $pdf = $this->pdf;
+        $correction = $this->parsed['correction'];
         $y = $this->checkPageBreak($y, 40);
         $y = $this->drawLine($y);
 
@@ -313,19 +331,19 @@ class KsefInvoicePdf
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
 
         // Correction reason
-        if (!empty($correctionData['reason'])) {
+        if (!empty($correction['reason'])) {
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
             $label = 'Przyczyna korekty dla faktur korygujących: ';
             $labelWidth = $pdf->GetStringWidth($label);
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $valueWidth = $pdf->GetStringWidth($correctionData['reason']);
+            $valueWidth = $pdf->GetStringWidth($correction['reason']);
 
             $pdf->SetXY($leftX, $leftY);
             if ($labelWidth + $valueWidth < $colWidth - 2) {
                 $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
                 $pdf->Cell($labelWidth, 4, $label, 0, 0, 'L');
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-                $pdf->Cell($valueWidth, 4, $correctionData['reason'], 0, 1, 'L');
+                $pdf->Cell($valueWidth, 4, $correction['reason'], 0, 1, 'L');
                 $leftY += 4 + $this->spaceParagraph;
             } else {
                 $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
@@ -333,17 +351,17 @@ class KsefInvoicePdf
                 $leftY = $pdf->GetY();
                 $pdf->SetXY($leftX, $leftY);
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-                $pdf->MultiCell($colWidth, 4, $correctionData['reason'], 0, 'L');
+                $pdf->MultiCell($colWidth, 4, $correction['reason'], 0, 'L');
                 $leftY = $pdf->GetY() + $this->spaceParagraph;
             }
         }
 
         // Correction type (if exists)
-        if (!empty($correctionData['type'])) {
+        if (!empty($correction['type'])) {
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
             $label = 'Typ skutku korekty: ';
             $labelWidth = $pdf->GetStringWidth($label);
-            $typeLabel = $this->getCorrectionTypeLabel($correctionData['type']);
+            $typeLabel = $this->getCorrectionTypeLabel($correction['type']);
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
             $valueWidth = $pdf->GetStringWidth($typeLabel);
 
@@ -367,10 +385,11 @@ class KsefInvoicePdf
 
         // Corrected invoice details
         $rightY = $startY;
-        if (!empty($correctionData['correctedInvoices'])) {
-            $invoiceCount = count($correctionData['correctedInvoices']);
+        $correctedInvoices = $correction['corrected_invoices'] ?? array();
+        if (!empty($correctedInvoices)) {
+            $invoiceCount = count($correctedInvoices);
 
-            foreach ($correctionData['correctedInvoices'] as $idx => $inv) {
+            foreach ($correctedInvoices as $idx => $inv) {
                 $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
                 $pdf->SetXY($rightX, $rightY);
                 if ($invoiceCount > 1) {
@@ -382,16 +401,16 @@ class KsefInvoicePdf
 
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
 
-                if (!empty($inv['issueDate'])) {
-                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Data wystawienia faktury, której dotyczy faktura korygująca: ', $inv['issueDate']);
+                if (!empty($inv['invoice_date'])) {
+                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Data wystawienia faktury, której dotyczy faktura korygująca: ', date('Y-m-d', $inv['invoice_date']));
                 }
 
-                if (!empty($inv['number'])) {
-                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Numer faktury korygowanej: ', $inv['number']);
+                if (!empty($inv['invoice_number'])) {
+                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Numer faktury korygowanej: ', $inv['invoice_number']);
                 }
 
-                if (!empty($inv['ksefNumber'])) {
-                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Numer KSeF faktury korygowanej: ', $inv['ksefNumber']);
+                if (!empty($inv['ksef_number'])) {
+                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Numer KSeF faktury korygowanej: ', $inv['ksef_number']);
                 }
 
                 $rightY += 2;
@@ -468,13 +487,12 @@ class KsefInvoicePdf
     /**
      * @brief Render seller and buyer sections in two columns
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls drawLine(), renderEntity()
      */
-    private function renderSellerBuyer($incoming, $xmlData, $y)
+    private function renderSellerBuyer($incoming, $y)
     {
         $pdf = $this->pdf;
         $y = $this->drawLine($y);
@@ -490,19 +508,26 @@ class KsefInvoicePdf
             'name' => $incoming->seller_name,
             'address' => $incoming->seller_address,
             'country' => $incoming->seller_country ?? 'PL',
-            'email' => $xmlData['seller']['email'] ?? null,
-            'phone' => $xmlData['seller']['phone'] ?? null,
+            'email' => $this->parsed['seller']['email'] ?? null,
+            'phone' => $this->parsed['seller']['phone'] ?? null,
         ));
 
         // BUYER
+        $buyer = $this->parsed['buyer'];
+        $vatUE = !empty($buyer['kod_ue'])
+            ? $buyer['kod_ue'] . ' ' . ($buyer['nr_vat_ue'] ?: '')
+            : null;
+
         $buyerY = $this->renderEntity($rightX, $startY, $colWidth, 'Nabywca', array(
             'nip' => $incoming->buyer_nip,
+            'vatUE' => $vatUE,
+            'isEU' => !empty($buyer['kod_ue']),
             'name' => $incoming->buyer_name,
-            'address' => $xmlData['buyer']['address'] ?? null,
-            'country' => $xmlData['buyer']['country'] ?? 'PL',
-            'email' => $xmlData['buyer']['email'] ?? null,
-            'phone' => $xmlData['buyer']['phone'] ?? null,
-            'customerNumber' => $xmlData['buyer']['customerNumber'] ?? null,
+            'address' => $buyer['address'] ?? null,
+            'country' => $buyer['country'] ?? 'PL',
+            'email' => $buyer['email'] ?? null,
+            'phone' => $buyer['phone'] ?? null,
+            'customerNumber' => $buyer['customer_number'] ?? null,
         ));
 
         return max($sellerY, $buyerY) + 2;
@@ -532,8 +557,16 @@ class KsefInvoicePdf
 
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
 
-        // NIP
-        if (!empty($data['nip'])) {
+        // NIP or VAT-UE number
+        if (!empty($data['vatUE'])) {
+            $pdf->SetXY($x, $y);
+            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+            $pdf->Cell(24, 4, 'Numer VAT-UE: ', 0, 0, 'L');
+            $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+            $pdf->Cell($width - 24, 4, trim($data['vatUE']), 0, 1, 'L');
+            $y += 4;
+        } elseif (!empty($data['nip'])) {
+            // NIP
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
             $pdf->Cell(8, 4, 'NIP: ', 0, 0, 'L');
@@ -621,13 +654,12 @@ class KsefInvoicePdf
     /**
      * @brief Render invoice details section (dates, place of issue)
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls checkPageBreak(), drawLine()
      */
-    private function renderDetails($incoming, $xmlData, $y)
+    private function renderDetails($incoming, $y)
     {
         $pdf = $this->pdf;
         $y = $this->checkPageBreak($y, 20);
@@ -681,13 +713,14 @@ class KsefInvoicePdf
         }
 
         // Place of issue
-        if (!empty($xmlData['placeOfIssue'])) {
+        $placeOfIssue = $this->parsed['invoice']['place_of_issue'] ?? null;
+        if (!empty($placeOfIssue)) {
             $pdf->SetXY($leftX, $leftY);
             $pdf->SetFont($this->fontFamily, 'B', $detailsFontSize);
             $label = 'Miejsce wystawienia: ';
             $pdf->Cell($pdf->GetStringWidth($label), 3, $label, 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $detailsFontSize);
-            $pdf->Cell($colWidth - $pdf->GetStringWidth($label), 3, $xmlData['placeOfIssue'], 0, 1, 'L');
+            $pdf->Cell($colWidth - $pdf->GetStringWidth($label), 3, $placeOfIssue, 0, 1, 'L');
             $leftY += 4;
         }
 
@@ -727,6 +760,29 @@ class KsefInvoicePdf
 
         $y = max($leftY, $rightY) + 2;
 
+        // Exchange rate info
+        $currency = $this->parsed['exchange_rate']['currency'] ?? 'PLN';
+        $kursWaluty = $this->parsed['exchange_rate']['rate'] ?? null;
+
+        if ($currency != 'PLN' && !empty($kursWaluty)) {
+            $y = $this->checkPageBreak($y, 10);
+
+            $pdf->SetXY($this->marginLeft, $y);
+            $pdf->SetFont($this->fontFamily, 'B', $detailsFontSize);
+            $label = 'Kurs waluty: ';
+            $pdf->Cell($pdf->GetStringWidth($label), 3, $label, 0, 0, 'L');
+
+            $pdf->SetFont($this->fontFamily, '', $detailsFontSize);
+            $rateText = rtrim(rtrim(number_format((float)$kursWaluty, 6, ',', ' '), '0'), ',');
+            $pdf->Cell(0, 3, $rateText, 0, 1, 'L');
+            $y += 4;
+
+            $pdf->SetXY($this->marginLeft, $y);
+            $pdf->SetFont($this->fontFamily, 'B', $detailsFontSize);
+            $pdf->Cell(0, 3, 'Kurs waluty wspólny dla wszystkich wierszy faktury', 0, 1, 'L');
+            $y += 4;
+        }
+
         return $y;
     }
 
@@ -734,17 +790,16 @@ class KsefInvoicePdf
     /**
      * @brief Render invoice line items (Pozycje) table
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls checkPageBreak(), drawLine(), hasAnyField(), drawPositionsTableHeader(), formatQuantity(), formatMoney()
      */
-    private function renderPositionsTable($incoming, $xmlData, $y)
+    private function renderPositionsTable($incoming, $y)
     {
         $pdf = $this->pdf;
-        $lines = $xmlData['lines'] ?? array();
-        $linesBefore = $xmlData['linesBefore'] ?? array();
+        $lines = $this->parsed['lines'] ?? array();
+        $linesBefore = $this->parsed['lines_before'] ?? array();
 
         if (empty($lines) && empty($linesBefore)) return $y;
 
@@ -758,10 +813,15 @@ class KsefInvoicePdf
         $y += 5 + 3;
 
         // Currency info
-        $currency = $incoming->currency ?: 'PLN';
+        $currency = $this->parsed['exchange_rate']['currency'] ?? ($incoming->currency ?: 'PLN');
+        $kursWaluty = $this->parsed['exchange_rate']['rate'] ?? null;
+
         $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeNormal);
         $pdf->SetXY($this->marginLeft, $y);
-        $pdf->Cell($this->contentWidth, 4, 'Faktura wystawiona w cenach netto w walucie ' . $currency, 0, 1, 'L');
+
+        $currencyInfo = 'Faktura wystawiona w cenach netto w walucie ' . $currency;
+
+        $pdf->Cell($this->contentWidth, 4, $currencyInfo, 0, 1, 'L');
         $y += 4 + $this->spaceParagraph;
 
         $allLines = array_merge($linesBefore, $lines);
@@ -771,6 +831,7 @@ class KsefInvoicePdf
         $hasGrossAmount = $this->hasAnyField($allLines, 'gross_amount');
         $hasStanPrzed = !empty($linesBefore);
         $hasUnit = $this->hasAnyField($allLines, 'unit');
+        $hasKursWaluty = $this->hasAnyField($allLines, 'kurs_waluty');
 
         $cols = array();
         $lpWidth = 8;
@@ -784,22 +845,23 @@ class KsefInvoicePdf
         $netAmtWidth = 18;
         $grossAmtWidth = $hasGrossAmount ? 18 : 0;
         $stanPrzedWidth = $hasStanPrzed ? 12 : 0;
+        $kursWalutyWidth = $hasKursWaluty ? 16 : 0;
 
         $fixedWidth = $lpWidth + $uuidWidth + $priceNetWidth + $priceGrossWidth +
             $qtyWidth + $unitWidth + $discountWidth + $vatRateWidth +
-            $netAmtWidth + $grossAmtWidth + $stanPrzedWidth;
+            $netAmtWidth + $grossAmtWidth + $stanPrzedWidth + $kursWalutyWidth;
         $nameWidth = $this->contentWidth - $fixedWidth;
 
         if ($nameWidth < 25) $nameWidth = 25;
 
-        $cols[] = array('h' => 'Lp.', 'w' => $lpWidth, 'a' => 'C', 'k' => 'num');
+        $cols[] = array('h' => 'Lp.', 'w' => $lpWidth, 'a' => 'C', 'k' => 'line_num');
 
         if ($hasUUID) {
             $cols[] = array('h' => "Unikalny numer wiersza", 'w' => $uuidWidth, 'a' => 'L', 'k' => 'uuid');
         }
 
         $cols[] = array('h' => "Nazwa towaru\nlub usługi", 'w' => $nameWidth, 'a' => 'L', 'k' => 'description');
-        $cols[] = array('h' => "Cena\njedn.\nnetto", 'w' => $priceNetWidth, 'a' => 'R', 'k' => 'unit_price_net');
+        $cols[] = array('h' => "Cena\njedn.\nnetto", 'w' => $priceNetWidth, 'a' => 'R', 'k' => 'unit_price');
 
         if ($hasGrossPrice) {
             $cols[] = array('h' => "Cena\njedn.\nbrutto", 'w' => $priceGrossWidth, 'a' => 'R', 'k' => 'unit_price_gross');
@@ -820,6 +882,10 @@ class KsefInvoicePdf
 
         if ($hasGrossAmount) {
             $cols[] = array('h' => "Wartość\nsprzedaży\nbrutto", 'w' => $grossAmtWidth, 'a' => 'R', 'k' => 'gross_amount');
+        }
+
+        if ($hasKursWaluty) {
+            $cols[] = array('h' => "Kurs\nwaluty", 'w' => $kursWalutyWidth, 'a' => 'R', 'k' => 'kurs_waluty');
         }
 
         if ($hasStanPrzed) {
@@ -850,17 +916,18 @@ class KsefInvoicePdf
             foreach ($cols as $col) {
                 $value = '';
                 switch ($col['k']) {
-                    case 'num': $value = $line['num'] ?? ''; break;
+                    case 'line_num': $value = $line['line_num'] ?? ''; break;
                     case 'uuid': $value = $line['uuid'] ?? ''; break;
                     case 'description': $value = $line['description'] ?? ''; break;
                     case 'quantity': $value = $this->formatQuantity($line['quantity'] ?? 0); break;
                     case 'unit': $value = $line['unit'] ?? ''; break;
-                    case 'unit_price_net': $value = isset($line['unit_price_net']) ? $this->formatMoney($line['unit_price_net']) : ''; break;
+                    case 'unit_price': $value = isset($line['unit_price']) ? $this->formatMoney($line['unit_price']) : ''; break;
                     case 'unit_price_gross': $value = isset($line['unit_price_gross']) ? $this->formatMoney($line['unit_price_gross']) : ''; break;
                     case 'discount': $value = isset($line['discount']) ? $this->formatMoney($line['discount']) : ''; break;
                     case 'vat_rate': $value = $line['vat_rate'] ?? ''; break;
                     case 'net_amount': $value = isset($line['net_amount']) ? $this->formatMoney($line['net_amount']) : ''; break;
                     case 'gross_amount': $value = isset($line['gross_amount']) ? $this->formatMoney($line['gross_amount']) : ''; break;
+                    case 'kurs_waluty': $value = isset($line['kurs_waluty']) ? rtrim(rtrim(number_format((float)$line['kurs_waluty'], 6, ',', ' '), '0'), ',') : ''; break;
                     case 'stan_przed': $value = $line['stan_przed'] ?? ''; break;
                 }
                 $rowData[] = $value;
@@ -935,16 +1002,15 @@ class KsefInvoicePdf
 
     /**
      * @brief Render GTIN/Indeks table (if data exists)
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls hasAnyField(), drawGtinTableHeader()
      */
-    private function renderGtinTable($xmlData, $y)
+    private function renderGtinTable($y)
     {
         $pdf = $this->pdf;
-        $lines = array_merge($xmlData['linesBefore'] ?? array(), $xmlData['lines'] ?? array());
+        $lines = array_merge($this->parsed['lines_before'] ?? array(), $this->parsed['lines'] ?? array());
 
         $hasGtin = $this->hasAnyField($lines, 'gtin');
         $hasIndeks = $this->hasAnyField($lines, 'indeks');
@@ -981,7 +1047,7 @@ class KsefInvoicePdf
 
             $x = $this->marginLeft;
             $pdf->SetXY($x, $y);
-            $pdf->Cell($cols[0]['w'], $rowHeight, $line['num'], 1, 0, 'C');
+            $pdf->Cell($cols[0]['w'], $rowHeight, $line['line_num'], 1, 0, 'C');
             $x += $cols[0]['w'];
 
             $colIdx = 1;
@@ -1040,7 +1106,12 @@ class KsefInvoicePdf
         $y = $this->checkPageBreak($y, 10);
 
         $currency = $incoming->currency ?: 'PLN';
-        $amount = $this->formatMoney($incoming->total_gross);
+        $totalAmount = $this->parsed['invoice']['total_amount'] ?? null;
+        if (!empty($totalAmount) && $currency != 'PLN') {
+            $amount = $this->formatMoney($totalAmount);
+        } else {
+            $amount = $this->formatMoney($incoming->total_gross);
+        }
 
         $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
         $pdf->SetXY($this->marginLeft, $y);
@@ -1053,13 +1124,12 @@ class KsefInvoicePdf
     /**
      * @brief Render VAT summary table (Podsumowanie stawek podatku)
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls checkPageBreak(), getVatRateLabel(), formatMoney()
      */
-    private function renderVatSummary($incoming, $xmlData, $y)
+    private function renderVatSummary($incoming, $y)
     {
         $pdf = $this->pdf;
 
@@ -1067,8 +1137,17 @@ class KsefInvoicePdf
         if (method_exists($incoming, 'getVatSummary')) {
             $vatSummary = $incoming->getVatSummary();
         }
-        if (empty($vatSummary) && !empty($xmlData['vatSummary'])) {
-            $vatSummary = $xmlData['vatSummary'];
+        if (empty($vatSummary) && !empty($this->parsed['vat_summary'])) {
+            foreach ($this->parsed['vat_summary'] as $rate => $amounts) {
+                if (in_array($rate, array('0', 'zw', 'np'))) {
+                    if (!isset($vatSummary['0'])) {
+                        $vatSummary['0'] = array('net' => 0.0, 'vat' => 0.0);
+                    }
+                    $vatSummary['0']['net'] += ($amounts['net'] ?? 0);
+                } else {
+                    $vatSummary[$rate] = array('net' => $amounts['net'], 'vat' => $amounts['vat'] ?? 0);
+                }
+            }
         }
         if (empty($vatSummary)) return $y;
 
@@ -1181,9 +1260,10 @@ class KsefInvoicePdf
      * @called_by generate()
      * @calls checkPageBreak()
      */
-    private function renderAdditionalDesc($items, $y)
+    private function renderAdditionalDesc($y)
     {
         $pdf = $this->pdf;
+        $items = $this->parsed['additional_desc'] ?? array();
         $y = $this->checkPageBreak($y, 20);
 
         $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
@@ -1210,7 +1290,7 @@ class KsefInvoicePdf
         $pdf->SetFont($this->fontFamily, '', $smallTableFont);
         $rowNum = 1;
         foreach ($items as $item) {
-            $tresc = $item['tresc'] ?? '';
+            $tresc = $item['value'] ?? '';
 
             $lineCount = substr_count($tresc, "\n") + 1;
             $rowHeight = max(5, $lineCount * 4);
@@ -1242,7 +1322,7 @@ class KsefInvoicePdf
 
             // Rodzaj
             $pdf->SetXY($x, $y);
-            $pdf->Cell($colW[1], $rowHeight, $item['rodzaj'] ?? '', 1, 0, 'L');
+            $pdf->Cell($colW[1], $rowHeight, $item['key'] ?? '', 1, 0, 'L');
             $x += $colW[1];
 
             // Treść
@@ -1266,16 +1346,15 @@ class KsefInvoicePdf
     /**
      * @brief Render payment section (Płatność)
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls checkPageBreak(), drawLine(), renderLabelValue(), getPaymentMethodLabel(), renderBankAccount()
      */
-    private function renderPayment($incoming, $xmlData, $y)
+    private function renderPayment($incoming, $y)
     {
         $pdf = $this->pdf;
-        $payment = $xmlData['payment'] ?? array();
+        $payment = $this->parsed['payment'] ?? array();
         if (empty($payment) && empty($incoming->payment_method)) return $y;
 
         $y = $this->checkPageBreak($y, 30);
@@ -1297,8 +1376,8 @@ class KsefInvoicePdf
         }
 
         // Payment date
-        if (!empty($payment['paymentDate'])) {
-            $y = $this->renderLabelValue($y, 'Data zapłaty: ', $payment['paymentDate']);
+        if (!empty($payment['payment_date'])) {
+            $y = $this->renderLabelValue($y, 'Data zapłaty: ', $payment['payment_date']);
         }
 
         // Payment method
@@ -1307,21 +1386,32 @@ class KsefInvoicePdf
             $y = $this->renderLabelValue($y, 'Forma płatności: ', $this->getPaymentMethodLabel($method));
         }
 
-        // Payment due date
-        if (!empty($payment['dueDate'])) {
-            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->SetXY($this->marginLeft, $y);
-            $pdf->Cell($this->contentWidth, 4, 'Termin płatności', 0, 1, 'L');
-            $y += 4;
-            $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->SetXY($this->marginLeft, $y);
-            $pdf->Cell($this->contentWidth, 4, $payment['dueDate'], 0, 1, 'L');
+        // Payment due date (ISO string) or description (relative terms)
+        $dueDate = $payment['due_date'] ?? null;
+        $dueDateDesc = $payment['due_date_description'] ?? null;
+        if (!empty($dueDate) || !empty($dueDateDesc)) {
+            $boxWidth = 45;
+            $boxX = $this->marginLeft + $this->contentWidth - $boxWidth;
+
+            $pdf->SetDrawColorArray($this->colorBorder);
+            $pdf->SetLineWidth($this->borderWidth);
+
+            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeTable);
+            $pdf->SetFillColorArray($this->colorHeaderBg);
+            $pdf->SetXY($boxX, $y);
+            $pdf->Cell($boxWidth, 5, 'Termin płatności', 1, 1, 'C', true);
             $y += 5;
+
+            $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
+            $pdf->SetXY($boxX, $y);
+            $displayValue = !empty($dueDate) ? $dueDate : $dueDateDesc;
+            $pdf->Cell($boxWidth, 5, $displayValue, 1, 1, 'C', false);
+            $y += 6;
         }
 
         // Bank account
-        if (!empty($payment['bankAccount'])) {
-            $y = $this->renderBankAccount($payment['bankAccount'], $y);
+        if (!empty($payment['bank_account'])) {
+            $y = $this->renderBankAccount($payment, $y);
         }
 
         return $y + 2;
@@ -1335,7 +1425,7 @@ class KsefInvoicePdf
      * @return float New Y position
      * @called_by renderPayment()
      */
-    private function renderBankAccount($bankAccount, $y)
+    private function renderBankAccount($payment, $y)
     {
         $pdf = $this->pdf;
 
@@ -1353,11 +1443,11 @@ class KsefInvoicePdf
         $pdf->SetLineWidth($this->borderWidth);
 
         $fields = array(
-            array('label' => 'Pełny numer rachunku', 'key' => 'accountNumber'),
-            array('label' => 'Kod SWIFT', 'key' => 'swift'),
-            array('label' => 'Rachunek własny banku', 'key' => 'ownAccount'),
-            array('label' => 'Nazwa banku', 'key' => 'bankName'),
-            array('label' => 'Opis rachunku', 'key' => 'description'),
+            array('label' => 'Pełny numer rachunku', 'key' => 'bank_account'),
+            array('label' => 'Kod SWIFT', 'key' => 'bank_swift'),
+            array('label' => 'Rachunek własny banku', 'key' => 'bank_own_account'),
+            array('label' => 'Nazwa banku', 'key' => 'bank_name'),
+            array('label' => 'Opis rachunku', 'key' => 'bank_description'),
         );
 
         foreach ($fields as $field) {
@@ -1366,7 +1456,7 @@ class KsefInvoicePdf
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeTable);
             $pdf->Cell($labelW, 5, $field['label'], 1, 0, 'L', true);
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
-            $pdf->Cell($valueW, 5, $bankAccount[$field['key']] ?? '', 1, 1, 'L');
+            $pdf->Cell($valueW, 5, $payment[$field['key']] ?? '', 1, 1, 'L');
             $y += 5;
         }
 
@@ -1382,9 +1472,10 @@ class KsefInvoicePdf
      * @called_by generate()
      * @calls checkPageBreak(), drawLine()
      */
-    private function renderRegistries($registries, $y)
+    private function renderRegistries($y)
     {
         $pdf = $this->pdf;
+        $registries = $this->parsed['registries'];
         $y = $this->checkPageBreak($y, 20);
         $y = $this->drawLine($y);
 
@@ -1435,9 +1526,10 @@ class KsefInvoicePdf
      * @called_by generate()
      * @calls checkPageBreak(), drawLine()
      */
-    private function renderStopkaInfo($stopkaInfo, $y)
+    private function renderStopkaInfo($y)
     {
-        if (empty($stopkaInfo)) {
+        $stopkaItems = $this->parsed['stopka'];
+        if (empty($stopkaItems)) {
             return $y;
         }
 
@@ -1456,9 +1548,13 @@ class KsefInvoicePdf
         $y += 4;
 
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-        $pdf->SetXY($this->marginLeft, $y);
-        $pdf->MultiCell($this->contentWidth, 4, $stopkaInfo, 0, 'L');
-        $y = $pdf->GetY() + $this->spaceSectionAfter;
+        $entries = is_array($stopkaItems) ? $stopkaItems : array($stopkaItems);
+        foreach ($entries as $entry) {
+            $pdf->SetXY($this->marginLeft, $y);
+            $pdf->MultiCell($this->contentWidth, 4, $entry, 0, 'L');
+            $y = $pdf->GetY() + 1;
+        }
+        $y += $this->spaceSectionAfter - 1;
 
         return $y;
     }
@@ -1467,16 +1563,15 @@ class KsefInvoicePdf
     /**
      * @brief Render QR code section with verification URL
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
      * @calls getVerificationUrl(), checkPageBreak(), drawLine()
      */
-    private function renderQrCode($incoming, $xmlData, $y)
+    private function renderQrCode($incoming, $y)
     {
         $pdf = $this->pdf;
-        $verificationUrl = $this->getVerificationUrl($incoming, $xmlData);
+        $verificationUrl = $this->getVerificationUrl($incoming);
         if (empty($verificationUrl) && empty($incoming->ksef_number)) return $y;
 
         $y = $this->checkPageBreak($y, 55);
@@ -1529,10 +1624,9 @@ class KsefInvoicePdf
 
     /**
      * @brief Render footer
-     * @param $xmlData Parsed XML data
      * @called_by generate()
      */
-    private function renderFooter($xmlData)
+    private function renderFooter()
     {
         $pdf = $this->pdf;
         $footerY = $this->pageHeight - $this->marginBottom + 2;
@@ -1543,9 +1637,10 @@ class KsefInvoicePdf
 
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
 
-        if (!empty($xmlData['systemInfo'])) {
+        $systemInfo = $this->parsed['header']['system_info'] ?? null;
+        if (!empty($systemInfo)) {
             $pdf->SetXY($this->marginLeft, $footerY - 3);
-            $pdf->Cell($this->contentWidth, 3, 'Wytworzona w:' . $xmlData['systemInfo'], 0, 1, 'L');
+            $pdf->Cell($this->contentWidth, 3, 'Wytworzona w:' . $systemInfo, 0, 1, 'L');
         }
 
         $pdf->SetXY($this->marginLeft, $footerY);
@@ -1717,51 +1812,14 @@ class KsefInvoicePdf
     /**
      * @brief Get KSeF verification URL
      * @param $incoming KsefIncoming object
-     * @param $xmlData Parsed XML data
      * @return string Verification URL or empty string
      * @called_by renderQrCode()
      */
-    private function getVerificationUrl($incoming, $xmlData)
+    private function getVerificationUrl($incoming)
     {
-        if (!empty($xmlData['verificationUrl'])) {
-            return $xmlData['verificationUrl'];
-        }
-
         if (!empty($incoming->fa3_xml) && !empty($incoming->ksef_number)) {
-            $env = getDolGlobalString('KSEF_ENVIRONMENT', 'PRODUCTION');
-
-            $baseUrl = '';
-            switch (strtoupper($env)) {
-                case 'PRODUCTION':
-                    $baseUrl = 'https://qr.ksef.mf.gov.pl';
-                    break;
-                case 'DEMO':
-                    $baseUrl = 'https://qr-demo.ksef.mf.gov.pl';
-                    break;
-                case 'TEST':
-                default:
-                    $baseUrl = 'https://qr-test.ksef.mf.gov.pl';
-                    break;
-            }
-
-            $parts = explode('-', $incoming->ksef_number);
-            $nip = $parts[0] ?? '';
-
-            if (empty($nip)) {
-                return '';
-            }
-
-            $dateStr = $parts[1] ?? '';
-            if (strlen($dateStr) == 8) {
-                $formattedDate = substr($dateStr, 6, 2) . '-' . substr($dateStr, 4, 2) . '-' . substr($dateStr, 0, 4);
-            } else {
-                $formattedDate = date('d-m-Y');
-            }
-
-            $rawHash = hash('sha256', $incoming->fa3_xml, true);
-            $hashBase64Url = rtrim(strtr(base64_encode($rawHash), '+/', '-_'), '=');
-
-            return $baseUrl . '/invoice/' . $nip . '/' . $formattedDate . '/' . $hashBase64Url;
+            dol_include_once('/ksef/lib/ksef.lib.php');
+            return ksefGetVerificationUrlFromXml($incoming->ksef_number, $incoming->fa3_xml);
         }
 
         return '';
@@ -1769,193 +1827,27 @@ class KsefInvoicePdf
 
 
     /**
-     * @brief Parse FA(3) XML data into structured array
-     * @param $xml Raw XML string
-     * @return array Parsed data structure
+     * @brief Return empty parsed structure matching FA3Parser output shape for error cases
+     * @return array Empty data structure
      * @called_by generate()
-     * @calls parseLineNode()
      */
-    private function parseXmlData($xml)
+    private function getEmptyParsed()
     {
-        $data = array(
-            'seller' => array(),
-            'buyer' => array(),
-            'correctionData' => array(),
-            'payment' => array(),
-            'registries' => array(),
-            'stopkaInfo' => null,
+        return array(
+            'header' => array('creation_date' => null, 'system_info' => null),
+            'seller' => array('nip' => '', 'name' => '', 'country' => 'PL', 'address' => '', 'email' => null, 'phone' => null),
+            'buyer' => array('nip' => '', 'name' => '', 'country' => 'PL', 'address' => '', 'jst' => null, 'gv' => null, 'email' => null, 'phone' => null, 'customer_number' => null, 'kod_ue' => null, 'nr_vat_ue' => null),
+            'invoice' => array('currency' => 'PLN', 'number' => '', 'type' => 'VAT', 'date' => null, 'sale_date' => null, 'total_net' => 0, 'total_vat' => 0, 'total_gross' => 0, 'place_of_issue' => null, 'fp_flag' => false, 'total_amount' => null),
+            'vat_summary' => array(),
             'lines' => array(),
-            'linesBefore' => array(),
-            'vatSummary' => array(),
-            'additionalInfo' => array(),
-            'additionalDesc' => array(),
-            'placeOfIssue' => null,
-            'systemInfo' => null,
-            'verificationUrl' => null,
+            'lines_before' => array(),
+            'payment' => array('due_date' => null, 'due_date_description' => null, 'method' => null, 'bank_account' => null, 'status' => 'unpaid', 'payment_date' => null, 'bank_swift' => null, 'bank_name' => null, 'bank_own_account' => null, 'bank_description' => null),
+            'correction' => null,
+            'registries' => array('krs' => null, 'regon' => null, 'bdo' => null, 'pelna_nazwa' => null),
+            'stopka' => array(),
+            'additional_info' => array(),
+            'additional_desc' => array(),
+            'exchange_rate' => array('rate' => null),
         );
-
-        if (empty($xml)) return $data;
-
-        try {
-            $doc = new DOMDocument();
-            $doc->loadXML($xml);
-            $xpath = new DOMXPath($doc);
-            $xpath->registerNamespace('crd', KSEF_FA3_NAMESPACE);
-
-            $get = function($q, $ctx = null) use ($xpath) {
-                $n = $xpath->query($q, $ctx);
-                return $n->length > 0 ? trim($n->item(0)->textContent) : null;
-            };
-
-            $data['systemInfo'] = $get('//crd:Naglowek/crd:SystemInfo');
-            $data['placeOfIssue'] = $get('//crd:Fa/crd:P_1M');
-
-            // Seller
-            $data['seller']['email'] = $get('//crd:Podmiot1/crd:DaneKontaktowe/crd:Email');
-            $data['seller']['phone'] = $get('//crd:Podmiot1/crd:DaneKontaktowe/crd:Telefon');
-
-            // Buyer
-            $data['buyer']['email'] = $get('//crd:Podmiot2/crd:DaneKontaktowe/crd:Email');
-            $data['buyer']['phone'] = $get('//crd:Podmiot2/crd:DaneKontaktowe/crd:Telefon');
-            $data['buyer']['customerNumber'] = $get('//crd:Podmiot2/crd:NrKlienta');
-            $l1 = $get('//crd:Podmiot2/crd:Adres/crd:AdresL1');
-            $l2 = $get('//crd:Podmiot2/crd:Adres/crd:AdresL2');
-            $data['buyer']['address'] = $l1 . ($l2 ? "\n" . $l2 : '');
-            $data['buyer']['country'] = $get('//crd:Podmiot2/crd:Adres/crd:KodKraju');
-
-            // Correction data
-            $data['correctionData']['reason'] = $get('//crd:Fa/crd:PrzyczynaKorekty');
-            $data['correctionData']['type'] = $get('//crd:Fa/crd:TypKorekty');
-
-            // Corrected invoices
-            $data['correctionData']['correctedInvoices'] = array();
-            foreach ($xpath->query('//crd:Fa/crd:DaneFaKorygowanej') as $node) {
-                $data['correctionData']['correctedInvoices'][] = array(
-                    'issueDate' => $get('crd:DataWystFaKorygowanej', $node),
-                    'number' => $get('crd:NrFaKorygowanej', $node),
-                    'ksefNumber' => $get('crd:NrKSeFFaKorygowanej', $node),
-                );
-            }
-
-            // Payment
-            $zaplacono = $get('//crd:Fa/crd:Platnosc/crd:Zaplacono');
-            $czesciowa = $get('//crd:Fa/crd:Platnosc/crd:ZnacznikZaplatyCzesciowej');
-            $data['payment']['status'] = $zaplacono == '1' ? 'paid' : ($czesciowa == '1' ? 'partial' : 'unpaid');
-            $data['payment']['paymentDate'] = $get('//crd:Fa/crd:Platnosc/crd:DataZaplaty');
-            $data['payment']['method'] = $get('//crd:Fa/crd:Platnosc/crd:FormaPlatnosci');
-
-            // Payment due date
-            $data['payment']['dueDate'] = $get('//crd:Fa/crd:Platnosc/crd:TerminPlatnosci/crd:Termin');
-            if (empty($data['payment']['dueDate'])) {
-                $data['payment']['dueDate'] = $get('//crd:Fa/crd:TerminPlatnosci');
-            }
-
-            // Bank account
-            $rachunekNode = $xpath->query('//crd:Fa/crd:Platnosc/crd:RachunekBankowy')->item(0);
-            if ($rachunekNode) {
-                $data['payment']['bankAccount'] = array(
-                    'accountNumber' => $get('crd:NrRB', $rachunekNode),
-                    'swift' => $get('crd:SWIFT', $rachunekNode),
-                    'ownAccount' => $get('crd:RachunekWlasnyBanku', $rachunekNode),
-                    'bankName' => $get('crd:NazwaBanku', $rachunekNode),
-                    'description' => $get('crd:OpisRachunku', $rachunekNode),
-                );
-            }
-
-            // Registries
-            $data['registries']['krs'] = $get('//crd:Stopka/crd:Rejestry/crd:KRS');
-            $data['registries']['regon'] = $get('//crd:Stopka/crd:Rejestry/crd:REGON');
-            $data['registries']['bdo'] = $get('//crd:Stopka/crd:Rejestry/crd:BDO');
-
-            // Stopka
-            $data['stopkaInfo'] = $get('//crd:Stopka/crd:Informacje/crd:StopkaFaktury');
-
-            // Additional info
-            if ($get('//crd:Fa/crd:FP') == '1') {
-                $data['additionalInfo'][] = 'Faktura, o której mowa w art. 109 ust. 3d ustawy';
-            }
-
-            // Additional desc
-            foreach ($xpath->query('//crd:Fa/crd:DodatkowyOpis') as $node) {
-                $rodzaj = $get('crd:Klucz', $node);
-                $tresc = $get('crd:Wartosc', $node);
-                if ($rodzaj && $tresc) {
-                    $data['additionalDesc'][] = array('rodzaj' => $rodzaj, 'tresc' => $tresc);
-                }
-            }
-
-            // Lines
-            $lineNodesBefore = $xpath->query('//crd:FaWiersz[crd:StanPrzed = 1]');
-            $lineNodesAfter = $xpath->query('//crd:FaWiersz[not(crd:StanPrzed = 1)]');
-            if ($lineNodesBefore->length == 0 && $lineNodesAfter->length == 0) {
-                $lineNodesAfter = $xpath->query('//crd:FaWiersz');
-            }
-
-            $num = 1;
-            foreach ($lineNodesBefore as $node) {
-                $line = $this->parseLineNode($node, $get, $num);
-                $data['linesBefore'][] = $line;
-                $num++;
-            }
-
-            $num = 1;
-            foreach ($lineNodesAfter as $node) {
-                $line = $this->parseLineNode($node, $get, $num);
-                $data['lines'][] = $line;
-                $num++;
-            }
-
-            // VAT summary
-            $vatRates = array(
-                '23' => array('net' => 'P_13_1', 'vat' => 'P_14_1'),
-                '8' => array('net' => 'P_13_2', 'vat' => 'P_14_2'),
-                '5' => array('net' => 'P_13_3', 'vat' => 'P_14_3'),
-                '0' => array('net' => 'P_13_4', 'vat' => 'P_14_4'),
-            );
-            foreach ($vatRates as $rate => $fields) {
-                $net = $get('//crd:Fa/crd:' . $fields['net']);
-                $vat = $get('//crd:Fa/crd:' . $fields['vat']);
-                if ($net && (float)$net != 0) {
-                    $data['vatSummary'][$rate] = array(
-                        'net' => (float)$net,
-                        'vat' => (float)($vat ?: 0),
-                    );
-                }
-            }
-
-        } catch (Exception $e) {
-            dol_syslog("KsefInvoicePdf::parseXmlData ERROR: " . $e->getMessage(), LOG_WARNING);
-        }
-
-        return $data;
-    }
-
-
-    /**
-     * @brief Parse a single line item node from XML
-     * @param $node DOMNode for the line
-     * @param $get Closure for XPath queries
-     * @param $defaultNum Default line number if not in XML
-     * @return array Parsed line data
-     * @called_by parseXmlData()
-     */
-    private function parseLineNode($node, $get, $defaultNum)
-    {
-        $line = array(
-            'num' => $get('crd:NrWierszaFa', $node) ?: $defaultNum,
-            'uuid' => $get('crd:UU_ID', $node),
-            'indeks' => $get('crd:Indeks', $node),
-            'gtin' => $get('crd:GTIN', $node),
-            'description' => $get('crd:P_7', $node),
-            'quantity' => $get('crd:P_8B', $node),
-            'unit' => $get('crd:P_8A', $node),
-            'unit_price_net' => $get('crd:P_9A', $node),
-            'unit_price_gross' => $get('crd:P_9B', $node),
-            'discount' => $get('crd:P_10', $node),
-            'vat_rate' => $get('crd:P_12', $node),
-            'net_amount' => $get('crd:P_11', $node),
-            'gross_amount' => $get('crd:P_11A', $node),
-        );
-        return array_filter($line, function($v) { return $v !== null; });
     }
 }

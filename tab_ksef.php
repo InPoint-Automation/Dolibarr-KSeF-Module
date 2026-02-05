@@ -21,6 +21,19 @@
  * \brief   Tab for KSEF submission history on invoice page
  */
 
+// CSRF pcheck
+if (!defined('CSRFCHECK_WITH_TOKEN')) {
+    define('CSRFCHECK_WITH_TOKEN', '1');
+}
+
+// Prevent token renewal for actions that exit without page reload
+$action_raw = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
+if (in_array($action_raw, array('download_xml', 'download_upo'))) {
+    if (!defined('NOTOKENRENEWAL')) {
+        define('NOTOKENRENEWAL', '1');
+    }
+}
+
 $res = 0;
 if (!$res && file_exists("../../main.inc.php")) $res = @include("../../main.inc.php");
 if (!$res && file_exists("../../../main.inc.php")) $res = @include("../../../main.inc.php");
@@ -156,10 +169,10 @@ if ($resql) {
 
             print '<td class="center nowraponall">';
             if (!empty($obj->fa3_xml)) {
-                print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_xml&sub_id=' . $obj->rowid . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadFA3XML") . '">XML</a> ';
+                print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_xml&sub_id=' . $obj->rowid . '&token=' . newToken() . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadFA3XML") . '">XML</a> ';
             }
             if ($obj->status == 'ACCEPTED' && !empty($obj->upo_xml)) {
-                print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_upo&sub_id=' . $obj->rowid . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadUPO") . '">UPO</a>';
+                print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_upo&sub_id=' . $obj->rowid . '&token=' . newToken() . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadUPO") . '">UPO</a>';
             }
             print '</td>';
             print '</tr>';

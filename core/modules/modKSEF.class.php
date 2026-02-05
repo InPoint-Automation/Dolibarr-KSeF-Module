@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.0.0';
+        $this->version = '1.1.0';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -92,7 +92,7 @@ class modKSEF extends DolibarrModules
 
         // Company & Environment
         $this->const[$r++] = array('KSEF_COMPANY_NIP', 'chaine', '', 'Company NIP for KSEF authentication', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_ENVIRONMENT', 'chaine', 'PRODUCTION', 'KSEF API environment (TEST/DEMO/PRODUCTION)', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_ENVIRONMENT', 'chaine', 'DEMO', 'KSEF API environment (TEST/DEMO/PRODUCTION)', 0, 'current', 1);
         $this->const[$r++] = array('KSEF_TIMEOUT', 'chaine', '5', 'KSEF API timeout in seconds', 0, 'current', 1);
 
         // Authentication Method Selection
@@ -197,7 +197,7 @@ class modKSEF extends DolibarrModules
         $this->menu[$r++] = array(
             'fk_menu' => 'fk_mainmenu=billing,fk_leftmenu=ksef',
             'type' => 'left',
-            'titre' => 'Submission Status',
+            'titre' => 'KSEF_MenuSubmissionStatus',
             'mainmenu' => 'billing',
             'leftmenu' => 'ksef_status',
             'url' => '/ksef/status.php',
@@ -242,7 +242,7 @@ class modKSEF extends DolibarrModules
         $this->menu[$r++] = array(
             'fk_menu' => 'fk_mainmenu=billing,fk_leftmenu=ksef',
             'type' => 'left',
-            'titre' => 'Configuration',
+            'titre' => 'KSEF_MenuConfiguration',
             'mainmenu' => 'billing',
             'leftmenu' => 'ksef_config',
             'url' => '/ksef/admin/setup.php',
@@ -342,7 +342,30 @@ class modKSEF extends DolibarrModules
                 'totalizable' => 0,
                 'printable' => 0,
             ),
+            'ksef_kurs_data' => array(
+                'label' => 'KSEF_ExtraFieldKursData',
+                'type' => 'date',
+                'pos' => 103,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '1',
+                'help' => 'KSEF_ExtraFieldKursDataHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => 'isModEnabled("multicurrency") && isModEnabled("ksef")',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+
         );
+
+
 
         foreach ($extraFieldDefs as $fieldName => $def) {
             if (!isset($existingFields[$fieldName])) {
