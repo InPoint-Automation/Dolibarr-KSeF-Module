@@ -106,6 +106,10 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.1.1
+>- Corrected payment mappings between Doliabrr/KSeF
+>- Fix PDF generation error for correction invoices
+>- QR code generation was using wrong translation method
 
 >### Version v1.1.0
 >- Reverted default to Demo environment instead of Production environment on enabling the module, just to ensure we don't accidentally submit official invoices when testing!)

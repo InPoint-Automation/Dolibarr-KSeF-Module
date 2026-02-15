@@ -102,8 +102,8 @@ class KsefQR
         $pdf->SetFont('freesans', '', 5.5);
         $pdf->SetTextColor(120, 120, 120);
 
-        $line1 = $langs->transnoentitiesaliases('KSEF_QRCodeII');
-        $line2 = $langs->transnoentitiesaliases('KSEF_QRCodeIIUnavailable');
+        $line1 = $langs->transnoentities('KSEF_QRCodeII');
+        $line2 = $langs->transnoentities('KSEF_QRCodeIIUnavailable');
 
         $midY = $y + ($size / 2) - 4;
         $pdf->SetXY($x, $midY);
@@ -137,7 +137,7 @@ class KsefQR
         $pdf->SetFont('freesans', '', 6);
         $pdf->SetTextColor(0, 0, 0);
         $pdf->SetXY($textX, $textY);
-        $instructionText = $langs->transnoentitiesaliases('KSEF_QRVerificationInstruction');
+        $instructionText = $langs->transnoentities('KSEF_QRVerificationInstruction');
         $pdf->MultiCell($textWidth, 3, $instructionText, 0, 'L', false);
 
         $textY = $pdf->GetY() + 1;

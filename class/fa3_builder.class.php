@@ -770,6 +770,7 @@ class FA3Builder
         return htmlspecialchars(trim($str), ENT_XML1 | ENT_QUOTES, 'UTF-8');
     }
 
+    // https://github.com/Dolibarr/dolibarr/blob/develop/htdocs/install/mysql/data/llx_c_paiement.sql
     /**
      * @brief Maps Dolibarr payment mode to KSeF code
      * @param $mode_reglement_id Payment mode ID
@@ -780,20 +781,20 @@ class FA3Builder
     private function getPaymentMethodCode($mode_reglement_id)
     {
         $mapping = array(
-            1 => '6',   // VIR -> Przelew (Transfer)
-            2 => '6',   // PRE -> Przelew
-            3 => '1',   // LIQ -> Gotowka (Cash)
-            4 => '2',   // CB  -> Karta (Card)
-            6 => '4',   // CHQ -> Czek (Check)
-            7 => '6',   // TIP -> Przelew
-            8 => '6',   // VAD -> Przelew
-            9 => '6',   // TRA -> Przelew
-            50 => '5',  // VAL -> Kredyt kupiecki (Trade credit)
-            51 => '6',  // COMPENSATION -> Przelew
-            52 => '6',  // OTHER -> Przelew
+            1  => '6',  // TIP -> Przelew (Transfer)
+            2  => '6',  // VIR (Credit Transfer) -> Przelew (Transfer)
+            3  => '6',  // PRE (Direct Debit) -> Przelew (Transfer)
+            4  => '1',  // LIQ (Cash) -> Gotówka (Cash)
+            6  => '2',  // CB (Credit card) -> Karta (Card)
+            7  => '4',  // CHQ (Cheque) -> Czek (Check)
+            50 => '6',  // VAD (Online payment) -> Przelew (Transfer)
+            51 => '6',  // TRA (Traite) -> Przelew (Transfer)
+            52 => '6',  // LCR -> Przelew (Transfer)
+            53 => '6',  // FAC (Factor) -> Przelew (Transfer)
         );
         return isset($mapping[$mode_reglement_id]) ? $mapping[$mode_reglement_id] : '6';
     }
+
 
     /**
      * @brief Gets KSeF number from previous submission

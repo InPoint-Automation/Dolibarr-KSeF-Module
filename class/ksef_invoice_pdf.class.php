@@ -402,7 +402,8 @@ class KsefInvoicePdf
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
 
                 if (!empty($inv['invoice_date'])) {
-                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Data wystawienia faktury, której dotyczy faktura korygująca: ', date('Y-m-d', $inv['invoice_date']));
+                    $dateStr = is_numeric($inv['invoice_date']) ? date('Y-m-d', $inv['invoice_date']) : $inv['invoice_date'];
+                    $rightY = $this->renderLabelValueAt($rightX, $rightY, $colWidth, 'Data wystawienia faktury, której dotyczy faktura korygująca: ', $dateStr);
                 }
 
                 if (!empty($inv['invoice_number'])) {
