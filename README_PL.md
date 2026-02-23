@@ -104,6 +104,22 @@ możliwość nauki na podstawie ich modułu, ten projekt zajęłby znacznie wię
 Ten moduł został opracowany przez InPoint Automation Sp. z o.o.
 
 ## Changelog (In English)
+>### Version v1.2.0
+>- Token/certificate choosing logic now chooses based on what is available
+>- Add setting to persist configuration through module disable/re-enable (defaults to persisting)
+>- Fix Issue #6 with date of sale by adding extrafield populated with sales order data. Date of sale is chosen in the following priority: 1. Linked shipment date 2. Linked sales order planned delivery date 3. Linked sales order date 4. Invoice date. It can be overridden per-invoice.
+>- Fix broken UPO download and handle grabbing at a later time
+>- Add setting to change default behavior of date of sale from the above to defaulting to invoice date (it's manually editable either way)
+>- Update scheduled jobs, removed the broken job and added jobs for checking status and re-attemping offline invoices, syncing incoming invoices, downloading outstanding confirmations, and warning of offline deadlines
+>- Add REST API endpoints with workaround for Dolibarr issue #32491
+>- Fix Issue #7 missing unit prices in HTML/PDF - they should be calculated if not included in the xml
+>- Add extrafields for supplier invoices so that importing has somewhere to write relevant fields
+>- Update actions_ksef.class.php to handle supplier invoices
+>- Add migration system to handle updates. Right now re-runs parsing when updating to new version since issue 7 requires this.
+>- Add handling for gross price only and net price only invoices, including without unit prices, since these are technically all valid ways to provide invoices
+>- Corrective invoices which correct multiple invoices now display correctly on the incoming invoices card and links now point to the corrected invoice
+
+
 >### Version v1.1.1
 >- Corrected payment mappings between Doliabrr/KSeF
 >- Fix PDF generation error for correction invoices
