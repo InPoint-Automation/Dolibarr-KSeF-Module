@@ -21,6 +21,8 @@
  * \brief   FA(3) XML Parser
  */
 
+dol_include_once('/ksef/lib/ksef.lib.php');
+
 class FA3Parser
 {
     // Payment status
@@ -475,6 +477,31 @@ class FA3Parser
                         }
                         break;
                 }
+            }
+
+            // Calculate unit prices
+            if (empty($line['unit_price_net']) && !empty($line['net_amount']) && !empty($line['quantity'])) {
+                $line['unit_price_net'] = round($line['net_amount'] / $line['quantity'], 4);
+            }
+            if (empty($line['unit_price_gross']) && !empty($line['gross_amount']) && !empty($line['quantity'])) {
+                $line['unit_price_gross'] = round($line['gross_amount'] / $line['quantity'], 4);
+            }
+
+            // calculate net from gross
+            $vatRate = is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
+            $vatMultiplier = 1 + $vatRate / 100;
+            if (empty($line['net_amount']) && !empty($line['gross_amount']) && $vatMultiplier > 0) {
+                $line['net_amount'] = round($line['gross_amount'] / $vatMultiplier, 2);
+            }
+            if (empty($line['unit_price_net']) && !empty($line['unit_price_gross']) && $vatMultiplier > 0) {
+                $line['unit_price_net'] = round($line['unit_price_gross'] / $vatMultiplier, 4);
+            }
+            // Cross-calculate gross from net when gross is absent
+            if (empty($line['gross_amount']) && !empty($line['net_amount'])) {
+                $line['gross_amount'] = round($line['net_amount'] * $vatMultiplier, 2);
+            }
+            if (empty($line['unit_price_gross']) && !empty($line['unit_price_net'])) {
+                $line['unit_price_gross'] = round($line['unit_price_net'] * $vatMultiplier, 4);
             }
 
             if ($hasStanPrzed && $isBefore) {

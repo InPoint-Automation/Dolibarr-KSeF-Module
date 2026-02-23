@@ -47,7 +47,7 @@ require_once DOL_DOCUMENT_ROOT . '/core/class/html.formother.class.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/date.lib.php';
 dol_include_once('/ksef/class/ksef_incoming.class.php');
 dol_include_once('/ksef/class/ksef_sync_state.class.php');
-dol_include_once('/ksef/class/ksef.class.php');
+dol_include_once('/ksef/class/ksef_service.class.php');
 dol_include_once('/ksef/lib/ksef.lib.php');
 
 $langs->loadLangs(array("ksef@ksef", "bills"));
@@ -84,7 +84,7 @@ if (!$sortfield) {
 
 $form = new Form($db);
 $incoming = new KsefIncoming($db);
-$ksef = new KSEF($db);
+$ksef = new KSEFService($db);
 
 $hookmanager->initHooks(array('ksef_incoming_list'));
 

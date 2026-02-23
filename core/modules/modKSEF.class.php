@@ -45,13 +45,14 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.1.1';
+        $this->version = '1.2.0';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
 
         $this->module_parts = array(
             'triggers' => 1,
+            'api' => 1,
             'login' => 0,
             'substitutions' => 0,
             'menus' => 0,
@@ -64,6 +65,7 @@ class modKSEF extends DolibarrModules
             'hooks' => array(
                 'invoicecard',
                 'invoicelist',
+                'invoicesuppliercard',
                 'completeTabsHead',
                 'afterPDFTotalTable',
                 'thirdpartycard',
@@ -90,45 +92,16 @@ class modKSEF extends DolibarrModules
         $this->const = array();
         $r = 0;
 
-        // Company & Environment
-        $this->const[$r++] = array('KSEF_COMPANY_NIP', 'chaine', '', 'Company NIP for KSEF authentication', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_ENVIRONMENT', 'chaine', 'DEMO', 'KSEF API environment (TEST/DEMO/PRODUCTION)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_TIMEOUT', 'chaine', '5', 'KSEF API timeout in seconds', 0, 'current', 1);
-
-        // Authentication Method Selection
-        $this->const[$r++] = array('KSEF_AUTH_METHOD', 'chaine', 'token', 'Authentication method: token or certificate', 0, 'current', 1);
-
-        // Online Authentication Token
-        $this->const[$r++] = array('KSEF_AUTH_TOKEN', 'chaine', '', 'KSeF authentication token (encrypted)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_TOKEN_UPDATED_AT', 'chaine', '', 'Timestamp when auth token was last updated', 0, 'current', 1);
-
-        // Authentication Certificate Configuration
-        $this->const[$r++] = array('KSEF_AUTH_CERTIFICATE', 'chaine', '', 'Authentication certificate (Base64 PEM)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_AUTH_PRIVATE_KEY', 'chaine', '', 'Authentication encrypted private key (Base64 PEM)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_AUTH_KEY_PASSWORD', 'chaine', '', 'Authentication private key password (encrypted)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_AUTH_CERT_SERIAL', 'chaine', '', 'Authentication certificate serial number', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_AUTH_CERT_VALID_FROM', 'chaine', '', 'Authentication certificate validity start timestamp', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_AUTH_CERT_VALID_TO', 'chaine', '', 'Authentication certificate validity end timestamp', 0, 'current', 1);
-
-        // Offline Certificate Configuration
-        $this->const[$r++] = array('KSEF_OFFLINE_CERTIFICATE', 'chaine', '', 'Offline certificate (Base64 PEM)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_OFFLINE_PRIVATE_KEY', 'chaine', '', 'Offline encrypted private key (Base64 PEM)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_OFFLINE_KEY_PASSWORD', 'chaine', '', 'Offline private key password (encrypted)', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_OFFLINE_CERT_SERIAL', 'chaine', '', 'Offline certificate serial number', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_OFFLINE_CERT_VALID_FROM', 'chaine', '', 'Offline certificate validity start timestamp', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_OFFLINE_CERT_VALID_TO', 'chaine', '', 'Offline certificate validity end timestamp', 0, 'current', 1);
-
-
         // PDF & QR Settings
-        $this->const[$r++] = array('KSEF_ADD_TO_PDF', 'chaine', '1', 'Add KSEF number to invoice PDFs', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_ADD_QR', 'chaine', '1', 'Add KSEF QR code to invoice PDFs', 0, 'current', 1);
-        $this->const[$r++] = array('KSEF_QR_SIZE', 'chaine', '25', 'QR code size in mm', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_ADD_TO_PDF', 'chaine', '1', 'Add KSEF number to invoice PDFs', 0, 'current', 0);
+        $this->const[$r++] = array('KSEF_ADD_QR', 'chaine', '1', 'Add KSEF QR code to invoice PDFs', 0, 'current', 0);
+        $this->const[$r++] = array('KSEF_QR_SIZE', 'chaine', '25', 'QR code size in mm', 0, 'current', 0);
 
         // UI Customization
-        $this->const[$r++] = array('KSEF_BUTTON_COLOR', 'chaine', '#dc3545', 'KSeF button color', 0, 'current', 1);
+        $this->const[$r++] = array('KSEF_BUTTON_COLOR', 'chaine', '#dc3545', 'KSeF button color', 0, 'current', 0);
 
-        // Customer Exclusions
-        $this->const[$r++] = array('KSEF_EXCLUDED_CUSTOMERS', 'chaine', '', 'Comma-separated list of excluded customer IDs', 0, 'current', 1);
+        // Purge all configuration when module is disabled?
+        $this->const[$r++] = array('KSEF_PURGE_ON_DISABLE', 'chaine', '0', 'Remove all configuration data when module is disabled', 0, 'current', 0);
 
 
         if (!isset($conf->ksef) || !isset($conf->ksef->enabled)) {
@@ -145,18 +118,60 @@ class modKSEF extends DolibarrModules
 
         $this->cronjobs = array(
             0 => array(
-                'label' => 'KSEF - Process pending submissions',
-                'jobtype' => 'method',
-                'class' => '/ksef/class/ksef_submission.class.php',
-                'objectname' => 'KsefSubmission',
-                'method' => 'processPendingSubmissions',
-                'parameters' => '',
-                'comment' => 'Check and retry pending KSEF submissions',
-                'frequency' => 1,
-                'unitfrequency' => 3600,
-                'status' => 1,
-                'test' => '$conf->ksef->enabled',
-                'priority' => 50,
+                'label'          => 'KSEF - Check pending/submitted invoice statuses',
+                'jobtype'        => 'method',
+                'class'          => '/ksef/class/ksef_service.class.php',
+                'objectname'     => 'KSEF',
+                'method'         => 'cronCheckStatuses',
+                'parameters'     => '',
+                'comment'        => 'Poll KSeF for status of PENDING/SUBMITTED/TIMEOUT invoices',
+                'frequency'      => 30,
+                'unitfrequency'  => 60,
+                'status'         => 1,
+                'test'           => 'isModEnabled("ksef")',
+                'priority'       => 50,
+            ),
+            1 => array(
+                'label'          => 'KSEF - Sync incoming invoices',
+                'jobtype'        => 'method',
+                'class'          => '/ksef/class/ksef_service.class.php',
+                'objectname'     => 'KSEF',
+                'method'         => 'cronSyncIncoming',
+                'parameters'     => '',
+                'comment'        => 'Fetch new incoming invoices from KSeF',
+                'frequency'      => 4,
+                'unitfrequency'  => 3600,
+                'status'         => 0,
+                'test'           => 'isModEnabled("ksef")',
+                'priority'       => 50,
+            ),
+            2 => array(
+                'label'          => 'KSEF - Download UPO confirmations',
+                'jobtype'        => 'method',
+                'class'          => '/ksef/class/ksef_service.class.php',
+                'objectname'     => 'KSEF',
+                'method'         => 'cronDownloadUPOs',
+                'parameters'     => '',
+                'comment'        => 'Download UPO XML for accepted submissions that lack it',
+                'frequency'      => 6,
+                'unitfrequency'  => 3600,
+                'status'         => 0,
+                'test'           => 'isModEnabled("ksef")',
+                'priority'       => 50,
+            ),
+            3 => array(
+                'label'          => 'KSEF - Warn approaching offline deadlines',
+                'jobtype'        => 'method',
+                'class'          => '/ksef/class/ksef_service.class.php',
+                'objectname'     => 'KSEF',
+                'method'         => 'cronWarnDeadlines',
+                'parameters'     => '',
+                'comment'        => 'Log warnings for offline invoices with deadlines in next 24h',
+                'frequency'      => 1,
+                'unitfrequency'  => 3600,
+                'status'         => 1,
+                'test'           => 'isModEnabled("ksef")',
+                'priority'       => 50,
             ),
         );
 
@@ -267,12 +282,76 @@ class modKSEF extends DolibarrModules
         $sql = array();
         $langs->loadLangs(array("ksef@ksef"));
 
+        // remove old cron job processPendingSubmissions
+        $sql[] = "DELETE FROM " . MAIN_DB_PREFIX . "cronjob"
+            . " WHERE methodename = 'processPendingSubmissions'"
+            . " AND classesname LIKE '%ksef%'";
+
         $result = $this->_load_tables('/ksef/sql/');
         if ($result < 0) return -1;
 
+        $persistentDefaults = array(
+            // Company & Environment
+            'KSEF_COMPANY_NIP'       => '',
+            'KSEF_COMPANY_KRS'       => '',
+            'KSEF_COMPANY_REGON'     => '',
+            'KSEF_COMPANY_BDO'       => '',
+            'KSEF_ENVIRONMENT'       => 'DEMO',
+            'KSEF_TIMEOUT'           => '5',
+
+            // Authentication
+            'KSEF_AUTH_METHOD'       => 'token',
+            'KSEF_AUTH_TOKEN'        => '',
+            'KSEF_TOKEN_UPDATED_AT'  => '',
+
+            // Authentication Certificate
+            'KSEF_AUTH_CERTIFICATE'  => '',
+            'KSEF_AUTH_PRIVATE_KEY'  => '',
+            'KSEF_AUTH_KEY_PASSWORD' => '',
+            'KSEF_AUTH_CERT_SERIAL'  => '',
+            'KSEF_AUTH_CERT_VALID_FROM' => '',
+            'KSEF_AUTH_CERT_VALID_TO'   => '',
+
+            // Offline Certificate
+            'KSEF_OFFLINE_CERTIFICATE'  => '',
+            'KSEF_OFFLINE_PRIVATE_KEY'  => '',
+            'KSEF_OFFLINE_KEY_PASSWORD' => '',
+            'KSEF_OFFLINE_CERT_SERIAL'  => '',
+            'KSEF_OFFLINE_CERT_VALID_FROM' => '',
+            'KSEF_OFFLINE_CERT_VALID_TO'   => '',
+
+            // Customer Exclusions
+            'KSEF_EXCLUDED_CUSTOMERS' => '',
+
+            // FA3 Optional Fields
+            'KSEF_FA3_INCLUDE_NRKLIENTA'   => '0',
+            'KSEF_FA3_INCLUDE_INDEKS'      => '0',
+            'KSEF_FA3_INCLUDE_GTIN'        => '0',
+            'KSEF_FA3_INCLUDE_UNIT'        => '0',
+            'KSEF_FA3_INCLUDE_BANK_DESC'   => '0',
+            'KSEF_FA3_PLACE_OF_ISSUE_MODE' => 'disabled',
+            'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM' => '',
+            'KSEF_FA3_SALE_DATE_SOURCE'      => 'delivery_date',
+            'KSEF_NBP_RATE_MODE'           => 'keep_base',
+        );
+
+        foreach ($persistentDefaults as $name => $defaultValue) {
+            $sql_check = "SELECT COUNT(*) as cnt FROM " . MAIN_DB_PREFIX . "const"
+                . " WHERE name = '" . $db->escape($name) . "'"
+                . " AND entity = " . (int) $conf->entity;
+            $resql = $db->query($sql_check);
+            if ($resql) {
+                $obj = $db->fetch_object($resql);
+                if ($obj->cnt == 0) {
+                    dolibarr_set_const($db, $name, $defaultValue,
+                        'chaine', 0, '', $conf->entity);
+                }
+                $db->free($resql);
+            }
+        }
+
         include_once DOL_DOCUMENT_ROOT . '/core/class/extrafields.class.php';
         $extrafields = new ExtraFields($db);
-        $existingFields = $extrafields->fetch_name_optionals_label('facture');
 
         $extraFieldDefs = array(
             'ksef_number' => array(
@@ -362,67 +441,165 @@ class modKSEF extends DolibarrModules
                 'totalizable' => 0,
                 'printable' => 0,
             ),
+            'ksef_sale_date' => array(
+                'label' => 'KSEF_ExtraFieldSaleDate',
+                'type' => 'date',
+                'pos' => 104,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '1',
+                'help' => 'KSEF_ExtraFieldSaleDateHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
 
         );
 
+        // Apply extrafields to both customer and supplier invoices
+        $elementTypes = array('facture', 'facture_fourn');
+        foreach ($elementTypes as $elementType) {
+            $existingFields = $extrafields->fetch_name_optionals_label($elementType);
 
-
-        foreach ($extraFieldDefs as $fieldName => $def) {
-            if (!isset($existingFields[$fieldName])) {
-                $result = $extrafields->addExtraField(
-                    $fieldName,
-                    $def['label'],
-                    $def['type'],
-                    $def['pos'],
-                    $def['size'],
-                    'facture',
-                    $def['unique'],
-                    $def['required'],
-                    $def['default_value'],
-                    $def['param'],
-                    $def['alwayseditable'],
-                    $def['perms'],
-                    $def['list'],
-                    $def['help'],
-                    $def['computed'],
-                    $def['entity'],
-                    $def['langfile'],
-                    $def['enabled'],
-                    $def['totalizable'],
-                    $def['printable']
-                );
-                if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
-                    $this->error = $extrafields->error;
-                    return -1;
-                }
-            } else {
-                // Update existing extrafield
-                $result = $extrafields->updateExtraField(
-                    $fieldName,
-                    $def['label'],
-                    $def['type'],
-                    $def['pos'],
-                    $def['size'],
-                    'facture',
-                    $def['unique'],
-                    $def['required'],
-                    $def['default_value'],
-                    $def['param'],
-                    $def['alwayseditable'],
-                    $def['perms'],
-                    $def['list'],
-                    $def['help'],
-                    $def['computed'],
-                    $def['entity'],
-                    $def['langfile'],
-                    $def['enabled'],
-                    $def['totalizable'],
-                    $def['printable']
-                );
-                if ($result > 0) {
-                    dol_syslog("modKSEF::init - Updated extrafield '$fieldName'", LOG_INFO);
+            foreach ($extraFieldDefs as $fieldName => $def) {
+                if (!isset($existingFields[$fieldName])) {
+                    $result = $extrafields->addExtraField(
+                        $fieldName,
+                        $def['label'],
+                        $def['type'],
+                        $def['pos'],
+                        $def['size'],
+                        $elementType,
+                        $def['unique'],
+                        $def['required'],
+                        $def['default_value'],
+                        $def['param'],
+                        $def['alwayseditable'],
+                        $def['perms'],
+                        $def['list'],
+                        $def['help'],
+                        $def['computed'],
+                        $def['entity'],
+                        $def['langfile'],
+                        $def['enabled'],
+                        $def['totalizable'],
+                        $def['printable']
+                    );
+                    if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
+                        $this->error = $extrafields->error;
+                        return -1;
+                    }
+                } else {
+                    // Update existing extrafield
+                    $result = $extrafields->updateExtraField(
+                        $fieldName,
+                        $def['label'],
+                        $def['type'],
+                        $def['pos'],
+                        $def['size'],
+                        $elementType,
+                        $def['unique'],
+                        $def['required'],
+                        $def['default_value'],
+                        $def['param'],
+                        $def['alwayseditable'],
+                        $def['perms'],
+                        $def['list'],
+                        $def['help'],
+                        $def['computed'],
+                        $def['entity'],
+                        $def['langfile'],
+                        $def['enabled'],
+                        $def['totalizable'],
+                        $def['printable']
+                    );
+                    if ($result > 0) {
+                        dol_syslog("modKSEF::init - Updated extrafield '$fieldName' for $elementType", LOG_INFO);
+                    }
                 }
             }
+        }
+
+        // specific migrations for version updates
+        $migrations = array(
+            '1.2.0' => array(
+                // Add correction_data column
+                function () use ($db, $conf) {
+                    $sql_check = "SHOW COLUMNS FROM " . MAIN_DB_PREFIX . "ksef_incoming LIKE 'correction_data'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $sql_alter = "ALTER TABLE " . MAIN_DB_PREFIX . "ksef_incoming ADD COLUMN correction_data MEDIUMTEXT AFTER corrected_invoice_date";
+                        $db->query($sql_alter);
+                        dol_syslog("modKSEF::migration 1.2.0 - Added correction_data column", LOG_INFO);
+                    }
+                },
+                // composite index
+                function () use ($db, $conf) {
+                    $sql_check = "SHOW INDEX FROM " . MAIN_DB_PREFIX . "ksef_incoming WHERE Key_name = 'idx_ksef_incoming_seller_invoice'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $db->query("CREATE INDEX idx_ksef_incoming_seller_invoice ON " . MAIN_DB_PREFIX . "ksef_incoming (seller_nip, invoice_number)");
+                        dol_syslog("modKSEF::migration 1.2.0 - Added seller_nip+invoice_number index", LOG_INFO);
+                    }
+                },
+                // Re-parse stored incoming invoices
+                function () use ($db, $conf) {
+                    $migrated = 0;
+                    $sql_incoming = "SELECT rowid, fa3_xml, invoice_type FROM " . MAIN_DB_PREFIX . "ksef_incoming"
+                        . " WHERE fa3_xml IS NOT NULL AND fa3_xml != ''"
+                        . " AND entity = " . (int) $conf->entity;
+                    $resql = $db->query($sql_incoming);
+                    if ($resql) {
+                        dol_include_once('/ksef/class/fa3_parser.class.php');
+                        $parser = new FA3Parser($db);
+                        while ($obj = $db->fetch_object($resql)) {
+                            $parsed = $parser->parse($obj->fa3_xml);
+                            if ($parsed) {
+                                $updates = array();
+                                if (!empty($parsed['lines'])) {
+                                    $updates[] = "line_items = '" . $db->escape(json_encode($parsed['lines'])) . "'";
+                                }
+                                if (!empty($parsed['correction'])) {
+                                    $updates[] = "correction_data = '" . $db->escape(json_encode($parsed['correction'])) . "'";
+                                }
+                                if (!empty($updates)) {
+                                    $sql_update = "UPDATE " . MAIN_DB_PREFIX . "ksef_incoming"
+                                        . " SET " . implode(", ", $updates)
+                                        . " WHERE rowid = " . (int) $obj->rowid;
+                                    $db->query($sql_update);
+                                    $migrated++;
+                                }
+                            }
+                        }
+                        $db->free($resql);
+                    }
+                    dol_syslog("modKSEF::migration 1.2.0 - Re-parsed data for $migrated incoming invoices", LOG_INFO);
+                },
+            ),
+        );
+
+        $lastMigration = getDolGlobalString('KSEF_MIGRATION_VERSION', '');
+        foreach ($migrations as $version => $steps) {
+
+            // TODO /!\: ALWAYS MIGRATE - if commented then migrations run always
+            if (!empty($lastMigration) && version_compare($lastMigration, $version, '>=')) {
+                continue;
+            }
+            // END ALWAYS MIGRATE
+
+            dol_syslog("modKSEF::init - Running migrations for v$version", LOG_INFO);
+            foreach ($steps as $step) {
+                $step();
+            }
+            dolibarr_set_const($db, 'KSEF_MIGRATION_VERSION', $version, 'chaine', 0, '', $conf->entity);
         }
 
         return $this->_init($sql, $options);
@@ -430,7 +607,63 @@ class modKSEF extends DolibarrModules
 
     public function remove($options = '')
     {
+        global $conf, $db;
+
         $sql = array();
+
+        // purge on disable
+        if (!empty($conf->global->KSEF_PURGE_ON_DISABLE)) {
+            $constantsToPurge = array(
+                // Company & Environment
+                'KSEF_COMPANY_NIP',
+                'KSEF_COMPANY_KRS',
+                'KSEF_COMPANY_REGON',
+                'KSEF_COMPANY_BDO',
+                'KSEF_ENVIRONMENT',
+                'KSEF_TIMEOUT',
+
+                // Authentication
+                'KSEF_AUTH_METHOD',
+                'KSEF_AUTH_TOKEN',
+                'KSEF_TOKEN_UPDATED_AT',
+
+                // Authentication Certificate
+                'KSEF_AUTH_CERTIFICATE',
+                'KSEF_AUTH_PRIVATE_KEY',
+                'KSEF_AUTH_KEY_PASSWORD',
+                'KSEF_AUTH_CERT_SERIAL',
+                'KSEF_AUTH_CERT_VALID_FROM',
+                'KSEF_AUTH_CERT_VALID_TO',
+
+                // Offline Certificate
+                'KSEF_OFFLINE_CERTIFICATE',
+                'KSEF_OFFLINE_PRIVATE_KEY',
+                'KSEF_OFFLINE_KEY_PASSWORD',
+                'KSEF_OFFLINE_CERT_SERIAL',
+                'KSEF_OFFLINE_CERT_VALID_FROM',
+                'KSEF_OFFLINE_CERT_VALID_TO',
+
+                // Customer Exclusions
+                'KSEF_EXCLUDED_CUSTOMERS',
+
+                // FA3 Optional Fields
+                'KSEF_FA3_INCLUDE_NRKLIENTA',
+                'KSEF_FA3_INCLUDE_INDEKS',
+                'KSEF_FA3_INCLUDE_GTIN',
+                'KSEF_FA3_INCLUDE_UNIT',
+                'KSEF_FA3_INCLUDE_BANK_DESC',
+                'KSEF_FA3_PLACE_OF_ISSUE_MODE',
+                'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM',
+                'KSEF_FA3_SALE_DATE_SOURCE',
+                'KSEF_NBP_RATE_MODE',
+                'KSEF_MIGRATION_VERSION',
+            );
+
+            foreach ($constantsToPurge as $constName) {
+                dolibarr_del_const($db, $constName, $conf->entity);
+            }
+        }
+
         return $this->_remove($sql, $options);
     }
 }

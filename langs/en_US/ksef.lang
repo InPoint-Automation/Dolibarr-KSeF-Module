@@ -66,6 +66,10 @@ KSEF_WARNING_NO_TOKEN=Warning: No token configured
 KSEF_GetToken=Get Token
 KSEF_GenerateTokenInPortal=Generate a token in the portal under Token Management
 KSEF_VisitKSEFPortal=Visit KSeF Portal
+KSEF_AuthMethodAutoSwitchedToCert=Authentication method automatically switched to Certificate (no token configured)
+KSEF_AuthMethodAutoSwitchedToToken=Authentication method automatically switched to Token (no certificate configured)
+KSEF_PURGE_ON_DISABLE=Remove configuration data on module disable
+KSEF_PURGE_ON_DISABLE_Help=When enabled, all configuration (NIP, tokens, certificates, environment, etc.) will be permanently deleted when the module is disabled. When disabled (default), all settings are preserved through disable/enable cycles.
 
 # ============================================
 # NIP & Company Data
@@ -141,6 +145,10 @@ KSEF_FA3_PLACE_OF_ISSUE_DISABLED=Disabled
 KSEF_FA3_PLACE_OF_ISSUE_COMPANY=From company address (city)
 KSEF_FA3_PLACE_OF_ISSUE_CUSTOM=Custom value
 KSEF_FA3_PLACE_OF_ISSUE_CUSTOM_Placeholder=Enter city name...
+KSEF_FA3_SALE_DATE_SOURCE=Default Date of Sale Source
+KSEF_FA3_SALE_DATE_SOURCE_Help=Controls how the ksef_sale_date extrafield is auto-populated. "Linked delivery/order date" will prioritize shipment date, order delivery date, order date, and then invoice date if they exist. "Invoice date" always uses the invoice date directly. The extrafield can still be manually overridden after creation.
+KSEF_FA3_SALE_DATE_SOURCE_INVOICE=Invoice date only
+KSEF_FA3_SALE_DATE_SOURCE_DELIVERY=Linked delivery/order date (default)
 
 # ============================================
 # Connection & Testing
@@ -436,6 +444,9 @@ KSEF_StatusRejected=Rejected
 KSEF_StatusFailed=Failed
 KSEF_StatusOffline=Offline
 KSEF_StatusValidationFailed=Validation Failed
+KSEF_ExtraFieldSaleDate=Date of Sale
+KSEF_ExtraFieldSaleDateHelp=Date of sale/delivery. Auto-populated from linked sales order delivery date, or invoice date. Can be manually overridden.
+KSEF_NotSubmitted=No KSeF data
 
 # ============================================
 # Currency
@@ -756,6 +767,9 @@ KSEF_VATExempt=Exempt
 KSEF_PaymentInfo=Payment Information
 KSEF_CorrectsInvoice=Corrects Invoice
 KSEF_OriginalKsefNumber=Original KSeF Number
+KSEF_CorrectsXInvoices=Corrects %s invoices
+KSEF_CorrectedInvoices=Corrected Invoices
+KSEF_CorrectionReason=Correction Reason
 
 # ============================================
 # Incoming Invoices - Actions & Status

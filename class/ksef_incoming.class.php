@@ -53,6 +53,7 @@ class KsefIncoming extends CommonObject
     public $corrected_ksef_number;
     public $corrected_invoice_number;
     public $corrected_invoice_date;
+    public $correction_data;
     public $fa3_xml;
     public $fa3_creation_date;
     public $fa3_system_info;
@@ -124,6 +125,7 @@ class KsefIncoming extends CommonObject
         $sql .= "corrected_ksef_number,";
         $sql .= "corrected_invoice_number,";
         $sql .= "corrected_invoice_date,";
+        $sql .= "correction_data,";
         $sql .= "fa3_xml,";
         $sql .= "fa3_creation_date,";
         $sql .= "fa3_system_info,";
@@ -156,6 +158,7 @@ class KsefIncoming extends CommonObject
         $sql .= " " . ($this->corrected_ksef_number ? "'" . $this->db->escape($this->corrected_ksef_number) . "'" : "NULL") . ",";
         $sql .= " " . ($this->corrected_invoice_number ? "'" . $this->db->escape($this->corrected_invoice_number) . "'" : "NULL") . ",";
         $sql .= " " . ($this->corrected_invoice_date ? (int)$this->corrected_invoice_date : "NULL") . ",";
+        $sql .= " " . ($this->correction_data ? "'" . $this->db->escape($this->correction_data) . "'" : "NULL") . ",";
         $sql .= " " . ($this->fa3_xml ? "'" . $this->db->escape($this->fa3_xml) . "'" : "NULL") . ",";
         $sql .= " " . ($this->fa3_creation_date ? (int)$this->fa3_creation_date : "NULL") . ",";
         $sql .= " " . ($this->fa3_system_info ? "'" . $this->db->escape($this->fa3_system_info) . "'" : "NULL") . ",";
@@ -251,6 +254,7 @@ class KsefIncoming extends CommonObject
                 $this->corrected_ksef_number = $obj->corrected_ksef_number;
                 $this->corrected_invoice_number = $obj->corrected_invoice_number;
                 $this->corrected_invoice_date = $obj->corrected_invoice_date;
+                $this->correction_data = $obj->correction_data;
                 $this->fa3_xml = $obj->fa3_xml;
                 $this->fa3_creation_date = $obj->fa3_creation_date;
                 $this->fa3_system_info = $obj->fa3_system_info;
@@ -402,7 +406,7 @@ class KsefIncoming extends CommonObject
 
     /**
      * @brief Check if record exists by KSeF number
-     * @param $ksef_number KSeF number
+     * @param $ksef_number KsefService number
      * @return bool True if exists
      * @called_by KSEF::syncIncomingInvoices()
      */
@@ -426,7 +430,7 @@ class KsefIncoming extends CommonObject
      * @brief Create from parsed FA(3) data
      * @param $parsedData Parsed data from FA3Parser
      * @param $rawXml Raw XML string
-     * @param $ksefNumber KSeF reference number
+     * @param $ksefNumber KsefService reference number
      * @param $environment Environment (TEST/DEMO/PRODUCTION)
      * @param $user User object
      * @return int Record ID or negative on error
@@ -464,6 +468,7 @@ class KsefIncoming extends CommonObject
             $this->corrected_ksef_number = $firstCorrected['ksef_number'] ?? null;
             $this->corrected_invoice_number = $firstCorrected['invoice_number'] ?? null;
             $this->corrected_invoice_date = !empty($firstCorrected['invoice_date']) ? strtotime($firstCorrected['invoice_date']) : null;
+            $this->correction_data = json_encode($parsedData['correction']);
         }
         $this->fa3_xml = $rawXml;
         $this->fa3_creation_date = !empty($parsedData['header']['creation_date']) ? strtotime($parsedData['header']['creation_date']) : null;
@@ -473,6 +478,50 @@ class KsefIncoming extends CommonObject
         $this->import_status = self::STATUS_NEW;
 
         return $this->create($user);
+    }
+
+
+    /**
+     * @brief Get correction data as decoded array
+     * @return array|null Correction data with 'reason', 'type', 'corrected_invoices' array, or null
+     * @called_by incoming_card.php
+     */
+    public function getCorrectionData()
+    {
+        if (empty($this->correction_data)) {
+            return null;
+        }
+        $decoded = json_decode($this->correction_data, true);
+        if (!is_array($decoded)) return null;
+        return $decoded;
+    }
+
+
+    /**
+     * @brief Fetch an incoming invoice by seller NIP and invoice number
+     * @param string $sellerNip Seller NIP
+     * @param string $invoiceNumber Invoice number (P_2)
+     * @return int 1 if found, 0 if not, -1 on error
+     * @called_by incoming_card.php
+     */
+    public function fetchBySellerAndInvoice($sellerNip, $invoiceNumber)
+    {
+        $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . $this->table_element
+            . " WHERE seller_nip = '" . $this->db->escape($sellerNip) . "'"
+            . " AND invoice_number = '" . $this->db->escape($invoiceNumber) . "'"
+            . " LIMIT 1";
+
+        $resql = $this->db->query($sql);
+        if ($resql) {
+            if ($this->db->num_rows($resql) > 0) {
+                $obj = $this->db->fetch_object($resql);
+                $this->db->free($resql);
+                return $this->fetch($obj->rowid);
+            }
+            $this->db->free($resql);
+            return 0;
+        }
+        return -1;
     }
 
 
@@ -487,7 +536,36 @@ class KsefIncoming extends CommonObject
             return array();
         }
         $decoded = json_decode($this->line_items, true);
-        return is_array($decoded) ? $decoded : array();
+        if (!is_array($decoded)) return array();
+
+        // Calculate unit prices
+        foreach ($decoded as &$line) {
+            if (empty($line['unit_price_net']) && !empty($line['net_amount']) && !empty($line['quantity'])) {
+                $line['unit_price_net'] = round($line['net_amount'] / $line['quantity'], 4);
+            }
+            if (empty($line['unit_price_gross']) && !empty($line['gross_amount']) && !empty($line['quantity'])) {
+                $line['unit_price_gross'] = round($line['gross_amount'] / $line['quantity'], 4);
+            }
+
+            // calculate net from gross
+            $vatRate = isset($line['vat_rate']) && is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
+            $vatMultiplier = 1 + $vatRate / 100;
+            if (empty($line['net_amount']) && !empty($line['gross_amount']) && $vatMultiplier > 0) {
+                $line['net_amount'] = round($line['gross_amount'] / $vatMultiplier, 2);
+            }
+            if (empty($line['unit_price_net']) && !empty($line['unit_price_gross']) && $vatMultiplier > 0) {
+                $line['unit_price_net'] = round($line['unit_price_gross'] / $vatMultiplier, 4);
+            }
+            // calculate gross from net
+            if (empty($line['gross_amount']) && !empty($line['net_amount'])) {
+                $line['gross_amount'] = round($line['net_amount'] * $vatMultiplier, 2);
+            }
+            if (empty($line['unit_price_gross']) && !empty($line['unit_price_net'])) {
+                $line['unit_price_gross'] = round($line['unit_price_net'] * $vatMultiplier, 4);
+            }
+        }
+
+        return $decoded;
     }
 
 

@@ -161,6 +161,15 @@ if ($action == 'update') {
             dolibarr_set_const($db, 'KSEF_AUTH_TOKEN', $encrypted, 'chaine', 0, '', $conf->entity);
             dolibarr_set_const($db, 'KSEF_TOKEN_UPDATED_AT', dol_now(), 'chaine', 0, '', $conf->entity);
             setEventMessages($langs->trans("KSEF_TOKEN_SAVED"), null, 'mesgs');
+
+            // Auto-select
+            $has_cert_now = !empty($conf->global->KSEF_AUTH_CERTIFICATE)
+                && !empty($conf->global->KSEF_AUTH_PRIVATE_KEY)
+                && !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
+            if (!$has_cert_now) {
+                dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'token',
+                    'chaine', 0, '', $conf->entity);
+            }
         }
     }
 
@@ -173,6 +182,10 @@ if ($action == 'update') {
     if (!empty($color)) {
         dolibarr_set_const($db, 'KSEF_BUTTON_COLOR', $color, 'chaine', 0, '', $conf->entity);
     }
+
+    // Purge on disable
+    $purge_val = GETPOST('KSEF_PURGE_ON_DISABLE', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_PURGE_ON_DISABLE', $purge_val, 'chaine', 0, '', $conf->entity);
 
     // Optional Fields
     $fa3_nrklienta_val = GETPOST('KSEF_FA3_INCLUDE_NRKLIENTA', 'alpha') ? '1' : '0';
@@ -197,6 +210,12 @@ if ($action == 'update') {
     }
     $place_of_issue_custom = GETPOST('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM', 'alphanohtml');
     dolibarr_set_const($db, 'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM', trim($place_of_issue_custom), 'chaine', 0, '', $conf->entity);
+
+    // Sale Date Source
+    $sale_date_source = GETPOST('KSEF_FA3_SALE_DATE_SOURCE', 'alpha');
+    if (in_array($sale_date_source, array('invoice_date', 'delivery_date'))) {
+        dolibarr_set_const($db, 'KSEF_FA3_SALE_DATE_SOURCE', $sale_date_source, 'chaine', 0, '', $conf->entity);
+    }
 
     // NBP Rate Mode
     $nbp_rate_mode = GETPOST('KSEF_NBP_RATE_MODE', 'alpha');
@@ -268,6 +287,19 @@ if ($action == 'upload_auth_cert') {
             } else {
                 setEventMessages($langs->trans("KSEF_PrivateKeyValidated"), null, 'mesgs');
             }
+        }
+    }
+
+    // Auto-select
+    if (!$error_count) {
+        $has_token_now = !empty($conf->global->KSEF_AUTH_TOKEN);
+        $current_method = $conf->global->KSEF_AUTH_METHOD ?? 'token';
+        if (!$has_token_now && $current_method != 'certificate') {
+            dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'certificate',
+                'chaine', 0, '', $conf->entity);
+            setEventMessages(
+                $langs->trans("KSEF_AuthMethodAutoSwitchedToCert"), null, 'mesgs'
+            );
         }
     }
 
@@ -601,6 +633,14 @@ $array_colors = array(
 print $form->selectarray('KSEF_BUTTON_COLOR', $array_colors, $conf->global->KSEF_BUTTON_COLOR ?? '#dc3545');
 print '</td></tr>';
 
+// Purge configuration on module disable
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_PURGE_ON_DISABLE'), $langs->trans('KSEF_PURGE_ON_DISABLE_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_PURGE_ON_DISABLE" id="KSEF_PURGE_ON_DISABLE" value="1" ' . (!empty($conf->global->KSEF_PURGE_ON_DISABLE) ? 'checked' : '') . '>';
+print ' <label for="KSEF_PURGE_ON_DISABLE">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
 print '</table>';
 
 // Optional Fields
@@ -670,6 +710,18 @@ function togglePlaceOfIssueCustom() {
 }
 </script>';
 
+// P_6/Sale Date Source
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_SALE_DATE_SOURCE'), $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_Help')) . '</td>';
+print '<td>';
+$sale_date_modes = array(
+    'invoice_date' => $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_INVOICE'),
+    'delivery_date' => $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_DELIVERY'),
+);
+$current_sale_date_source = getDolGlobalString('KSEF_FA3_SALE_DATE_SOURCE', 'delivery_date');
+print $form->selectarray('KSEF_FA3_SALE_DATE_SOURCE', $sale_date_modes, $current_sale_date_source, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
 print '</table>';
 
 // Multicurrency Settings
@@ -710,7 +762,8 @@ if ($no_auth_configured) {
 }
 
 // Token option
-$token_selected = ($current_auth_method == 'token' || (empty($current_auth_method) && $has_token && !$has_auth_cert));
+$token_selected = ($current_auth_method == 'token' && $has_token)
+    || (empty($current_auth_method) && $has_token);
 $token_border_color = $token_selected ? '#28a745' : ($has_token ? '#17a2b8' : '#dee2e6');
 $token_bg_color = $token_selected ? '#f8fff8' : '#fff';
 
@@ -735,7 +788,8 @@ if ($has_token) {
 print '</div></div>';
 
 // Certificate option
-$cert_selected = ($current_auth_method == 'certificate' || (empty($current_auth_method) && $has_auth_cert && !$has_token));
+$cert_selected = ($current_auth_method == 'certificate' && $has_auth_cert)
+    || (empty($current_auth_method) && $has_auth_cert && !$has_token);
 $cert_border_color = $cert_selected ? '#28a745' : ($has_auth_cert ? '#17a2b8' : '#dee2e6');
 $cert_bg_color = $cert_selected ? '#f8fff8' : '#fff';
 

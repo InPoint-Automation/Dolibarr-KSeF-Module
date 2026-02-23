@@ -47,7 +47,7 @@ require_once DOL_DOCUMENT_ROOT . '/core/class/html.formother.class.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/date.lib.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/company.lib.php';
 dol_include_once('/ksef/class/ksef_submission.class.php');
-dol_include_once('/ksef/class/ksef.class.php');
+dol_include_once('/ksef/class/ksef_service.class.php');
 dol_include_once('/ksef/lib/ksef.lib.php');
 dol_include_once('/ksef/class/ksef_client.class.php');
 
@@ -87,7 +87,7 @@ if (isset($user->socid) && $user->socid > 0) {
 }
 
 $object = new KsefSubmission($db);
-$ksef = new KSEF($db);
+$ksef = new KSEFService($db);
 $extrafields = new ExtraFields($db);
 
 $parameters = array('socid' => $socid);
@@ -224,6 +224,18 @@ if (empty($reshook)) {
         $id = GETPOST('id', 'int');
         $submission = new KsefSubmission($db);
         if ($submission->fetch($id) > 0) {
+            // If UPO not cached, try fetching from KSeF API
+            if (empty($submission->upo_xml) && !empty($submission->ksef_number) && $submission->status == 'ACCEPTED') {
+                try {
+                    $ksef = new KsefService($db);
+                    $ksef->downloadUPO($submission->fk_facture, $user);
+                    // Re-fetch to get updated upo_xml
+                    $submission->fetch($id);
+                } catch (Exception $e) {
+                    dol_syslog("KsefStatus: UPO fetch from API failed: " . $e->getMessage(), LOG_WARNING);
+                }
+            }
+
             if (!empty($submission->upo_xml)) {
                 header('Content-Type: application/xml; charset=utf-8');
                 header('Content-Disposition: attachment; filename="UPO_' . $submission->ksef_number . '.xml"');

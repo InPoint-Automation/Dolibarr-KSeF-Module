@@ -247,22 +247,79 @@ if (empty($reshook)) {
         print ' <span class="opacitymedium">(' . dol_escape_htmltag($parser->getInvoiceTypeDescription($object->invoice_type)) . ')</span>';
     }
     // Correction reference (if KOR)
-    if ($object->invoice_type == 'KOR' && ($object->corrected_invoice_number || $object->corrected_ksef_number)) {
-        print ' <span class="opacitymediumbycolor paddingleft">' . $langs->trans("KSEF_CorrectsInvoice") . ': ';
-        if ($object->corrected_invoice_number) {
-            print dol_escape_htmltag($object->corrected_invoice_number);
-        }
-        if ($object->corrected_ksef_number) {
-            $origIncoming = new KsefIncoming($db);
-            if ($origIncoming->fetch(0, $object->corrected_ksef_number) > 0) {
-                print ' ' . $origIncoming->getNomUrl(1);
-            } else {
-                print ' ' . dol_escape_htmltag($object->corrected_ksef_number);
+    $correctionData = ($object->invoice_type == 'KOR') ? $object->getCorrectionData() : null;
+    if (empty($correctionData) && $object->invoice_type == 'KOR' && ($object->corrected_invoice_number || $object->corrected_ksef_number)) {
+        $correctionData = array(
+            'reason' => null,
+            'corrected_invoices' => array(
+                array(
+                    'invoice_number' => $object->corrected_invoice_number,
+                    'invoice_date' => $object->corrected_invoice_date ? dol_print_date($object->corrected_invoice_date, '%Y-%m-%d') : '',
+                    'ksef_number' => $object->corrected_ksef_number,
+                ),
+            ),
+        );
+    }
+    $correctedInvoices = !empty($correctionData['corrected_invoices']) ? $correctionData['corrected_invoices'] : array();
+    $correctedCount = count($correctedInvoices);
+
+    $resolvedCorrections = array();
+    if ($correctedCount > 0) {
+        foreach ($correctedInvoices as $corrInv) {
+            $resolved = array(
+                'invoice_number' => $corrInv['invoice_number'] ?? '',
+                'invoice_date' => $corrInv['invoice_date'] ?? '',
+                'ksef_number' => $corrInv['ksef_number'] ?? '',
+                'incoming' => null,
+                'supplier_invoice' => null,
+            );
+
+            $lookup = new KsefIncoming($db);
+            $found = false;
+            if (!empty($corrInv['ksef_number'])) {
+                $found = ($lookup->fetch(0, $corrInv['ksef_number']) > 0);
             }
+            if (!$found && !empty($corrInv['invoice_number']) && !empty($object->seller_nip)) {
+                $found = ($lookup->fetchBySellerAndInvoice($object->seller_nip, $corrInv['invoice_number']) > 0);
+            }
+            if ($found) {
+                $resolved['incoming'] = $lookup;
+                if ($lookup->fk_facture_fourn > 0) {
+                    $suppInv = new FactureFournisseur($db);
+                    if ($suppInv->fetch($lookup->fk_facture_fourn) > 0) {
+                        $resolved['supplier_invoice'] = $suppInv;
+                    }
+                }
+            }
+
+            $resolvedCorrections[] = $resolved;
+        }
+    }
+
+    // If we only have one, show it on left side
+    if ($correctedCount == 1) {
+        $rc = $resolvedCorrections[0];
+        print ' <span class="opacitymediumbycolor paddingleft">' . $langs->trans("KSEF_CorrectsInvoice") . ': ';
+        if ($rc['incoming']) {
+            print $rc['incoming']->getNomUrl(1);
+            if ($rc['supplier_invoice']) {
+                print ' → ' . $rc['supplier_invoice']->getNomUrl(1);
+            }
+        } else {
+            print dol_escape_htmltag($rc['invoice_number']);
         }
         print '</span>';
+    } elseif ($correctedCount > 1) {
+        // If we have a bunch, then add a column on right for all the corrections
+        print ' <span class="opacitymediumbycolor paddingleft">' . sprintf($langs->trans("KSEF_CorrectsXInvoices"), $correctedCount) . '</span>';
     }
     print '</td></tr>';
+
+    // Correction reason
+    if (!empty($correctionData['reason'])) {
+        print '<tr><td>' . $langs->trans("KSEF_CorrectionReason") . '</td>';
+        print '<td>' . dol_escape_htmltag($correctionData['reason']) . '</td></tr>';
+    }
 
     // Linked Dolibarr invoice
     if ($object->fk_facture_fourn > 0) {
@@ -416,6 +473,56 @@ if (empty($reshook)) {
         print '</div>';
     }
 
+
+    // Corrected invoice table (if we have a bunch of corrected invoices)
+    if ($correctedCount > 1) {
+        print '<div class="div-table-responsive-no-min">';
+        print '<table class="noborder paymenttable centpercent">';
+
+        print '<tr class="liste_titre">';
+        print '<td class="liste_titre">' . $langs->trans("KSEF_CorrectedInvoices") . '</td>';
+        print '<td class="center">' . $langs->trans("Date") . '</td>';
+        print '<td class="right">' . $langs->trans("SupplierInvoice") . '</td>';
+        print '</tr>';
+
+        foreach ($resolvedCorrections as $rc) {
+            print '<tr class="oddeven">';
+
+            // Invoice number / link
+            print '<td class="tdoverflowmax200">';
+            if ($rc['incoming']) {
+                print $rc['incoming']->getNomUrl(1);
+            } else {
+                print dol_escape_htmltag($rc['invoice_number']);
+            }
+            print '</td>';
+
+            // Date
+            print '<td class="center nowraponall">';
+            if (!empty($rc['invoice_date'])) {
+                print dol_print_date(strtotime($rc['invoice_date']), 'day');
+            }
+            print '</td>';
+
+            // Supplier invoice link
+            print '<td class="right">';
+            if ($rc['supplier_invoice']) {
+                print $rc['supplier_invoice']->getNomUrl(1) . ' ' . $rc['supplier_invoice']->getLibStatut(3);
+            } elseif ($rc['incoming'] && $rc['incoming']->fk_facture_fourn > 0) {
+                print '<span class="opacitymedium">-</span>';
+            } else {
+                print '<span class="opacitymedium">-</span>';
+            }
+            print '</td>';
+
+            print '</tr>';
+        }
+
+        print '</table>';
+        print '</div>';
+    }
+
+
     print '</div>'; // fichehalfright
 
     print '</div>'; // fichecenter
@@ -429,6 +536,13 @@ if (empty($reshook)) {
 
     $lines = $object->getLineItems();
     if (!empty($lines)) {
+        $hasGrossPrice = false;
+        $hasGrossAmount = false;
+        foreach ($lines as $line) {
+            if (!empty($line['unit_price_gross'])) $hasGrossPrice = true;
+            if (!empty($line['gross_amount'])) $hasGrossAmount = true;
+        }
+
         print '<div class="div-table-responsive-no-min">';
         print '<table id="tablelines" class="noborder noshadow centpercent">';
 
@@ -441,22 +555,32 @@ if (empty($reshook)) {
         print '<td class="linecolqty right">' . $langs->trans("Qty") . '</td>';
         print '<td class="linecoldiscount right nowraponall">' . $langs->trans("ReductionShort") . '</td>';
         print '<td class="linecolht right">' . $langs->trans("TotalHT") . '</td>';
+        if ($hasGrossAmount) {
+            print '<td class="linecolttc right">' . $langs->trans("TotalTTC") . '</td>';
+        }
         print '</tr>';
 
         foreach ($lines as $line) {
-            // Calculate unit price TTC
             $vatRate = is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
-            $unitPriceTTC = $line['unit_price'] * (1 + $vatRate / 100);
+
+            if (!empty($line['unit_price_gross'])) {
+                $unitPriceTTC = (float)$line['unit_price_gross'];
+            } else {
+                $unitPriceTTC = $line['unit_price_net'] * (1 + $vatRate / 100);
+            }
 
             print '<tr class="oddeven">';
             print '<td class="linecoldescription minwidth300imp">' . dol_escape_htmltag($line['description']) . '</td>';
             print '<td class="linecolrefsupplier">' . (isset($line['supplier_ref']) ? dol_escape_htmltag($line['supplier_ref']) : '') . '</td>';
             print '<td class="linecolvat nowrap right">' . ($line['vat_rate'] == 'zw' ? $langs->trans("KSEF_VATExempt") : (int)$line['vat_rate'] . '%') . '</td>';
-            print '<td class="linecoluht nowraponall right">' . price($line['unit_price'], 0, '', 1, -1, 2) . '</td>';
+            print '<td class="linecoluht nowraponall right">' . price($line['unit_price_net'], 0, '', 1, -1, 2) . '</td>';
             print '<td class="linecoluttc nowraponall right">' . price($unitPriceTTC, 0, '', 1, -1, 4) . '</td>';
             print '<td class="linecolqty nowraponall right">' . price($line['quantity'], 0, '', 1, -1, 4) . '</td>';
             print '<td class="linecoldiscount">&nbsp;</td>';
             print '<td class="linecolht nowrap right">' . price($line['net_amount'], 0, '', 1, -1, 2) . '</td>';
+            if ($hasGrossAmount) {
+                print '<td class="linecolttc nowrap right">' . price(!empty($line['gross_amount']) ? $line['gross_amount'] : 0, 0, '', 1, -1, 2) . '</td>';
+            }
             print '</tr>';
         }
 

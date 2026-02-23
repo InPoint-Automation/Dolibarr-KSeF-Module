@@ -862,7 +862,7 @@ class KsefInvoicePdf
         }
 
         $cols[] = array('h' => "Nazwa towaru\nlub usługi", 'w' => $nameWidth, 'a' => 'L', 'k' => 'description');
-        $cols[] = array('h' => "Cena\njedn.\nnetto", 'w' => $priceNetWidth, 'a' => 'R', 'k' => 'unit_price');
+        $cols[] = array('h' => "Cena\njedn.\nnetto", 'w' => $priceNetWidth, 'a' => 'R', 'k' => 'unit_price_net');
 
         if ($hasGrossPrice) {
             $cols[] = array('h' => "Cena\njedn.\nbrutto", 'w' => $priceGrossWidth, 'a' => 'R', 'k' => 'unit_price_gross');
@@ -922,7 +922,7 @@ class KsefInvoicePdf
                     case 'description': $value = $line['description'] ?? ''; break;
                     case 'quantity': $value = $this->formatQuantity($line['quantity'] ?? 0); break;
                     case 'unit': $value = $line['unit'] ?? ''; break;
-                    case 'unit_price': $value = isset($line['unit_price']) ? $this->formatMoney($line['unit_price']) : ''; break;
+                    case 'unit_price_net': $value = isset($line['unit_price_net']) ? $this->formatMoney($line['unit_price_net']) : ''; break;
                     case 'unit_price_gross': $value = isset($line['unit_price_gross']) ? $this->formatMoney($line['unit_price_gross']) : ''; break;
                     case 'discount': $value = isset($line['discount']) ? $this->formatMoney($line['discount']) : ''; break;
                     case 'vat_rate': $value = $line['vat_rate'] ?? ''; break;

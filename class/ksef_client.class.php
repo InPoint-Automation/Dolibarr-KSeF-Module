@@ -714,9 +714,13 @@ class KsefClient
                             "Authorization: Bearer {$this->session_token}",
                             'Accept: application/octet-stream'
                         ));
-                        if ($upoResp) $upoXml = $upoResp;
+                        if ($upoResp) {
+                            $upoXml = $upoResp;
+                        } else {
+                            dol_syslog("KsefClient: UPO download returned false - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
+                        }
                     } catch (Exception $e) {
-                        dol_syslog("KsefClient: UPO download warning: " . $e->getMessage(), LOG_WARNING);
+                        dol_syslog("KsefClient: UPO download exception: " . $e->getMessage(), LOG_WARNING);
                     }
 
                     return array(
@@ -1179,7 +1183,7 @@ class KsefClient
 
     /**
      * @brief Downloads UPO XML
-     * @param $ksefNumber KSeF number
+     * @param $ksefNumber KsefService number
      * @param $sessionRef Session reference (optional)
      * @return string|false UPO XML
      * @called_by KSEF::downloadUPO(), submitInvoice()
@@ -1190,9 +1194,14 @@ class KsefClient
         if (!$this->authenticate()) return false;
 
         try {
-            $endpoint = !empty($sessionRef) ? "/sessions/{$sessionRef}/invoices/{$ksefNumber}/upo" : "/invoices/{$ksefNumber}/upo";
+            if (!empty($sessionRef)) {
+                $endpoint = "/sessions/{$sessionRef}/invoices/ksef/{$ksefNumber}/upo";
+            } else {
+                $endpoint = "/invoices/{$ksefNumber}/upo";
+            }
             $upoXml = $this->makeRequest('GET', $endpoint, null, array("Authorization: Bearer {$this->session_token}", 'Accept: application/octet-stream'));
             if ($upoXml) return $upoXml;
+            dol_syslog("KsefClient::downloadUPO failed - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
             throw new Exception("Failed to download UPO");
         } catch (Exception $e) {
             $this->error = "UPO download failed: " . $e->getMessage();

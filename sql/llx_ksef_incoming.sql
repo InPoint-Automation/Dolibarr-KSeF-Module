@@ -58,6 +58,7 @@ CREATE TABLE llx_ksef_incoming
     corrected_ksef_number       VARCHAR(50),
     corrected_invoice_number    VARCHAR(100),
     corrected_invoice_date      INTEGER,
+    correction_data             MEDIUMTEXT,
 
 -- XML Data
     fa3_xml                     MEDIUMTEXT,

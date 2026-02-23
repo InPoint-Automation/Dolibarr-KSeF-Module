@@ -53,7 +53,72 @@ class InterfaceKsefTriggers extends DolibarrTriggers
 
         switch ($action) {
 
+            case 'BILL_CREATE':
+                $object->fetch_optionals();
+                if (empty($object->array_options['options_ksef_sale_date'])) {
+                    $sale_date = null;
+                    $saleDateSource = getDolGlobalString('KSEF_FA3_SALE_DATE_SOURCE', 'delivery_date');
+
+                    if ($saleDateSource === 'delivery_date') {
+                        // shipment -> order delivery -> order date -> invoice date
+                        $object->fetchObjectLinked(null, '', null, '', 'OR', 1, 'sourcetype', 1);
+
+                        // linked shipments
+                        foreach (array('expedition', 'shipping') as $shipment_key) {
+                            if (!empty($object->linkedObjects[$shipment_key])) {
+                                foreach ($object->linkedObjects[$shipment_key] as $shipment) {
+                                    if (!empty($shipment->date_delivery)) {
+                                        $sale_date = $shipment->date_delivery;
+                                        break 2;
+                                    }
+                                    if (!empty($shipment->date_expedition)) {
+                                        $sale_date = $shipment->date_expedition;
+                                        break 2;
+                                    }
+                                }
+                            }
+                        }
+
+                        // linked sales orders delivery date
+                        if (empty($sale_date) && !empty($object->linkedObjects['commande'])) {
+                            foreach ($object->linkedObjects['commande'] as $order) {
+                                if (!empty($order->delivery_date)) {
+                                    $sale_date = $order->delivery_date;
+                                    break;
+                                }
+                                if (!empty($order->date_livraison)) {
+                                    $sale_date = $order->date_livraison;
+                                    break;
+                                }
+                            }
+                            // linked sales order date
+                            if (empty($sale_date)) {
+                                foreach ($object->linkedObjects['commande'] as $order) {
+                                    if (!empty($order->date_commande)) {
+                                        $sale_date = $order->date_commande;
+                                        break;
+                                    }
+                                    if (!empty($order->date)) {
+                                        $sale_date = $order->date;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // saleDateSource === 'invoice_date'
+
+                    if (empty($sale_date)) {
+                        $sale_date = $object->date;
+                    }
+
+                    $object->array_options['options_ksef_sale_date'] = $sale_date;
+                    $object->insertExtraFields();
+                }
+                return 0;
+
             case 'BILL_VALIDATE':
+                $object->fetch_optionals();
                 if (!empty($object->array_options['options_ksef_number'])) {
                     dol_syslog("KsefTriggers: Invoice " . $object->ref . " validated with KSEF number: " . $object->array_options['options_ksef_number'], LOG_INFO);
                 }

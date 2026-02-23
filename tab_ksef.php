@@ -71,11 +71,25 @@ if ($action == 'download_xml' && GETPOST('sub_id', 'int')) {
 if ($action == 'download_upo' && GETPOST('sub_id', 'int')) {
     $sub_id = GETPOST('sub_id', 'int');
     $submission = new KsefSubmission($db);
-    if ($submission->fetch($sub_id) > 0 && !empty($submission->upo_xml)) {
-        header('Content-Type: application/xml; charset=utf-8');
-        header('Content-Disposition: attachment; filename="UPO_' . $submission->ksef_number . '.xml"');
-        echo $submission->upo_xml;
-        exit;
+    if ($submission->fetch($sub_id) > 0) {
+        // If UPO not cached, try fetching from KSeF API
+        if (empty($submission->upo_xml) && !empty($submission->ksef_number) && $submission->status == 'ACCEPTED') {
+            try {
+                dol_include_once('/ksef/class/ksef_service.class.php');
+                $ksef = new KsefService($db);
+                $ksef->downloadUPO($submission->fk_facture, $user);
+                $submission->fetch($sub_id);
+            } catch (Exception $e) {
+                dol_syslog("KsefTab: UPO fetch from API failed: " . $e->getMessage(), LOG_WARNING);
+            }
+        }
+
+        if (!empty($submission->upo_xml)) {
+            header('Content-Type: application/xml; charset=utf-8');
+            header('Content-Disposition: attachment; filename="UPO_' . $submission->ksef_number . '.xml"');
+            echo $submission->upo_xml;
+            exit;
+        }
     }
 }
 
@@ -171,7 +185,7 @@ if ($resql) {
             if (!empty($obj->fa3_xml)) {
                 print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_xml&sub_id=' . $obj->rowid . '&token=' . newToken() . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadFA3XML") . '">XML</a> ';
             }
-            if ($obj->status == 'ACCEPTED' && !empty($obj->upo_xml)) {
+            if ($obj->status == 'ACCEPTED' && !empty($obj->ksef_number)) {
                 print '<a href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=download_upo&sub_id=' . $obj->rowid . '&token=' . newToken() . '" class="butAction butActionSmall" title="' . $langs->trans("KSEF_DownloadUPO") . '">UPO</a>';
             }
             print '</td>';

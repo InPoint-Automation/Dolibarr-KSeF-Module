@@ -384,11 +384,12 @@ class FA3Builder
 
         $invoiceCurrency = ksefGetInvoiceCurrency($invoice);
 
+        if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+            $invoice->fetch_optionals();
+        }
+
         $kursWaluty = null;
         if ($invoiceCurrency != 'PLN') {
-            if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-                $invoice->fetch_optionals();
-            }
 
             $dolibarrRate = $invoice->multicurrency_tx ?? 0;
             if ($dolibarrRate <= 0) {
@@ -423,8 +424,11 @@ class FA3Builder
         // P_2: Invoice Number
         $fa->appendChild($xml->createElement('P_2', $this->xmlSafe($invoice->ref)));
         // P_6: Sale Date
-        $deliveryDate = !empty($invoice->date_livraison) ? $invoice->date_livraison : $invoice->date;
-        $fa->appendChild($xml->createElement('P_6', dol_print_date($deliveryDate, '%Y-%m-%d')));
+        $saleDate = $invoice->date;
+        if (!empty($invoice->array_options['options_ksef_sale_date'])) {
+            $saleDate = $invoice->array_options['options_ksef_sale_date'];
+        }
+        $fa->appendChild($xml->createElement('P_6', dol_print_date($saleDate, '%Y-%m-%d')));
 
         // Net/Tax Amounts (P_13_* / P_14_*) - in invoice currency!!!!
         $vatSummary = $this->calculateVatSummary($invoice, $useMulticurrency);

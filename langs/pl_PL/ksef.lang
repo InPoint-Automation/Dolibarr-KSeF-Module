@@ -66,6 +66,10 @@ KSEF_WARNING_NO_TOKEN=Uwaga: Brak skonfigurowanego tokenu
 KSEF_GetToken=Uzyskaj token
 KSEF_GenerateTokenInPortal=Wygeneruj token w portalu w zakładce Zarządzanie tokenami
 KSEF_VisitKSEFPortal=Odwiedź Portal KSeF
+KSEF_AuthMethodAutoSwitchedToCert=Metoda uwierzytelniania została automatycznie przełączona na Certyfikat (nie skonfigurowano tokena)
+KSEF_AuthMethodAutoSwitchedToToken=Metoda uwierzytelniania została automatycznie przełączona na Token (nie skonfigurowano certyfikatu)
+KSEF_PURGE_ON_DISABLE=Usuń dane konfiguracyjne przy wyłączeniu modułu
+KSEF_PURGE_ON_DISABLE_Help=Po włączeniu tej opcji wszystkie dane konfiguracyjne (NIP, tokeny, certyfikaty, środowisko itp.) zostaną trwale usunięte w momencie wyłączenia modułu. Po wyłączeniu tej opcji (domyślnie) wszystkie ustawienia są zachowywane między cyklami wyłączania i włączania modułu.
 
 # ============================================
 # NIP & Company Data
@@ -141,6 +145,10 @@ KSEF_FA3_PLACE_OF_ISSUE_DISABLED=Wyłączone
 KSEF_FA3_PLACE_OF_ISSUE_COMPANY=Z adresu firmy (miasto)
 KSEF_FA3_PLACE_OF_ISSUE_CUSTOM=Wartość niestandardowa
 KSEF_FA3_PLACE_OF_ISSUE_CUSTOM_Placeholder=Wpisz nazwę miasta...
+KSEF_FA3_SALE_DATE_SOURCE=Domyślne źródło daty sprzedaży
+KSEF_FA3_SALE_DATE_SOURCE_Help=Określa, jak automatycznie wypełniane jest pole daty sprzedaży. "Z powiązanych dokumentów" ustawi w kolejności priorytetów: datę wysyłki, datę dostawy z zamówienia, datę zamówienia, a na końcu datę faktury. "Data wystawienia faktury" zawsze użyje daty faktury. Pole można później zmienić ręcznie.
+KSEF_FA3_SALE_DATE_SOURCE_INVOICE=Data wystawienia faktury
+KSEF_FA3_SALE_DATE_SOURCE_DELIVERY=Z powiązanych dokumentów (domyślnie)
 
 # ============================================
 # Connection & Testing
@@ -436,6 +444,9 @@ KSEF_StatusRejected=Odrzucona
 KSEF_StatusFailed=Błąd
 KSEF_StatusOffline=Tryb offline
 KSEF_StatusValidationFailed=Błąd walidacji
+KSEF_ExtraFieldSaleDate=Date of Sale
+KSEF_ExtraFieldSaleDateHelp=Date of sale/delivery. Auto-populated from linked sales order delivery date, or invoice date. Can be manually overridden.
+KSEF_NotSubmitted=Brak w KSeF
 
 # ============================================
 # Currency
@@ -756,6 +767,9 @@ KSEF_VATExempt=Zwolnione
 KSEF_PaymentInfo=Informacje o płatności
 KSEF_CorrectsInvoice=Koryguje fakturę
 KSEF_OriginalKsefNumber=Oryginalny numer KSeF
+KSEF_CorrectsXInvoices=Koryguje %s faktur
+KSEF_CorrectedInvoices=Faktury korygowane
+KSEF_CorrectionReason=Przyczyna korekty
 
 # ============================================
 # Incoming Invoices - Actions & Status

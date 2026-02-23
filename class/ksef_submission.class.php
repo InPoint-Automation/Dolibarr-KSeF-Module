@@ -61,7 +61,7 @@ class KsefSubmission extends CommonObject
     const STATUS_TIMEOUT = 'TIMEOUT';
     const MAX_RETRY_COUNT = 30;
 
-    public function __construct($db)
+    public function __construct($db = null)
     {
         $this->db = $db;
         $this->retry_count = 0;
@@ -207,7 +207,9 @@ class KsefSubmission extends CommonObject
         $sql .= " offline_mode = " . ($this->offline_mode ? "'" . $this->db->escape($this->offline_mode) . "'" : "NULL") . ",";
         $sql .= " offline_deadline = " . ($this->offline_deadline ? (int)$this->offline_deadline : "NULL") . ",";
         $sql .= " offline_detected_reason = " . ($this->offline_detected_reason ? "'" . $this->db->escape($this->offline_detected_reason) . "'" : "NULL") . ",";
-        $sql .= " original_invoice_hash = " . ($this->original_invoice_hash ? "'" . $this->db->escape($this->original_invoice_hash) . "'" : "NULL");
+        $sql .= " original_invoice_hash = " . ($this->original_invoice_hash ? "'" . $this->db->escape($this->original_invoice_hash) . "'" : "NULL") . ",";
+        $sql .= " fa3_xml = " . ($this->fa3_xml ? "'" . $this->db->escape($this->fa3_xml) . "'" : "NULL") . ",";
+        $sql .= " upo_xml = " . ($this->upo_xml ? "'" . $this->db->escape($this->upo_xml) . "'" : "NULL");
         $sql .= " WHERE rowid = " . (int)$this->rowid;
 
         dol_syslog(get_class($this) . "::update", LOG_DEBUG);
@@ -431,81 +433,6 @@ class KsefSubmission extends CommonObject
         }
 
         return $stats;
-    }
-
-    /**
-     * @brief Processes pending submissions (cron job)
-     * @param $user User object
-     * @return int Number processed
-     * @called_by Dolibarr cron
-     * @calls KsefClient::checkInvoiceInSession()
-     * @static
-     */
-    public static function processPendingSubmissions($user)
-    {
-        global $db, $conf;
-        require_once DOL_DOCUMENT_ROOT . '/custom/ksef/class/ksef_client.class.php';
-        require_once DOL_DOCUMENT_ROOT . '/custom/ksef/class/ksef.class.php';
-
-        $submission = new KsefSubmission($db);
-        $pending = $submission->fetchPending($conf->global->KSEF_ENVIRONMENT);
-
-        if (!$pending) return 0;
-
-        $processed = 0;
-        $ksef = new KSEF($db);
-        $ksefClient = new KsefClient($db, $conf->global->KSEF_ENVIRONMENT);
-
-        foreach ($pending as $sub) {
-            try {
-                if ($sub->status == 'PENDING' && !empty($sub->offline_mode)) {
-                    if (!empty($sub->offline_deadline) && ksefIsDeadlinePassed($sub->offline_deadline)) {
-                        $sub->status = 'FAILED';
-                        $sub->error_message = 'Offline deadline passed without successful submission';
-                        $sub->update($user, 1);
-                        $processed++;
-                        continue;
-                    }
-                    $result = $ksef->retrySubmission($sub->fk_facture, $user);
-                    if ($result && $result['status'] == 'ACCEPTED') {
-                        $processed++;
-                    }
-                    continue;
-                }
-
-                if (in_array($sub->status, array(self::STATUS_SUBMITTED, self::STATUS_TIMEOUT))) {
-                    $invoiceStatus = $ksefClient->checkInvoiceInSession($sub->ksef_reference, $sub->ksef_reference);
-
-                    if ($invoiceStatus) {
-                        if ($invoiceStatus['status'] == 'ACCEPTED') {
-                            $sub->status = self::STATUS_ACCEPTED;
-                            $sub->ksef_number = $invoiceStatus['ksef_number'];
-                            $sub->date_acceptance = dol_now();
-                            $sub->update($user, 1);
-                            $processed++;
-                        } elseif ($invoiceStatus['status'] == 'REJECTED') {
-                            $sub->status = self::STATUS_REJECTED;
-                            $sub->error_code = $ksefClient->last_error_code;
-                            $sub->error_message = $ksefClient->error;
-                            $sub->error_details = json_encode($ksefClient->last_error_details);
-                            $sub->update($user, 1);
-                            $processed++;
-                        }
-                    }
-                }
-                $sub->date_last_check = dol_now();
-                $sub->update($user, 1);
-
-            } catch (Exception $e) {
-                $sub->error_message = $e->getMessage();
-                if ($ksefClient->last_error_code) {
-                    $sub->error_code = $ksefClient->last_error_code;
-                    $sub->error_details = json_encode($ksefClient->last_error_details);
-                }
-                $sub->update($user, 1);
-            }
-        }
-        return $processed;
     }
 
     /**

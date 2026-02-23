@@ -122,9 +122,9 @@ class ActionsKSEF
         $out .= '</div>';
         $out .= '</td></tr>';
 
-        if (!empty($object->array_options['options_ksef_number'])) {
-            $out .= '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium" style="color: #28a745;"><i class="fa fa-check-circle"></i> ' . $langs->trans('KSEF_IncludedInPDF') . ': <strong>' . htmlspecialchars($object->array_options['options_ksef_number']) . '</strong></span></td></tr>';
-        }
+//        if (!empty($object->array_options['options_ksef_number'])) {
+//            $out .= '<tr class="oddeven"><td colspan="5" style="padding: 8px;"><span class="opacitymedium" style="color: #28a745;"><i class="fa fa-check-circle"></i> ' . $langs->trans('KSEF_IncludedInPDF') . ': <strong>' . htmlspecialchars($object->array_options['options_ksef_number']) . '</strong></span></td></tr>';
+//        }
 
         $this->resprints .= $out;
         return 1;
@@ -366,7 +366,7 @@ class ActionsKSEF
      */
     public function doActions($parameters, &$object, &$action, $hookmanager)
     {
-        dol_include_once('/ksef/class/ksef.class.php');
+        dol_include_once('/ksef/class/ksef_service.class.php');
         dol_include_once('/ksef/class/ksef_submission.class.php');
         dol_include_once('/ksef/lib/ksef.lib.php');
 
@@ -533,7 +533,7 @@ class ActionsKSEF
             session_write_close();
 
             try {
-                $ksef = new KSEF($db);
+                $ksef = new KsefService($db);
                 $result = $ksef->submitInvoice($object->id, $user, 'SYNC');
 
                 if ($result && $result['status'] == 'ACCEPTED') {
@@ -564,7 +564,7 @@ class ActionsKSEF
             session_write_close();
 
             try {
-                $ksef = new KSEF($db);
+                $ksef = new KsefService($db);
                 $result = $ksef->retrySubmission($object->id, $user);
 
                 if ($result && $result['status'] == 'ACCEPTED') {
@@ -625,7 +625,7 @@ class ActionsKSEF
             session_write_close();
 
             try {
-                $ksef = new KSEF($db);
+                $ksef = new KsefService($db);
                 $result = $ksef->submitInvoiceOffline($object->id, $user, 'failed_submission');
 
                 if ($result && $result['status'] == 'OFFLINE') {
@@ -823,7 +823,7 @@ class ActionsKSEF
             ksefSessionUnset('ksef_failed_confirm');
 
             try {
-                $ksef = new KSEF($db);
+                $ksef = new KsefService($db);
 
                 if (!empty($existing->fa3_xml)) {
                     $result = $ksef->retryOfflineWithStoredXML($existing, $user);
@@ -925,7 +925,7 @@ class ActionsKSEF
             session_write_close();
 
             try {
-                $ksef = new KSEF($db);
+                $ksef = new KsefService($db);
 
                 $result = $ksef->submitInvoiceOffline($object->id, $user, $offline_reason);
 
@@ -962,7 +962,7 @@ class ActionsKSEF
             session_write_close();
 
             try {
-                $ksef = new KSEF($db);
+                $ksef = new KsefService($db);
                 $result = $ksef->submitTechnicalCorrection($object->id, $submission_id, $user);
 
                 if ($result && $result['status'] != 'ERROR') {
@@ -1023,7 +1023,7 @@ class ActionsKSEF
                 session_write_close();
 
                 try {
-                    $ksef = new KSEF($db);
+                    $ksef = new KsefService($db);
                     $submit_result = $ksef->submitInvoice($object->id, $user, 'SYNC');
 
                     if ($submit_result && $submit_result['status'] == 'NEEDS_CONFIRMATION') {
@@ -1130,7 +1130,7 @@ class ActionsKSEF
     /**
      * @brief Handles submission error display
      * @param $result Submission result array
-     * @param $ksef_error KSEF error message
+     * @param $ksef_error KsefService error message
      * @param $langs Language object
      * @called_by doActions()
      */
@@ -1173,6 +1173,26 @@ class ActionsKSEF
 
             print '<style>tr:has(.facture_extras_ksef_number), tr:has(.facture_extras_ksef_status), tr:has(.facture_extras_ksef_submission_date) { display: none !important; }</style>';
 
+            // Relocate ksef_sale_date below the invoice date field
+            print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var saleDateRow = jQuery("tr").has(".facture_extras_ksef_sale_date");
+    if (!saleDateRow.length) return;
+    // Try edit button first (draft invoices)
+    var dateRow = jQuery("a[href*=\'action=editinvoicedate\']").closest("table.nobordernopadding").closest("tr");
+    // Fallback: find by label text (validated invoices where edit button is gone)
+    if (!dateRow.length) {
+        var label = ' . json_encode($langs->transnoentities("DateInvoice")) . ';
+        dateRow = jQuery("table.border.tableforfield > tbody > tr").filter(function() {
+            return jQuery(this).children("td").first().text().trim() === label;
+        }).first();
+    }
+    if (dateRow.length) {
+        saleDateRow.detach().insertAfter(dateRow).show();
+    }
+});
+</script>';
+
             $submission = new KsefSubmission($db);
             $result = $submission->fetchByInvoice($object->id);
 
@@ -1210,7 +1230,82 @@ class ActionsKSEF
                 }
 
                 print '</td></tr>';
+
+                // Lock date fields once KSeF number is assigned
+                if (!empty($submission->ksef_number)) {
+                    print '<style>a[href*="attribute=ksef_sale_date"], a[href*="attribute=ksef_kurs_data"] { display: none !important; }</style>';
+                }
             }
+        }
+
+        if ($currentcontext == 'invoicesuppliercard') {
+            if (empty($object) || empty($object->id)) {
+                return 0;
+            }
+
+            $langs->load("ksef@ksef");
+
+            // Hide auto-managed extrafields from default display
+            print '<style>tr:has(.invoice_supplier_extras_ksef_number), tr:has(.invoice_supplier_extras_ksef_status), tr:has(.invoice_supplier_extras_ksef_submission_date), tr:has(.invoice_supplier_extras_ksef_kurs_data) { display: none !important; }</style>';
+
+            // Relocate ksef_sale_date below the invoice date field
+            print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var saleDateRow = jQuery("tr").has(".invoice_supplier_extras_ksef_sale_date");
+    if (!saleDateRow.length) return;
+    // Try edit button first (draft supplier invoices)
+    var dateRow = jQuery("a[href*=\'action=editinvoicedate\']").closest("table.nobordernopadding").closest("tr");
+    // Fallback: find by label text
+    if (!dateRow.length) {
+        var label = ' . json_encode($langs->transnoentities("DateInvoice")) . ';
+        dateRow = jQuery("table.border.tableforfield > tbody > tr, table.border.centpercent.tableforfield > tbody > tr").filter(function() {
+            return jQuery(this).children("td").first().text().trim() === label;
+        }).first();
+    }
+    if (dateRow.length) {
+        saleDateRow.detach().insertAfter(dateRow).show();
+    }
+});
+</script>';
+
+            // Display KSeF status (formatted, replaces raw extrafields)
+            $ksefNumber = $object->array_options['options_ksef_number'] ?? '';
+            $ksefStatus = $object->array_options['options_ksef_status'] ?? '';
+            $ksefSubmissionDate = $object->array_options['options_ksef_submission_date'] ?? '';
+
+            dol_include_once('/ksef/lib/ksef.lib.php');
+
+            print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_Status") . '</td><td colspan="3">';
+
+            if (!empty($ksefNumber)) {
+                if (!empty($ksefStatus)) {
+                    print ksefGetStatusBadge($ksefStatus);
+                    print ' ';
+                }
+
+                $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+                $is_online_ksef_number = (strpos($ksefNumber, 'OFFLINE') === false &&
+                    strpos($ksefNumber, 'PENDING') === false &&
+                    strpos($ksefNumber, 'ERROR') === false);
+
+                if ($is_online_ksef_number) {
+                    $verifyUrl = ksefGetVerificationURL($ksefNumber, null, $environment);
+                    print '<a href="' . $verifyUrl . '" target="_blank" style="text-decoration: none;"><span class="badge badge-info">' . dol_escape_htmltag($ksefNumber) . '</span></a>';
+                } else {
+                    print '<span class="badge badge-secondary">' . dol_escape_htmltag($ksefNumber) . '</span>';
+                }
+
+                if (!empty($ksefSubmissionDate)) {
+                    print '<br><small style="color: #666;">' . $langs->trans("KSEF_SubmittedOn") . ': ' . dol_print_date($ksefSubmissionDate, 'dayhour') . '</small>';
+                }
+
+                // Lock date fields once KSeF number is assigned
+                print '<style>a[href*="attribute=ksef_sale_date"], a[href*="attribute=ksef_kurs_data"] { display: none !important; }</style>';
+            } else {
+                print '<span class="badge badge-status0 badge-status">' . $langs->trans("KSEF_NotSubmitted") . '</span>';
+            }
+
+            print '</td></tr>';
         }
 
         if ($currentcontext == 'thirdpartycard') {

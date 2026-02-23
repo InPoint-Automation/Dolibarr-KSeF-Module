@@ -1,4 +1,5 @@
 <?php
+
 /* Copyright (C) 2025-2026 InPoint Automation Sp z o.o.
  *
  * This program is free software: you can redistribute it and/or modify
@@ -16,7 +17,7 @@
  */
 
 /**
- * \file    ksef/class/ksef.class.php
+ * \file    ksef/class/ksef_service.class.php
  * \ingroup ksef
  * \brief   Main KSEF class
  */
@@ -24,7 +25,7 @@
 require_once DOL_DOCUMENT_ROOT . '/core/class/commonobject.class.php';
 require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture.class.php';
 
-class KSEF extends CommonObject
+class KsefService extends CommonObject
 {
     public $element = 'ksef';
     public $table_element = 'ksef_submissions';
@@ -624,8 +625,18 @@ class KSEF extends CommonObject
             if (!empty($submission->upo_xml)) return $submission->upo_xml;
 
             $sessionRef = null;
-            if (!empty($submission->ksef_reference) && strpos($submission->ksef_reference, '-SO-') !== false) {
+            if (!empty($submission->api_response)) {
+                $apiData = json_decode($submission->api_response, true);
+                if (!empty($apiData['session_reference'])) {
+                    $sessionRef = $apiData['session_reference'];
+                }
+            }
+            if (empty($sessionRef) && !empty($submission->ksef_reference) && strpos($submission->ksef_reference, '-SO-') !== false) {
                 $sessionRef = $submission->ksef_reference;
+            }
+
+            if (empty($sessionRef)) {
+                throw new Exception("No session reference available for UPO download");
             }
 
             $upo_xml = $this->client->downloadUPO($submission->ksef_number, $sessionRef);
@@ -1133,5 +1144,325 @@ class KSEF extends CommonObject
         $syncState->last_sync_total = 0;
         $syncState->rate_limit_until = 0;
         return $syncState->save() > 0;
+    }
+
+    /**
+     * Check statuses of pending/submitted invoices.
+     * @return int 0=OK, negative=error
+     */
+    public function cronCheckStatuses()
+    {
+        global $conf, $user;
+        $this->output = '';
+        $processed = 0;
+        $errors = 0;
+
+        try {
+            dol_include_once('/ksef/class/ksef_submission.class.php');
+            dol_include_once('/ksef/class/ksef_client.class.php');
+            dol_include_once('/ksef/lib/ksef.lib.php');
+
+            $submission = new KsefSubmission($this->db);
+            $pending = $submission->fetchPending(
+                $conf->global->KSEF_ENVIRONMENT ?? 'TEST'
+            );
+
+            if (!$pending || count($pending) == 0) {
+                $this->output = 'No pending submissions found';
+                return 0;
+            }
+
+            $ksefClient = new KsefClient(
+                $this->db, $conf->global->KSEF_ENVIRONMENT ?? 'TEST'
+            );
+
+            foreach ($pending as $sub) {
+                try {
+                    // expired offline deadlines
+                    if ($sub->status == KsefSubmission::STATUS_PENDING
+                        && !empty($sub->offline_mode)
+                        && !empty($sub->offline_deadline)
+                        && function_exists('ksefIsDeadlinePassed')
+                        && ksefIsDeadlinePassed($sub->offline_deadline)
+                    ) {
+                        $sub->status = KsefSubmission::STATUS_FAILED;
+                        $sub->error_message =
+                            'Offline deadline passed without successful submission';
+                        $sub->date_last_check = dol_now();
+                        $sub->update($user, 1);
+                        $processed++;
+                        continue;
+                    }
+
+                    // offline pending submissions
+                    if ($sub->status == KsefSubmission::STATUS_PENDING
+                        && !empty($sub->offline_mode)
+                    ) {
+                        $result = $this->retrySubmission($sub->fk_facture, $user);
+                        $processed++;
+                        continue;
+                    }
+
+                    // status for submitted/timeout invoices
+                    if (in_array($sub->status, array(
+                        KsefSubmission::STATUS_SUBMITTED,
+                        KsefSubmission::STATUS_TIMEOUT
+                    ))) {
+                        $invoiceStatus = $ksefClient->checkInvoiceInSession(
+                            $sub->ksef_reference, $sub->ksef_reference
+                        );
+
+                        if ($invoiceStatus) {
+                            if ($invoiceStatus['status'] == 'ACCEPTED') {
+                                $sub->status = KsefSubmission::STATUS_ACCEPTED;
+                                $sub->ksef_number = $invoiceStatus['ksef_number'];
+                                $sub->date_acceptance = dol_now();
+                            } elseif ($invoiceStatus['status'] == 'REJECTED') {
+                                $sub->status = KsefSubmission::STATUS_REJECTED;
+                                $sub->error_code = $ksefClient->last_error_code;
+                                $sub->error_message = $ksefClient->error;
+                                $sub->error_details =
+                                    json_encode($ksefClient->last_error_details);
+                            }
+                        }
+                    }
+
+                    $sub->date_last_check = dol_now();
+                    $sub->update($user, 1);
+                    $processed++;
+
+                } catch (Exception $e) {
+                    $sub->error_message = $e->getMessage();
+                    $sub->date_last_check = dol_now();
+                    $sub->update($user, 1);
+                    $errors++;
+                }
+            }
+
+            $this->output = "Processed: $processed, Errors: $errors";
+            return ($errors > 0 && $processed == 0) ? -1 : 0;
+
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+            $this->output = 'Fatal error: ' . $e->getMessage();
+            return -1;
+        }
+    }
+
+    /**
+     * Cron: Sync incoming invoices from KSeF.
+     * @return int 0=OK, negative=error
+     */
+    public function cronSyncIncoming()
+    {
+        global $conf, $user;
+
+        dol_syslog("KSEF::cronSyncIncoming START", LOG_INFO);
+        $this->output = '';
+
+        try {
+            dol_include_once('/ksef/class/ksef_sync_state.class.php');
+
+            $syncState = new KsefSyncState($this->db);
+            $syncState->load('incoming');
+
+            if (!$syncState->canSyncNow()) {
+                $reason = '';
+                if ($syncState->isFetchInProgress()) {
+                    $reason = 'Fetch already in progress';
+                } elseif ($syncState->isProcessingInProgress()) {
+                    $reason = 'Processing already in progress';
+                } elseif ($syncState->isRateLimited()) {
+                    $reason = 'Rate limited until '
+                        . $syncState->getRateLimitExpiryFormatted();
+                }
+                $this->output = 'Skipped: ' . $reason;
+                return 0;
+            }
+
+            // fetch
+            $initResult = $this->initIncomingFetch($user);
+
+            if (!$initResult) {
+                $this->error = $this->error ?: 'Failed to initiate fetch';
+                $this->output = 'Init failed: ' . $this->error;
+                return -1;
+            }
+
+            if ($initResult['status'] === 'ALREADY_PROCESSING') {
+                // Another run already started — fall through to polling
+                dol_syslog("KSEF::cronSyncIncoming fetch already initiated, polling", LOG_INFO);
+            }
+
+            $maxWait = 300;
+            $elapsed = 0;
+            $interval = 30;
+
+            while ($elapsed < $maxWait) {
+                sleep($interval);
+                $elapsed += $interval;
+
+                $result = $this->checkIncomingFetchStatus($user);
+
+                if (empty($result) || empty($result['status'])) {
+                    $this->error = 'Empty status response';
+                    $this->output = 'Polling failed: empty status';
+                    return -1;
+                }
+
+                $status = $result['status'];
+
+                if ($status === 'COMPLETED') {
+                    $new = $result['new'] ?? 0;
+                    $existing = $result['existing'] ?? 0;
+                    $total = $result['total'] ?? ($new + $existing);
+                    $this->output = "Sync complete. New: $new, "
+                        . "Existing: $existing, Total: $total";
+                    return 0;
+                }
+
+                if (in_array($status, array(
+                    'FAILED', 'TIMEOUT', 'DOWNLOAD_FAILED', 'CHECK_FAILED'
+                ))) {
+                    $this->error = $result['error'] ?? $status;
+                    $this->output = 'Sync failed: ' . $this->error;
+                    return -1;
+                }
+
+                if ($status === 'RATE_LIMITED') {
+                    $this->output = 'Rate limited, will resume on next run';
+                    return 0;
+                }
+            }
+
+            $this->output = 'Sync timed out after ' . $maxWait
+                . 's, will resume on next run';
+            return 0;
+
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+            $this->output = 'Fatal error: ' . $e->getMessage();
+            return -1;
+        }
+    }
+
+    /**
+     * Cron: Download UPO confirmations for accepted invoices that lack one.
+     * @return int 0=OK, negative=error
+     */
+    public function cronDownloadUPOs()
+    {
+        global $conf, $user;
+
+        dol_syslog("KSEF::cronDownloadUPOs START", LOG_INFO);
+        $this->output = '';
+
+        try {
+            dol_include_once('/ksef/class/ksef_submission.class.php');
+
+            $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "ksef_submissions"
+                . " WHERE status = 'ACCEPTED'"
+                . " AND upo_xml IS NULL"
+                . " AND ksef_number IS NOT NULL"
+                . " AND environment = '"
+                . $this->db->escape($conf->global->KSEF_ENVIRONMENT ?? 'TEST')
+                . "'"
+                . " ORDER BY date_acceptance ASC LIMIT 50";
+
+            $resql = $this->db->query($sql);
+            if (!$resql) {
+                $this->error = $this->db->lasterror();
+                $this->output = 'Query error: ' . $this->error;
+                return -1;
+            }
+
+            $downloaded = 0;
+            $failed = 0;
+
+            while ($obj = $this->db->fetch_object($resql)) {
+                $sub = new KsefSubmission($this->db);
+                if ($sub->fetch($obj->rowid) > 0 && !empty($sub->ksef_number)) {
+                    try {
+                        // Extract session reference from stored API response
+                        $sessionRef = null;
+                        if (!empty($sub->api_response)) {
+                            $apiData = json_decode($sub->api_response, true);
+                            if (!empty($apiData['session_reference'])) {
+                                $sessionRef = $apiData['session_reference'];
+                            }
+                        }
+
+                        $upo = $this->client->downloadUPO($sub->ksef_number, $sessionRef);
+                        if ($upo) {
+                            $sub->upo_xml = $upo;
+                            $sub->update($user, 1);
+                            $downloaded++;
+                        } else {
+                            $failed++;
+                        }
+                    } catch (Exception $e) {
+                        dol_syslog("KSEF::cronDownloadUPOs error for "
+                            . $sub->ksef_number . ": " . $e->getMessage(),
+                            LOG_ERR);
+                        $failed++;
+                    }
+                }
+            }
+            $this->db->free($resql);
+
+            $this->output = "Downloaded: $downloaded, Failed: $failed";
+            return 0;
+
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+            $this->output = 'Fatal error: ' . $e->getMessage();
+            return -1;
+        }
+    }
+
+    /**
+     * Cron: Warn about approaching offline submission deadlines.
+     * @return int 0=OK, negative=error
+     */
+    public function cronWarnDeadlines()
+    {
+        global $conf;
+
+        dol_syslog("KSEF::cronWarnDeadlines START", LOG_INFO);
+        $this->output = '';
+
+        try {
+            dol_include_once('/ksef/class/ksef_submission.class.php');
+
+            $submission = new KsefSubmission($this->db);
+            $approaching = $submission->fetchCronJobs(24);
+
+            if (!$approaching || count($approaching) == 0) {
+                $this->output = 'No approaching deadlines';
+                return 0;
+            }
+
+            $warnings = 0;
+            foreach ($approaching as $sub) {
+                $hoursLeft = round(
+                    ($sub->offline_deadline - dol_now()) / 3600, 1
+                );
+                dol_syslog(
+                    "KSEF DEADLINE WARNING: Submission #"
+                    . $sub->rowid . " (invoice_id=" . $sub->fk_facture
+                    . ") has offline deadline in " . $hoursLeft . " hours",
+                    LOG_WARNING
+                );
+                $warnings++;
+            }
+
+            $this->output = "Deadlines approaching: $warnings invoices";
+            return 0;
+
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+            $this->output = 'Fatal error: ' . $e->getMessage();
+            return -1;
+        }
     }
 }

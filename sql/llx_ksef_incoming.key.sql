@@ -19,6 +19,7 @@ ALTER TABLE llx_ksef_incoming ADD UNIQUE INDEX uk_ksef_incoming_ksef_number (kse
 
 -- Indexes
 CREATE INDEX idx_ksef_incoming_seller_nip ON llx_ksef_incoming (seller_nip);
+CREATE INDEX idx_ksef_incoming_seller_invoice ON llx_ksef_incoming (seller_nip, invoice_number);
 CREATE INDEX idx_ksef_incoming_invoice_date ON llx_ksef_incoming (invoice_date);
 CREATE INDEX idx_ksef_incoming_fetch_date ON llx_ksef_incoming (fetch_date);
 CREATE INDEX idx_ksef_incoming_import_status ON llx_ksef_incoming (import_status);

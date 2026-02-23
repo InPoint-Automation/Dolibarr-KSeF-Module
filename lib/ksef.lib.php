@@ -202,7 +202,7 @@ function ksefGetEnvironmentBadge($environment)
 
 /**
  * @brief Gets KSeF verification URL
- * @param $ksef_number KSeF number
+ * @param $ksef_number KSEFService number
  * @param $invoice_hash Invoice hash
  * @param $environment Environment
  * @param $nip Seller NIP
@@ -281,7 +281,7 @@ function ksefIsCustomerExcluded($socid) {
  * @brief Updates invoice KSeF extrafields and optionally regenerates PDF
  * @param $db Database handler
  * @param $invoice_id Invoice ID
- * @param $ksef_number KSeF number (optional)
+ * @param $ksef_number KSEFService number (optional)
  * @param $status Status (optional)
  * @param $submission_date Submission date timestamp (optional)
  * @param $regenerate_pdf Regenerate PDF flag
@@ -1198,7 +1198,7 @@ function ksef_incoming_prepare_head($object)
 
 /**
  * @brief Gets KSeF verification URL for incoming invoice from raw XML
- * @param $ksef_number KSeF invoice number
+ * @param $ksef_number KSEFService invoice number
  * @param $fa3_xml Raw FA(3) XML content
  * @param $environment Environment (TEST, DEMO, PRODUCTION)
  * @return string Verification URL for KSeF portal
