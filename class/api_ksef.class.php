@@ -52,6 +52,11 @@
 
 use Luracast\Restler\RestException;
 
+/**
+ * KSeF REST API
+ * @access protected
+ * @class DolibarrApiAccess {@requires user,external}
+ */
 class KsefApi extends DolibarrApi
 {
     public function __construct()
