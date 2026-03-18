@@ -222,7 +222,7 @@ print '</div></div>';
 if ($cert_warning && $cert_days_left !== null) {
     print '<div class="warning">';
     print '<span class="fa fa-exclamation-triangle"></span> ';
-    print sprintf($langs->trans("KSEF_CertificateExpiresInDays"), $cert_days_left);
+    print $langs->trans("KSEF_CertificateExpiresInDays", $cert_days_left);
     print '</div><br>';
 }
 

@@ -219,6 +219,9 @@ $morehtmlref .= '<br>' . $langs->trans("Supplier") . ': <strong>' . dol_escape_h
 if (!empty($object->seller_nip)) {
     $morehtmlref .= ' <span class="opacitymedium">(NIP: ' . ksefFormatNIP($object->seller_nip) . ')</span>';
 }
+if (!empty($object->seller_vat_id)) {
+    $morehtmlref .= ' <span class="opacitymedium">(VAT: ' . dol_escape_htmltag($object->seller_vat_id) . ')</span>';
+}
 $morehtmlref .= '</div>';
 
 dol_banner_tab($object, 'id', $linkback, 1, 'rowid', 'ksef_number', $morehtmlref);
@@ -229,6 +232,7 @@ dol_banner_tab($object, 'id', $linkback, 1, 'rowid', 'ksef_number', $morehtmlref
  */
 
 // Call Hook tabContentViewKsefIncoming
+$linkedInvoiceExists = false;
 $parameters = array();
 $reshook = $hookmanager->executeHooks('tabContentViewKsefIncoming', $parameters, $object, $action);
 if (empty($reshook)) {
@@ -246,74 +250,49 @@ if (empty($reshook)) {
     if (!empty($parser->getInvoiceTypeDescription($object->invoice_type))) {
         print ' <span class="opacitymedium">(' . dol_escape_htmltag($parser->getInvoiceTypeDescription($object->invoice_type)) . ')</span>';
     }
-    // Correction reference (if KOR)
-    $correctionData = ($object->invoice_type == 'KOR') ? $object->getCorrectionData() : null;
-    if (empty($correctionData) && $object->invoice_type == 'KOR' && ($object->corrected_invoice_number || $object->corrected_ksef_number)) {
-        $correctionData = array(
-            'reason' => null,
-            'corrected_invoices' => array(
-                array(
-                    'invoice_number' => $object->corrected_invoice_number,
-                    'invoice_date' => $object->corrected_invoice_date ? dol_print_date($object->corrected_invoice_date, '%Y-%m-%d') : '',
-                    'ksef_number' => $object->corrected_ksef_number,
-                ),
-            ),
-        );
-    }
-    $correctedInvoices = !empty($correctionData['corrected_invoices']) ? $correctionData['corrected_invoices'] : array();
-    $correctedCount = count($correctedInvoices);
+    print '</td></tr>';
 
-    $resolvedCorrections = array();
-    if ($correctedCount > 0) {
-        foreach ($correctedInvoices as $corrInv) {
-            $resolved = array(
-                'invoice_number' => $corrInv['invoice_number'] ?? '',
-                'invoice_date' => $corrInv['invoice_date'] ?? '',
-                'ksef_number' => $corrInv['ksef_number'] ?? '',
-                'incoming' => null,
-                'supplier_invoice' => null,
-            );
+    // Correction reference
+    $correctionData = KsefIncoming::isCorrectionType($object->invoice_type) ? $object->getCorrectionData() : null;
+    $resolvedCorrections = KsefIncoming::isCorrectionType($object->invoice_type) ? $object->resolveCorrectedInvoices() : array();
+    $correctedCount = count($resolvedCorrections);
 
-            $lookup = new KsefIncoming($db);
-            $found = false;
-            if (!empty($corrInv['ksef_number'])) {
-                $found = ($lookup->fetch(0, $corrInv['ksef_number']) > 0);
-            }
-            if (!$found && !empty($corrInv['invoice_number']) && !empty($object->seller_nip)) {
-                $found = ($lookup->fetchBySellerAndInvoice($object->seller_nip, $corrInv['invoice_number']) > 0);
-            }
-            if ($found) {
-                $resolved['incoming'] = $lookup;
-                if ($lookup->fk_facture_fourn > 0) {
-                    $suppInv = new FactureFournisseur($db);
-                    if ($suppInv->fetch($lookup->fk_facture_fourn) > 0) {
-                        $resolved['supplier_invoice'] = $suppInv;
-                    }
-                }
-            }
-
-            $resolvedCorrections[] = $resolved;
-        }
-    }
-
-    // If we only have one, show it on left side
     if ($correctedCount == 1) {
         $rc = $resolvedCorrections[0];
-        print ' <span class="opacitymediumbycolor paddingleft">' . $langs->trans("KSEF_CorrectsInvoice") . ': ';
+        $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $object->ksef_number);
+        print '<tr><td>' . $langs->trans("KSEF_CorrectsInvoice") . '</td><td>';
+
+        // Line 1: KSeF number (links to incoming record if available)
+        print $langs->trans("KSEF_CorrectsKsefNr") . ': ';
         if ($rc['incoming']) {
             print $rc['incoming']->getNomUrl(1);
-            if ($rc['supplier_invoice']) {
-                print ' → ' . $rc['supplier_invoice']->getNomUrl(1);
-            }
+        } elseif (!empty($rc['ksef_number'])) {
+            print dol_escape_htmltag($rc['ksef_number']);
         } else {
+            print '<span class="opacitymedium">-</span>';
+        }
+        if ($isSelfReference) {
+            print '<br><span class="warning"><span class="fa fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_CorrectedKsefNumberSameAsOwn") . '</span>';
+        }
+
+        // Line 2: Vendor invoice reference from XML
+        if (!empty($rc['invoice_number'])) {
+            print '<br>' . $langs->trans("KSEF_VendorRef") . ': ';
             print dol_escape_htmltag($rc['invoice_number']);
         }
-        print '</span>';
+
+        // Line 3: Dolibarr supplier invoice (if imported)
+        if ($rc['supplier_invoice']) {
+            print '<br>' . $langs->trans("KSEF_ImportedAs") . ': ';
+            print $rc['supplier_invoice']->getNomUrl(1) . ' ' . $rc['supplier_invoice']->getLibStatut(5);
+        }
+
+        print '</td></tr>';
     } elseif ($correctedCount > 1) {
-        // If we have a bunch, then add a column on right for all the corrections
-        print ' <span class="opacitymediumbycolor paddingleft">' . sprintf($langs->trans("KSEF_CorrectsXInvoices"), $correctedCount) . '</span>';
+        print '<tr><td>' . $langs->trans("KSEF_CorrectedInvoices") . '</td><td>';
+        print $langs->trans("KSEF_CorrectsXInvoices", $correctedCount);
+        print '</td></tr>';
     }
-    print '</td></tr>';
 
     // Correction reason
     if (!empty($correctionData['reason'])) {
@@ -321,12 +300,44 @@ if (empty($reshook)) {
         print '<td>' . dol_escape_htmltag($correctionData['reason']) . '</td></tr>';
     }
 
-    // Linked Dolibarr invoice
+    // Linked Dolibarr invoice(s)
+    $linkedInvoiceExists = false;
+    $creditNoteExists = false;
+    $creditNoteInvoice = null;
+
+    // Check for credit note created via replace mode
+    if ($object->fk_credit_note > 0) {
+        $creditNoteInvoice = new FactureFournisseur($db);
+        if ($creditNoteInvoice->fetch($object->fk_credit_note) > 0) {
+            $creditNoteExists = true;
+        }
+    }
+
     if ($object->fk_facture_fourn > 0) {
         $linkedInvoice = new FactureFournisseur($db);
         if ($linkedInvoice->fetch($object->fk_facture_fourn) > 0) {
+            $linkedInvoiceExists = true;
+        }
+    }
+
+    $isReplaceMode = ($creditNoteExists && $linkedInvoiceExists);
+
+    if ($isReplaceMode) {
+        // Replace mode: note in the main table, full cards rendered after the main layout
+        print '<tr><td>' . $langs->trans("KSEF_ImportMode") . '</td>';
+        print '<td><span class="badgeneutral">' . $langs->trans("KSEF_UpwardCorrectionReplace") . '</span></td></tr>';
+    } elseif ($object->fk_facture_fourn > 0) {
+        if ($linkedInvoiceExists) {
             print '<tr><td>' . $langs->trans("LinkedSupplierInvoice") . '</td>';
             print '<td>' . $linkedInvoice->getNomUrl(1) . ' ' . $linkedInvoice->getLibStatut(5) . '</td></tr>';
+        } else {
+            print '<tr><td>' . $langs->trans("LinkedSupplierInvoice") . '</td>';
+            print '<td><span class="warning"><span class="fa fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_LinkedInvoiceDeleted") . '</span></td></tr>';
+        }
+
+        if ($creditNoteExists) {
+            print '<tr><td>' . $langs->trans("KSEF_ReplaceCreditNote") . '</td>';
+            print '<td>' . $creditNoteInvoice->getNomUrl(1) . ' ' . $creditNoteInvoice->getLibStatut(5) . '</td></tr>';
         }
     }
 
@@ -368,7 +379,13 @@ if (empty($reshook)) {
     print '<tr><td>' . $langs->trans("KSEF_Seller") . '</td><td>';
     print '<strong>' . dol_escape_htmltag($object->seller_name) . '</strong>';
     print '<br><span class="opacitymedium">';
-    print 'NIP: ' . ksefFormatNIP($object->seller_nip);
+    if (!empty($object->seller_nip)) {
+        print 'NIP: ' . ksefFormatNIP($object->seller_nip);
+    }
+    if (!empty($object->seller_vat_id)) {
+        if (!empty($object->seller_nip)) print '<br>';
+        print 'VAT: ' . dol_escape_htmltag($object->seller_vat_id);
+    }
     if ($object->seller_address) {
         print '<br>' . dol_escape_htmltag($object->seller_address);
     }
@@ -480,20 +497,36 @@ if (empty($reshook)) {
         print '<table class="noborder paymenttable centpercent">';
 
         print '<tr class="liste_titre">';
-        print '<td class="liste_titre">' . $langs->trans("KSEF_CorrectedInvoices") . '</td>';
+        print '<td class="liste_titre">' . $langs->trans("KSEF_CorrectsKsefNr") . '</td>';
+        print '<td class="liste_titre">' . $langs->trans("KSEF_VendorRef") . '</td>';
         print '<td class="center">' . $langs->trans("Date") . '</td>';
-        print '<td class="right">' . $langs->trans("SupplierInvoice") . '</td>';
+        print '<td class="right">' . $langs->trans("KSEF_ImportedAs") . '</td>';
         print '</tr>';
 
         foreach ($resolvedCorrections as $rc) {
+            $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $object->ksef_number);
             print '<tr class="oddeven">';
 
-            // Invoice number / link
+            // KSeF reference / link
             print '<td class="tdoverflowmax200">';
             if ($rc['incoming']) {
                 print $rc['incoming']->getNomUrl(1);
+            } elseif (!empty($rc['ksef_number'])) {
+                print dol_escape_htmltag($rc['ksef_number']);
             } else {
+                print '<span class="opacitymedium">-</span>';
+            }
+            if ($isSelfReference) {
+                print ' <span class="warning"><span class="fa fa-exclamation-triangle" title="' . dol_escape_htmltag($langs->trans("KSEF_CorrectedKsefNumberSameAsOwn")) . '"></span></span>';
+            }
+            print '</td>';
+
+            // Invoice number
+            print '<td>';
+            if (!empty($rc['invoice_number'])) {
                 print dol_escape_htmltag($rc['invoice_number']);
+            } else {
+                print '<span class="opacitymedium">-</span>';
             }
             print '</td>';
 
@@ -508,8 +541,6 @@ if (empty($reshook)) {
             print '<td class="right">';
             if ($rc['supplier_invoice']) {
                 print $rc['supplier_invoice']->getNomUrl(1) . ' ' . $rc['supplier_invoice']->getLibStatut(3);
-            } elseif ($rc['incoming'] && $rc['incoming']->fk_facture_fourn > 0) {
-                print '<span class="opacitymedium">-</span>';
             } else {
                 print '<span class="opacitymedium">-</span>';
             }
@@ -528,6 +559,43 @@ if (empty($reshook)) {
     print '</div>'; // fichecenter
 
     print '<div class="clearboth"></div><br>';
+
+
+    /*
+     * Replace mode invoice cards (credit note + replacement)
+     */
+
+    if ($isReplaceMode) {
+        // Resolve original invoice from credit note source
+        $originalInv = null;
+        if ($creditNoteInvoice->fk_facture_source > 0) {
+            $originalInv = new FactureFournisseur($db);
+            if ($originalInv->fetch($creditNoteInvoice->fk_facture_source) <= 0) {
+                $originalInv = null;
+            }
+        }
+
+        // Credit note card
+        ksefPrintSupplierInvoiceCard(
+            $creditNoteInvoice,
+            $langs->trans("KSEF_ReplaceCreditNote"),
+            'fa-minus-circle',
+            '#bc3434',
+            $langs->trans("KSEF_ReplaceCreditNoteCardDesc"),
+            $originalInv
+        );
+
+        // Replacement invoice card
+        ksefPrintSupplierInvoiceCard(
+            $linkedInvoice,
+            $langs->trans("KSEF_ReplaceNewInvoice"),
+            'fa-plus-circle',
+            '#46a546',
+            $langs->trans("KSEF_ReplaceNewInvoiceDesc")
+        );
+
+        print '<br>';
+    }
 
 
     /*
@@ -602,8 +670,10 @@ $parameters = array();
 $reshook = $hookmanager->executeHooks('addMoreActionsButtons', $parameters, $object, $action);
 if (empty($reshook)) {
     // Import to Dolibarr
-    if ($object->import_status == 'NEW' && $usercanwrite) {
+    if (($object->import_status == 'NEW' || $object->import_status == 'ERROR') && $usercanwrite) {
         print '<a class="butAction" href="' . dol_buildpath('/ksef/incoming_import.php', 1) . '?id=' . $object->id . '">' . $langs->trans("KSEF_ImportToDolibarr") . '</a>';
+    } elseif ($object->import_status == 'IMPORTED' && !$linkedInvoiceExists && $usercanwrite) {
+        print '<a class="butAction" href="' . dol_buildpath('/ksef/incoming_import.php', 1) . '?id=' . $object->id . '">' . $langs->trans("KSEF_ResetImportStatus") . '</a>';
     } elseif ($object->import_status == 'IMPORTED') {
         print '<span class="butActionRefused classfortooltip" title="' . dol_escape_htmltag($langs->trans("KSEF_AlreadyImported")) . '">' . $langs->trans("KSEF_ImportToDolibarr") . '</span>';
     }

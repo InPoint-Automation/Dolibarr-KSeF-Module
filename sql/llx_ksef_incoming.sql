@@ -23,6 +23,7 @@ CREATE TABLE llx_ksef_incoming
 
 -- Seller (Podmiot1)
     seller_nip                  VARCHAR(20),
+    seller_vat_id               VARCHAR(50),
     seller_name                 VARCHAR(255),
     seller_country              VARCHAR(2) DEFAULT 'PL',
     seller_address              TEXT,
@@ -73,6 +74,7 @@ CREATE TABLE llx_ksef_incoming
 
 -- Dolibarr
     fk_facture_fourn            INTEGER DEFAULT NULL,
+    fk_credit_note              INTEGER DEFAULT NULL,
     import_status               VARCHAR(20) DEFAULT 'NEW',
     import_date                 INTEGER,
     import_error                TEXT,

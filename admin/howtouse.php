@@ -313,9 +313,9 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
             <td>
                 <h4><?php echo $langs->trans("KSEF_Environments"); ?></h4>
                 <ul>
-                    <li><strong><?php echo $langs->trans("KSEF_ENV_TEST"); ?></strong> — <?php echo $langs->trans("KSEF_ENV_TEST_FullDesc"); ?></li>
-                    <li><strong><?php echo $langs->trans("KSEF_ENV_DEMO"); ?></strong> — <?php echo $langs->trans("KSEF_ENV_DEMO_FullDesc"); ?></li>
-                    <li><strong><?php echo $langs->trans("KSEF_ENV_PRODUCTION"); ?></strong> — <?php echo $langs->trans("KSEF_ENV_PRODUCTION_FullDesc"); ?></li>
+                    <li><strong><?php echo $langs->trans("KSEF_ENV_TEST"); ?></strong> - <?php echo $langs->trans("KSEF_ENV_TEST_FullDesc"); ?></li>
+                    <li><strong><?php echo $langs->trans("KSEF_ENV_DEMO"); ?></strong> - <?php echo $langs->trans("KSEF_ENV_DEMO_FullDesc"); ?></li>
+                    <li><strong><?php echo $langs->trans("KSEF_ENV_PRODUCTION"); ?></strong> - <?php echo $langs->trans("KSEF_ENV_PRODUCTION_FullDesc"); ?></li>
                 </ul>
 
                 <h4><?php echo $langs->trans("KSEF_Authentication"); ?></h4>
@@ -344,8 +344,8 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                     <li><?php echo $langs->trans("KSEF_Workflow_Step2"); ?></li>
                     <li><?php echo $langs->trans("KSEF_Workflow_Step3"); ?>
                         <ul>
-                            <li><strong><?php echo $langs->trans("KSEF_ValidateAndUpload"); ?></strong> — <?php echo $langs->trans("KSEF_ValidateAndUpload_Desc"); ?></li>
-                            <li><strong><?php echo $langs->trans("KSEF_UploadToKSEF"); ?></strong> — <?php echo $langs->trans("KSEF_UploadToKSEF_Desc"); ?></li>
+                            <li><strong><?php echo $langs->trans("KSEF_ValidateAndUpload"); ?></strong> - <?php echo $langs->trans("KSEF_ValidateAndUpload_Desc"); ?></li>
+                            <li><strong><?php echo $langs->trans("KSEF_UploadToKSEF"); ?></strong> - <?php echo $langs->trans("KSEF_UploadToKSEF_Desc"); ?></li>
                         </ul>
                     </li>
                     <li><?php echo $langs->trans("KSEF_Workflow_Step4"); ?></li>
@@ -353,10 +353,10 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
                 <h4><?php echo $langs->trans("KSEF_Statuses"); ?></h4>
                 <ul style="list-style: none; padding-left: 0;">
-                    <li style="margin-bottom: 8px;"><span class="badge badge-status4"><?php echo $langs->trans("KSEF_STATUS_ACCEPTED"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_ACCEPTED_Desc"); ?></li>
-                    <li style="margin-bottom: 8px;"><span class="badge badge-status3"><?php echo $langs->trans("KSEF_STATUS_PENDING"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_PENDING_Desc"); ?></li>
-                    <li style="margin-bottom: 8px;"><span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_REJECTED"); ?></span> / <span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_FAILED"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_REJECTED_Desc"); ?></li>
-                    <li style="margin-bottom: 8px;"><span class="badge badge-status1"><?php echo $langs->trans("KSEF_STATUS_OFFLINE"); ?></span> — <?php echo $langs->trans("KSEF_STATUS_OFFLINE_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status4"><?php echo $langs->trans("KSEF_STATUS_ACCEPTED"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_ACCEPTED_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status3"><?php echo $langs->trans("KSEF_STATUS_PENDING"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_PENDING_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_REJECTED"); ?></span> / <span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_FAILED"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_REJECTED_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><span class="badge badge-status1"><?php echo $langs->trans("KSEF_STATUS_OFFLINE"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_OFFLINE_Desc"); ?></li>
                 </ul>
 
                 <h4><?php echo $langs->trans("KSEF_ForeignCurrencyInvoices"); ?></h4>
@@ -393,6 +393,22 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
                 <h4><?php echo $langs->trans("KSEF_ImportingToDolibarr"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_ImportingToDolibarrDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_Importing_HowItWorks"); ?></h4>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_Importing_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Importing_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Importing_Step3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Importing_Step4"); ?></li>
+                </ol>
+
+                <p><strong><?php echo $langs->trans("KSEF_Importing_Individual"); ?></strong> - <?php echo $langs->trans("KSEF_Importing_IndividualDesc"); ?></p>
+                <p><strong><?php echo $langs->trans("KSEF_Importing_Batch"); ?></strong> - <?php echo $langs->trans("KSEF_Importing_BatchDesc"); ?></p>
+
+                <p><?php echo $langs->trans("KSEF_Importing_StockNote"); ?>
+                    <a href="<?php echo DOL_URL_ROOT; ?>/admin/stock.php"><?php echo $langs->trans("KSEF_Importing_StockNoteLink"); ?></a>.
+                    <?php echo $langs->trans("KSEF_Importing_StockNoteFreeText"); ?>
+                </p>
             </td>
         </tr>
     </table>

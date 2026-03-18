@@ -28,7 +28,7 @@ if (!defined('CSRFCHECK_WITH_TOKEN')) {
 
 // Prevent token renewal for actions that exit without page reload
 $action_raw = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
-if (in_array($action_raw, array('check_fetch_status', 'init_fetch', 'download_xml', 'download_pdf'))) {
+if (in_array($action_raw, array('check_fetch_status', 'init_fetch', 'process_incoming', 'download_xml', 'download_pdf', 'batch_import_preview', 'batch_import_execute'))) {
     if (!defined('NOTOKENRENEWAL')) {
         define('NOTOKENRENEWAL', '1');
     }
@@ -45,6 +45,7 @@ global $conf, $langs, $user, $db, $hookmanager;
 
 require_once DOL_DOCUMENT_ROOT . '/core/class/html.formother.class.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/date.lib.php';
+require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
 dol_include_once('/ksef/class/ksef_incoming.class.php');
 dol_include_once('/ksef/class/ksef_sync_state.class.php');
 dol_include_once('/ksef/class/ksef_service.class.php');
@@ -101,7 +102,34 @@ if ($action == 'check_fetch_status') {
         exit;
     }
 
+    session_write_close();
     echo json_encode($ksef->checkIncomingFetchStatus($user));
+    exit;
+}
+
+if ($action == 'process_incoming') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-cache');
+
+    if (!$user->hasRight('ksef', 'write')) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'Access denied'));
+        exit;
+    }
+
+    session_write_close();
+    ignore_user_abort(true);
+    set_time_limit(0);
+
+    echo json_encode(array('status' => 'STARTED'));
+
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    } else {
+        if (ob_get_level()) ob_end_flush();
+        flush();
+    }
+
+    $ksef->processIncomingDownload($user);
     exit;
 }
 
@@ -118,6 +146,7 @@ if ($action == 'init_fetch') {
         exit;
     }
 
+    session_write_close();
     $result = $ksef->initIncomingFetch($user);
     if ($result === false) {
         echo json_encode(array('status' => 'ERROR', 'error' => $ksef->error));
@@ -126,6 +155,288 @@ if ($action == 'init_fetch') {
     }
     exit;
 }
+
+if ($action == 'batch_import_preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-cache');
+
+    if (!$user->hasRight('ksef', 'write')) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'Access denied'));
+        exit;
+    }
+
+    $ids = GETPOST('ids', 'array');
+    if (empty($ids)) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'No invoices selected'));
+        exit;
+    }
+
+    session_write_close();
+    require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+
+    $previews = array();
+    $supplierCache = array(); // NIP => socid
+
+    foreach ($ids as $invoiceId) {
+        $record = new KsefIncoming($db);
+        if ($record->fetch((int)$invoiceId) <= 0) continue;
+        if ($record->import_status != 'NEW' && $record->import_status != 'ERROR') continue;
+
+        $preview = array(
+            'id' => $record->id,
+            'invoice_number' => $record->invoice_number,
+            'seller_name' => $record->seller_name,
+            'seller_nip' => $record->seller_nip,
+            'seller_vat_id' => $record->seller_vat_id,
+            'invoice_date' => dol_print_date($record->invoice_date, 'day'),
+            'total_gross' => price($record->total_gross, 0, $langs, 1, -1, -1, $record->currency),
+            'currency' => $record->currency,
+            'invoice_type' => $record->invoice_type,
+        );
+
+        $nip = preg_replace('/[^0-9]/', '', $record->seller_nip);
+        $cacheKey = ($record->seller_country ?: 'PL') . '_' . $nip;
+        if (isset($supplierCache[$cacheKey])) {
+            $preview['socid'] = $supplierCache[$cacheKey]['socid'];
+            $preview['supplier_name'] = $supplierCache[$cacheKey]['name'];
+            $preview['supplier_matched'] = $supplierCache[$cacheKey]['matched'];
+        } else {
+            $socid = $record->findMatchingThirdParty();
+            if ($socid > 0) {
+                $soc = new Societe($db);
+                $soc->fetch($socid);
+                $preview['socid'] = $socid;
+                $preview['supplier_name'] = $soc->name;
+                $preview['supplier_matched'] = true;
+                $supplierCache[$cacheKey] = array('socid' => $socid, 'name' => $soc->name, 'matched' => true);
+            } else {
+                $preview['socid'] = 0;
+                $preview['supplier_name'] = $record->seller_name;
+                $preview['supplier_matched'] = false;
+                $supplierCache[$cacheKey] = array('socid' => 0, 'name' => $record->seller_name, 'matched' => false);
+            }
+        }
+
+        $lines = $record->getLineItems();
+        $autoMatches = $record->autoMatchLineProducts($lines);
+        $totalLines = count($lines);
+        $matchedLines = count($autoMatches);
+        $preview['total_lines'] = $totalLines;
+        $preview['matched_lines'] = $matchedLines;
+        $preview['all_products_matched'] = ($matchedLines == $totalLines);
+
+        $lineDetails = array();
+        foreach ($lines as $line) {
+            $lineNum = $line['line_num'] ?? 0;
+            $lineDetail = array(
+                'line_num' => $lineNum,
+                'description' => $line['description'] ?? '',
+                'indeks' => $line['indeks'] ?? '',
+                'gtin' => $line['gtin'] ?? '',
+                'qty' => $line['quantity'] ?? 0,
+                'unit' => $line['unit'] ?? '',
+                'unit_price_net' => $line['unit_price_net'] ?? 0,
+                'vat_rate' => $line['vat_rate'] ?? '',
+                'net_amount' => $line['net_amount'] ?? 0,
+                'product_matched' => isset($autoMatches[$lineNum]),
+            );
+            if (isset($autoMatches[$lineNum])) {
+                $lineDetail['match_method'] = $autoMatches[$lineNum]['match_method'];
+                $lineDetail['product_ref'] = $autoMatches[$lineNum]['product_ref'];
+                $lineDetail['product_label'] = $autoMatches[$lineNum]['product_label'];
+            }
+            $lineDetails[] = $lineDetail;
+        }
+        $preview['lines'] = $lineDetails;
+
+        $preview['correction_blocked'] = false;
+        $preview['correction_issues'] = array();
+        if (KsefIncoming::isCorrectionType($record->invoice_type)) {
+            $resolvedCorrections = $record->resolveCorrectedInvoices();
+            $correctionSourceFound = false;
+            if (empty($resolvedCorrections)) {
+                $preview['correction_issues'][] = $langs->trans('KSEF_BatchCorrectionNoReference');
+                $preview['correction_blocked'] = true;
+            }
+            foreach ($resolvedCorrections as $rc) {
+                $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $record->ksef_number);
+                if ($isSelfReference) {
+                    $preview['correction_issues'][] = $langs->trans('KSEF_BatchCorrectionSelfReference');
+                    $preview['correction_blocked'] = true;
+                } elseif ($rc['incoming'] && $rc['supplier_invoice']) {
+                    $correctionSourceFound = true;
+                } elseif ($rc['incoming'] && $rc['incoming']->fk_facture_fourn <= 0) {
+                    $preview['correction_issues'][] = $langs->trans('KSEF_BatchCorrectionOriginalNotImported');
+                    $preview['correction_blocked'] = true;
+                } elseif (!empty($rc['ksef_number']) && !$rc['incoming']) {
+                    $preview['correction_issues'][] = $langs->trans('KSEF_BatchCorrectionOriginalNotInSystem');
+                    $preview['correction_blocked'] = true;
+                }
+            }
+            if (!$correctionSourceFound && empty($preview['correction_issues'])) {
+                $preview['correction_issues'][] = $langs->trans('KSEF_BatchCorrectionOriginalNotImported');
+                $preview['correction_blocked'] = true;
+            }
+            if ($preview['correction_blocked']) {
+                $preview['correction_issues'][] = $langs->trans('KSEF_BatchCorrectionUseIndividualImport');
+            }
+        }
+
+        $previews[] = $preview;
+    }
+
+    echo json_encode(array('status' => 'OK', 'invoices' => $previews));
+    exit;
+}
+
+
+/*
+ * AJAX - Batch import execute
+ */
+
+if ($action == 'batch_import_execute') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-cache');
+
+    if (!$user->hasRight('ksef', 'write')) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'Access denied'));
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $payload = json_decode($rawInput, true);
+    if (empty($payload) || !is_array($payload)) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'Invalid request data'));
+        exit;
+    }
+
+    $decisions = $payload['decisions'] ?? array();
+    if (empty($decisions) || !is_array($decisions)) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'Invalid request data'));
+        exit;
+    }
+
+    require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
+    dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_SUPPLIERS', !empty($payload['auto_create_suppliers']) ? '1' : '0', 'chaine', 0, '', $conf->entity);
+    dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_PRODUCTS', !empty($payload['auto_create_products']) ? '1' : '0', 'chaine', 0, '', $conf->entity);
+
+    session_write_close();
+    require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+    require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+
+    $results = array();
+    $createdSuppliers = array(); // NIP => socid - reuse across invoices from same seller
+
+    foreach ($decisions as $decision) {
+        $invoiceId = (int)($decision['id'] ?? 0);
+        if ($invoiceId <= 0) continue;
+
+        $record = new KsefIncoming($db);
+        if ($record->fetch($invoiceId) <= 0) {
+            $results[] = array('id' => $invoiceId, 'status' => 'ERROR', 'error' => 'Record not found');
+            continue;
+        }
+        if ($record->import_status != 'NEW' && $record->import_status != 'ERROR') {
+            $results[] = array('id' => $invoiceId, 'status' => 'SKIPPED', 'error' => 'Already processed');
+            continue;
+        }
+
+        if (KsefIncoming::isCorrectionType($record->invoice_type)) {
+            $resolvedCorrections = $record->resolveCorrectedInvoices();
+            $correctionSourceFound = false;
+            $correctionBlocked = false;
+            $blockReason = '';
+            foreach ($resolvedCorrections as $rc) {
+                $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $record->ksef_number);
+                if ($isSelfReference) {
+                    $correctionBlocked = true;
+                    $blockReason = $langs->trans('KSEF_BatchCorrectionSelfReference');
+                    break;
+                } elseif ($rc['incoming'] && $rc['supplier_invoice']) {
+                    $correctionSourceFound = true;
+                } elseif ($rc['incoming'] && $rc['incoming']->fk_facture_fourn <= 0) {
+                    $correctionBlocked = true;
+                    $blockReason = $langs->trans('KSEF_BatchCorrectionOriginalNotImported');
+                    break;
+                } elseif (!empty($rc['ksef_number']) && !$rc['incoming']) {
+                    $correctionBlocked = true;
+                    $blockReason = $langs->trans('KSEF_BatchCorrectionOriginalNotInSystem');
+                    break;
+                }
+            }
+            if (!$correctionSourceFound && !$correctionBlocked) {
+                $correctionBlocked = true;
+                $blockReason = $langs->trans('KSEF_BatchCorrectionOriginalNotImported');
+            }
+            if ($correctionBlocked) {
+                $results[] = array('id' => $invoiceId, 'status' => 'ERROR', 'error' => $blockReason, 'invoice_number' => $record->invoice_number);
+                continue;
+            }
+        }
+
+        $socid = (int)($decision['socid'] ?? 0);
+        $autoCreateSupplier = !empty($decision['auto_create_supplier']);
+
+        if ($socid <= 0 && $autoCreateSupplier) {
+            $nip = preg_replace('/[^0-9]/', '', $record->seller_nip);
+            $supplierCacheKey = ($record->seller_country ?: 'PL') . '_' . $nip;
+            if (isset($createdSuppliers[$supplierCacheKey])) {
+                $socid = $createdSuppliers[$supplierCacheKey];
+            } else {
+                $socid = $record->autoCreateSupplier($user);
+                if ($socid > 0) {
+                    $createdSuppliers[$supplierCacheKey] = $socid;
+                } else {
+                    $results[] = array('id' => $invoiceId, 'status' => 'ERROR', 'error' => 'Failed to create supplier: ' . $record->error);
+                    continue;
+                }
+            }
+        }
+
+        if ($socid <= 0) {
+            $results[] = array('id' => $invoiceId, 'status' => 'ERROR', 'error' => $langs->trans('KSEF_ImportErrorNoSupplier'));
+            continue;
+        }
+
+        $lines = $record->getLineItems();
+        $autoMatches = $record->autoMatchLineProducts($lines);
+        $lineProductMap = array();
+        foreach ($autoMatches as $ln => $match) {
+            $lineProductMap[$ln] = $match['product_id'];
+        }
+        $autoCreateProducts = !empty($decision['auto_create_products']);
+
+        if ($autoCreateProducts) {
+            foreach ($lines as $line) {
+                $lineNum = $line['line_num'] ?? 0;
+                if (!isset($lineProductMap[$lineNum])) {
+                    $productId = $record->autoCreateProduct($user, $line);
+                    if ($productId > 0) {
+                        $lineProductMap[$lineNum] = $productId;
+                    }
+                }
+            }
+        }
+
+        $result = $record->importToDolibarr($user, $socid, $lineProductMap);
+        if ($result > 0) {
+            $results[] = array('id' => $invoiceId, 'status' => 'OK', 'facture_id' => $result, 'invoice_number' => $record->invoice_number);
+        } else {
+            $results[] = array('id' => $invoiceId, 'status' => 'ERROR', 'error' => $record->error, 'invoice_number' => $record->invoice_number);
+        }
+    }
+
+    $successCount = 0;
+    $errorCount = 0;
+    foreach ($results as $r) {
+        if ($r['status'] == 'OK') $successCount++;
+        elseif ($r['status'] == 'ERROR') $errorCount++;
+    }
+
+    echo json_encode(array('status' => 'OK', 'results' => $results, 'success_count' => $successCount, 'error_count' => $errorCount));
+    exit;
+}
+
 
 /*
  * Actions
@@ -285,6 +596,7 @@ $syncState->getDisplayValues(); // Populate compatibility fields
 $stats = $incoming->getStatistics(30);
 
 $isPolling = GETPOST('polling', 'int') || $syncState->isFetchInProgress();
+$currentFetchPhase = $syncState->fetch_status;
 $showFailedState = ($syncState->fetch_status === KsefSyncState::FETCH_STATUS_FAILED || $syncState->fetch_status === KsefSyncState::FETCH_STATUS_TIMEOUT);
 
 $overlayStyle = ($isPolling || $showFailedState) ? '' : ' style="display:none;"';
@@ -339,6 +651,10 @@ print '<script>
     var langCancel = "' . dol_escape_js($langs->trans('Cancel')) . '";
     var langConfirmCancel = "' . dol_escape_js($langs->trans('KSEF_ConfirmCancelFetch')) . '";
     var langInitiating = "' . dol_escape_js($langs->trans('KSEF_Initiating')) . '";
+    var langDownloading = "' . dol_escape_js($langs->trans('KSEF_Downloading')) . '";
+    var langProcessingBatches = "' . dol_escape_js($langs->trans('KSEF_ProcessingBatches')) . '";
+    var langReadyToProcess = "' . dol_escape_js($langs->trans('KSEF_ReadyToProcess')) . '";
+    var processIncomingFired = false;
 
     function formatElapsed(seconds) {
         return String(Math.floor(seconds/60)).padStart(2,"0") + ":" + String(seconds%60).padStart(2,"0");
@@ -352,14 +668,20 @@ print '<script>
         }, 1000);
     }
 
-    function showProcessingOverlay() {
+    function showProcessingOverlay(phaseMsg) {
+        var msg = phaseMsg || langFetchInProgress;
         overlayEl.className = "info";
         overlayEl.style.display = "block";
         overlayEl.innerHTML = \'<span class="fa fa-spinner fa-spin" style="margin-right:10px;"></span>\' +
-            \'<strong>\' + langFetchInProgress + \'</strong>\' +
+            \'<strong id="ksef-phase-msg">\' + msg + \'</strong>\' +
             \'<span id="ksef-elapsed" style="margin-left:15px;" class="opacitymedium">\' + langElapsedTime + \': <span id="elapsed-val">00:00</span></span>\' +
             \'<a href="\' + baseUrl + \'?action=reset_fetch&token=\' + token + \'" class="butAction" style="position:absolute;right:15px;top:12px;" onclick="return confirm(\\\'\' + langConfirmCancel + \'\\\');"><span class="fa fa-times"></span> \' + langCancel + \'</a>\';
         elapsedEl = document.getElementById("elapsed-val");
+    }
+
+    function updatePhaseMessage(msg) {
+        var el = document.getElementById("ksef-phase-msg");
+        if (el) el.textContent = msg;
     }
 
     function showCompletedOverlay(data) {
@@ -378,6 +700,12 @@ print '<script>
             \' <a href="\' + baseUrl + \'?action=reset_fetch&token=\' + token + \'" class="butAction" style="margin-left:15px;">\' + langResetAndRetry + \'</a>\';
     }
 
+    function fireProcessIncoming() {
+        if (processIncomingFired) return;
+        processIncomingFired = true;
+        fetch(baseUrl + "?action=process_incoming&token=" + ajaxToken).catch(function() {});
+    }
+
     function poll() {
         fetch(baseUrl + "?action=check_fetch_status&token=" + ajaxToken)
         .then(function(r) { return r.json(); })
@@ -387,7 +715,29 @@ print '<script>
                 showCompletedOverlay(data);
                 setTimeout(function() { location.href = baseUrl; }, 2000);
             } else if (data.status === "PROCESSING") {
+                updatePhaseMessage(langFetchInProgress);
                 setTimeout(poll, 3000);
+            } else if (data.status === "READY_TO_PROCESS") {
+                updatePhaseMessage(langReadyToProcess);
+                fireProcessIncoming();
+                setTimeout(poll, 500);
+            } else if (data.status === "DOWNLOADING") {
+                var dlMsg = langDownloading;
+                if (data.parts_done && data.parts_total) {
+                    dlMsg += " (" + data.parts_done + "/" + data.parts_total + ")";
+                }
+                updatePhaseMessage(dlMsg);
+                setTimeout(poll, 500);
+            } else if (data.status === "PROCESSING_BATCHES") {
+                var msg = langProcessingBatches;
+                if (data.total) {
+                    msg += " (" + (data.processed||0) + "/" + data.total + ")";
+                }
+                if (data["new"] || data.existing) {
+                    msg += " \u2014 +" + (data["new"]||0) + " " + langNewInvoices.toLowerCase() + ", " + (data.existing||0) + " " + langExistingInvoices.toLowerCase();
+                }
+                updatePhaseMessage(msg);
+                setTimeout(poll, 500);
             } else if (data.status === "RATE_LIMITED") {
                 setTimeout(poll, (data.retry_after || 10) * 1000);
             } else if (data.status === "FAILED" || data.status === "TIMEOUT" || data.status === "DOWNLOAD_FAILED" || data.status === "CHECK_FAILED") {
@@ -479,6 +829,28 @@ if ($syncState) {
         print '<tr class="oddeven"><td colspan="2"><span class="warning">';
         print '<span class="fa fa-clock"></span> ' . $langs->trans("KSEF_RateLimitActive", $retryTime);
         print '</span></td></tr>';
+    }
+
+    if ($syncState->isFetchInProgress() && !empty($currentFetchPhase)) {
+        $phaseLabel = '';
+        switch ($currentFetchPhase) {
+            case KsefSyncState::FETCH_STATUS_PROCESSING:
+                $phaseLabel = $langs->trans("KSEF_PhaseWaitingKSeF");
+                break;
+            case KsefSyncState::FETCH_STATUS_READY_TO_PROCESS:
+                $phaseLabel = $langs->trans("KSEF_PhaseReadyToProcess");
+                break;
+            case KsefSyncState::FETCH_STATUS_DOWNLOADING:
+                $phaseLabel = $langs->trans("KSEF_PhaseDownloading");
+                break;
+            case KsefSyncState::FETCH_STATUS_PROCESSING_BATCHES:
+                $phaseLabel = $langs->trans("KSEF_PhaseProcessingBatches", $syncState->process_offset, $syncState->process_total);
+                break;
+        }
+        if ($phaseLabel) {
+            print '<tr class="oddeven"><td>' . $langs->trans("KSEF_CurrentStatus") . '</td>';
+            print '<td><span class="fa fa-spinner fa-spin" style="margin-right:5px;"></span>' . $phaseLabel . '</td></tr>';
+        }
     }
 } else {
     print '<tr class="oddeven"><td colspan="2"><span class="opacitymedium">';
@@ -581,14 +953,21 @@ if (!empty($search_ksef_number)) $param .= '&search_ksef_number=' . urlencode($s
 if (!empty($search_import_status)) $param .= '&search_import_status=' . urlencode($search_import_status);
 if ($optioncss != '') $param .= '&optioncss=' . urlencode($optioncss);
 
-$arrayofmassactions = array(
-    'delete' => img_picto('', 'delete', 'class="pictofixedwidth"') . $langs->trans("Delete")
-);
+$arrayofmassactions = array();
+if ($user->hasRight('ksef', 'write')) {
+    $arrayofmassactions['batch_import'] = img_picto('', 'download', 'class="pictofixedwidth"') . $langs->trans("KSEF_BatchImport");
+}
+$arrayofmassactions['predelete'] = img_picto('', 'delete', 'class="pictofixedwidth"') . $langs->trans("Delete");
 $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
 
 $arrayofselected = is_array($toselect) ? $toselect : array();
 
-print '<form method="POST" id="searchFormList" action="' . $_SERVER["PHP_SELF"] . '" name="formlist">';
+$selectedfields = '';
+if (count($arrayofmassactions)) {
+    $selectedfields .= $form->showCheckAddButtons('checkforselect', 1);
+}
+
+print '<form method="POST" id="searchFormList" action="' . $_SERVER["PHP_SELF"] . '" name="searchFormList">';
 if ($optioncss != '') print '<input type="hidden" name="optioncss" value="' . $optioncss . '">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
 print '<input type="hidden" name="formfilteraction" id="formfilteraction" value="list">';
@@ -600,6 +979,12 @@ print '<input type="hidden" name="contextpage" value="' . $contextpage . '">';
 
 print_barre_liste($langs->trans("List"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $nbtotalofrecords, $nbtotalofrecords, '', 0, '', '', $limit, 0, 0, 1);
 
+$topicmail = '';
+$modelmail = '';
+$objecttmp = new KsefIncoming($db);
+$trackid = 'ksefi';
+include DOL_DOCUMENT_ROOT.'/core/tpl/massactions_pre.tpl.php';
+
 print '<div class="div-table-responsive">';
 print '<table class="tagtable nobottomiftotal liste">' . "\n";
 
@@ -609,6 +994,8 @@ if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) {
     print '<td class="liste_titre center maxwidthsearch">' . $form->showFilterButtons('left') . '</td>';
 }
 print '<td class="liste_titre left"><input class="flat maxwidth100" type="text" name="search_invoice_number" value="' . dol_escape_htmltag($search_invoice_number) . '"></td>';
+print '<td class="liste_titre center"></td>';
+print '<td class="liste_titre center"></td>';
 print '<td class="liste_titre left"><input class="flat maxwidth150" type="text" name="search_seller_name" value="' . dol_escape_htmltag($search_seller_name) . '"></td>';
 print '<td class="liste_titre left"><input class="flat maxwidth100" type="text" name="search_seller_nip" value="' . dol_escape_htmltag($search_seller_nip) . '"></td>';
 print '<td class="liste_titre center">';
@@ -619,24 +1006,28 @@ print $form->selectarray('search_import_status', array(
 ), $search_import_status, 1, 0, 0, '', 0, 0, 0, '', 'maxwidth100');
 print '</td>';
 print '<td class="liste_titre center"></td>';
+print '<td class="liste_titre center"></td>';
 print '<td class="liste_titre right"></td>';
-print '<td class="liste_titre center maxwidthsearch">';
-if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print $form->showFilterButtons();
-print '</td>';
-if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print '<td class="liste_titre center maxwidthsearch"></td>';
+print '<td class="liste_titre center"></td>';
+if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) {
+    print '<td class="liste_titre center maxwidthsearch">' . $form->showFilterButtons() . '</td>';
+}
 print '</tr>' . "\n";
 
 // Header row
 print '<tr class="liste_titre">';
-if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList('', 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
+if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList($selectedfields, 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
 print_liste_field_titre("Invoice", $_SERVER["PHP_SELF"], "i.invoice_number", "", $param, "", $sortfield, $sortorder);
+print_liste_field_titre("", $_SERVER["PHP_SELF"], "", "", $param, '', '', '', 'center ');
+print_liste_field_titre("Type", $_SERVER["PHP_SELF"], "i.invoice_type", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("KSEF_Seller", $_SERVER["PHP_SELF"], "i.seller_name", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("NIP", $_SERVER["PHP_SELF"], "i.seller_nip", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("Status", $_SERVER["PHP_SELF"], "i.import_status", "", $param, '', $sortfield, $sortorder, 'center ');
+print_liste_field_titre("KSEF_LinkedInvoice", $_SERVER["PHP_SELF"], "", "", $param, '', '', '', '');
 print_liste_field_titre("Date", $_SERVER["PHP_SELF"], "i.invoice_date", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("Amount", $_SERVER["PHP_SELF"], "i.total_gross", "", $param, '', $sortfield, $sortorder, 'right ');
 print_liste_field_titre("Actions", $_SERVER["PHP_SELF"], "", "", $param, '', '', '', 'center maxwidthsearch');
-if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList('', 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
+if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList($selectedfields, 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
 print '</tr>' . "\n";
 
 $records = $incoming->fetchAll($filters, $sortfield, $sortorder, $limit, $offset);
@@ -656,12 +1047,33 @@ if (is_array($records) && count($records) > 0) {
         print img_object($langs->trans("Show"), 'bill', 'class="pictofixedwidth"');
         print dol_escape_htmltag($obj->invoice_number);
         print '</a>';
-        if ($obj->invoice_type == 'KOR') print ' <span class="badge badge-warning">KOR</span>';
         print '</td>';
+
+        // Import button
+        print '<td class="center nowraponall">';
+        if (($obj->import_status == 'NEW' || $obj->import_status == 'ERROR') && $user->hasRight('ksef', 'write')) {
+            print '<a class="button reposition smallpaddingimp" href="' . dol_buildpath('/ksef/incoming_import.php', 1) . '?id=' . $obj->rowid . '&action=quickimport&token=' . newToken() . '">';
+            print '<span class="fa fa-download paddingright"></span>' . $langs->trans("KSEF_Import");
+            print '</a>';
+        }
+        print '</td>';
+
+        print '<td class="center nowraponall">' . ksefGetInvoiceTypeBadge($obj->invoice_type) . '</td>';
 
         print '<td class="tdoverflowmax200">' . dol_escape_htmltag($obj->seller_name) . '</td>';
         print '<td class="nowraponall">' . ksefFormatNIP($obj->seller_nip) . '</td>';
         print '<td class="center">' . ksefGetIncomingStatusBadge($obj->import_status) . '</td>';
+
+        // Linked Dolibarr invoice
+        print '<td class="tdoverflowmax200">';
+        if ($obj->fk_facture_fourn > 0) {
+            $linkedInv = new FactureFournisseur($db);
+            if ($linkedInv->fetch($obj->fk_facture_fourn) > 0) {
+                print $linkedInv->getNomUrl(1);
+            }
+        }
+        print '</td>';
+
         print '<td class="center">' . dol_print_date($obj->invoice_date, 'day') . '</td>';
         print '<td class="right nowraponall">' . price($obj->total_gross) . ' ' . dol_escape_htmltag($obj->currency) . '</td>';
 
@@ -688,14 +1100,512 @@ if (is_array($records) && count($records) > 0) {
         print '</tr>' . "\n";
     }
 } else {
-    $colspan = 8;
-    if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) $colspan++;
+    $colspan = 11;
     print '<tr><td colspan="' . $colspan . '"><span class="opacitymedium">' . $langs->trans("NoRecordFound") . '</span></td></tr>';
 }
 
 print '</table>';
 print '</div>';
 print '</form>';
+
+
+// Batch Import Styles
+print '<style>
+.batch-row-inactive td { opacity: 0.45; }
+.batch-row-inactive td:first-child { opacity: 1; }
+.batch-row-inactive .batch-action-badge { display: none; }
+.batch-row-inactive .warning { opacity: 1; }
+.batch-blocked .batch-invoice-cell { opacity: 1 !important; }
+.batch-blocked .batch-supplier-cell { opacity: 1 !important; }
+</style>';
+
+// Batch Import
+print '<div id="batch-import-modal" style="display:none;" title="' . dol_escape_htmltag($langs->trans("KSEF_BatchImportTitle")) . '">';
+print '<div id="batch-import-loading" class="center" style="padding:20px;"><span class="fa fa-spinner fa-spin fa-2x"></span></div>';
+print '<div id="batch-import-content" style="display:none;">';
+print '<p id="batch-import-summary"></p>';
+print '<div class="div-table-responsive">';
+print '<table class="noborder centpercent" id="batch-import-table">';
+print '<thead><tr class="liste_titre">';
+print '<th class="center" style="width:30px"><input type="checkbox" id="batch-select-all" checked></th>';
+print '<th>' . $langs->trans("Invoice") . '</th>';
+print '<th>' . $langs->trans("Amount") . '</th>';
+print '<th>' . $langs->trans("Supplier") . '</th>';
+print '<th>' . $langs->trans("Products") . '</th>';
+print '</tr></thead>';
+print '<tbody></tbody>';
+print '</table>';
+print '</div>';
+print '<div style="margin-top:10px;">';
+print '<label><input type="checkbox" id="batch-auto-create-suppliers"' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', '1') ? ' checked' : '') . '> ' . $langs->trans("KSEF_BatchAutoCreateSuppliers") . '</label>';
+print ' <span class="fa fa-info-circle classfortooltip" style="opacity: 0.5;" title="' . dol_escape_htmltag($langs->trans('KSEF_BatchAutoCreateSuppliers_Help')) . '"></span><br>';
+print '<label><input type="checkbox" id="batch-auto-create-products"' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_PRODUCTS', '1') ? ' checked' : '') . '> ' . $langs->trans("KSEF_BatchAutoCreateProducts") . '</label>';
+print ' <span class="fa fa-info-circle classfortooltip" style="opacity: 0.5;" title="' . dol_escape_htmltag($langs->trans('KSEF_BatchAutoCreateProducts_Help')) . '"></span>';
+print '</div>';
+if (isModEnabled('stock')) {
+    $stockEnabled = getDolGlobalString('STOCK_CALCULATE_ON_SUPPLIER_BILL');
+    $stockShort = $stockEnabled ? $langs->trans('KSEF_StockWillIncrease') : $langs->trans('KSEF_StockWillNotIncrease');
+    $stockVerbose = $stockEnabled ? $langs->trans('KSEF_StockAutoIncreaseEnabled') : $langs->trans('KSEF_StockAutoIncreaseDisabled');
+
+    print '<div style="margin-top:10px; padding:8px; background:#f0f4f8; border-radius:4px;">';
+    print $stockShort;
+    print ' <span class="fa fa-info-circle classfortooltip" style="opacity: 0.5;" title="' . dol_escape_htmltag($stockVerbose) . '"></span>';
+    print '</div>';
+}
+print '</div>';
+print '<div id="batch-import-results" style="display:none;"></div>';
+print '</div>';
+
+// Batch Import JavaScript
+print '<script type="text/javascript">
+$(document).ready(function() {
+    var ajaxToken = ' . json_encode(currentToken()) . ';
+    var baseUrl = ' . json_encode($_SERVER["PHP_SELF"]) . ';
+    var batchData = null;
+
+    var langSupplierMatched = ' . json_encode($langs->trans("KSEF_BatchSupplierMatched")) . ';
+    var langSupplierWillCreate = ' . json_encode($langs->trans("KSEF_BatchSupplierWillCreate")) . ';
+    var langProductsMatched = ' . json_encode($langs->trans("KSEF_BatchProductsMatched")) . ';
+    var langConfirmImport = ' . json_encode($langs->trans("KSEF_BatchImportConfirm")) . ';
+    var langClose = ' . json_encode($langs->trans("Close")) . ';
+    var langImporting = ' . json_encode($langs->trans("KSEF_BatchImporting")) . ';
+    var langBatchResults = ' . json_encode($langs->trans("KSEF_BatchImportResults")) . ';
+    var langSuccess = ' . json_encode($langs->trans("KSEF_BatchImportSuccessLine")) . ';
+    var langError = ' . json_encode($langs->trans("Error")) . ';
+    var langNoImportable = ' . json_encode($langs->trans("KSEF_BatchNoImportable")) . ';
+    var langMatchedByRef = ' . json_encode($langs->trans("KSEF_MatchedByRef")) . ';
+    var langMatchedBySupplierRef = ' . json_encode($langs->trans("KSEF_MatchedBySupplierRef")) . ';
+    var langMatchedByBarcode = ' . json_encode($langs->trans("KSEF_MatchedByBarcode")) . ';
+    var langWillCreate = ' . json_encode($langs->trans("KSEF_BatchProductWillCreate")) . ';
+    var langCorrectionBlocked = ' . json_encode($langs->trans("KSEF_BatchCorrectionBlocked")) . ';
+    var langSupplierNotMatched = ' . json_encode($langs->trans("KSEF_BatchSupplierNotMatched")) . ';
+    var langSupplierNoMatch = ' . json_encode($langs->trans("KSEF_BatchSupplierNoMatch")) . ';
+    var langProductFreeText = ' . json_encode($langs->trans("KSEF_BatchProductFreeText")) . ';
+    var langProductsFreeTextWarning = ' . json_encode($langs->trans("KSEF_BatchProductsFreeTextWarning")) . ';
+    var langDescription = ' . json_encode($langs->trans("Description")) . ';
+    var langRef = ' . json_encode($langs->trans("Ref")) . ';
+    var langQty = ' . json_encode($langs->trans("Qty")) . ';
+    var langUnitPriceShort = ' . json_encode($langs->trans("PriceUHT")) . ';
+    var langProduct = ' . json_encode($langs->trans("Product")) . ';
+    var langMatchMethod = ' . json_encode($langs->trans("KSEF_MatchMethod")) . ';
+    var langVAT = ' . json_encode($langs->trans("VAT")) . ';
+    var langTotalHT = ' . json_encode($langs->trans("TotalHT")) . ';
+    var langVATExempt = ' . json_encode($langs->trans("KSEF_VATExempt")) . ';
+
+    var submitSource = null;
+    $("form#searchFormList").on("click", "button, input[type=submit]", function() {
+        submitSource = this.name || null;
+    });
+
+    $("form#searchFormList").on("submit", function(e) {
+        if (submitSource === "button_search_x" || submitSource === "button_search"
+            || submitSource === "button_removefilter_x" || submitSource === "button_removefilter") {
+            submitSource = null;
+            return true;
+        }
+        submitSource = null;
+
+        var massactionVal = $("select[name=massaction]").val();
+        if (massactionVal !== "batch_import") return true;
+
+        e.preventDefault();
+
+        var selectedIds = [];
+        $("input.checkforselect:checked").each(function() {
+            selectedIds.push($(this).val());
+        });
+
+        if (selectedIds.length === 0) {
+            alert(' . json_encode($langs->trans("NoRecordSelected")) . ');
+            return false;
+        }
+
+        $("#batch-import-loading").show();
+        $("#batch-import-content").hide();
+        $("#batch-import-results").hide();
+
+        var $dialog = $("#batch-import-modal").dialog({
+            modal: true,
+            width: Math.min(1170, $(window).width() - 40),
+            maxHeight: $(window).height() - 100,
+            closeOnEscape: true,
+            buttons: [
+                {
+                    text: langConfirmImport,
+                    id: "batch-import-btn-confirm",
+                    class: "butAction",
+                    click: function() { executeBatchImport(); }
+                },
+                {
+                    text: langClose,
+                    click: function() { $(this).dialog("close"); }
+                }
+            ]
+        });
+
+        $.ajax({
+            url: baseUrl + "?action=batch_import_preview&token=" + ajaxToken,
+            method: "POST",
+            data: { ids: selectedIds },
+            dataType: "json",
+            success: function(data) {
+                if (data.status !== "OK" || !data.invoices || data.invoices.length === 0) {
+                    $("#batch-import-loading").hide();
+                    $("#batch-import-results").html("<p class=\"warning\">" + langNoImportable + "</p>").show();
+                    $("#batch-import-btn-confirm").hide();
+                    return;
+                }
+                batchData = data.invoices;
+                renderBatchPreview(data.invoices);
+            },
+            error: function() {
+                $("#batch-import-loading").hide();
+                $("#batch-import-results").html("<p class=\"error\">Connection error</p>").show();
+            }
+        });
+
+        return false;
+    });
+
+    function getMatchMethodLabel(method) {
+        if (method === "product_ref") return langMatchedByRef;
+        if (method === "supplier_ref") return langMatchedBySupplierRef;
+        if (method === "barcode") return langMatchedByBarcode;
+        return method || "";
+    }
+
+    function isSupplierBlocked(inv) {
+        if (inv.supplier_matched) return false;
+        return !$("#batch-auto-create-suppliers").is(":checked");
+    }
+
+    function getRowBlockedState(inv) {
+        if (inv.correction_blocked) return { blocked: true, reason: "correction" };
+        if (isSupplierBlocked(inv)) return { blocked: true, reason: "supplier" };
+        return { blocked: false, reason: null };
+    }
+
+    function buildSupplierHtml(inv, blockState) {
+        if (blockState.blocked && blockState.reason === "correction") {
+            return \'<span class="opacitymedium">\' + escapeHtml(inv.supplier_matched ? inv.supplier_name : inv.seller_name) + \'</span>\';
+        }
+        if (inv.supplier_matched) {
+            return \'<span class="badge badge-status4">\' + langSupplierMatched + \'</span><br>\' + escapeHtml(inv.supplier_name);
+        }
+        if (blockState.blocked && blockState.reason === "supplier") {
+            var html = \'<span class="badge badge-status8">\' + langSupplierNoMatch + \'</span><br>\' + escapeHtml(inv.seller_name);
+            if (inv.seller_nip) html += \'<br><span class="opacitymedium">NIP: \' + escapeHtml(inv.seller_nip) + \'</span>\';
+            if (inv.seller_vat_id) html += \'<br><span class="opacitymedium">VAT: \' + escapeHtml(inv.seller_vat_id) + \'</span>\';
+            return html;
+        }
+        var html = \'<span class="badge badge-status1 batch-action-badge">\' + langSupplierWillCreate + \'</span><br>\' + escapeHtml(inv.seller_name);
+        if (inv.seller_nip) html += \'<br><span class="opacitymedium">NIP: \' + escapeHtml(inv.seller_nip) + \'</span>\';
+        if (inv.seller_vat_id) html += \'<br><span class="opacitymedium">VAT: \' + escapeHtml(inv.seller_vat_id) + \'</span>\';
+        return html;
+    }
+
+    function buildSupplierWarningHtml(blockState) {
+        if (blockState.blocked && blockState.reason === "supplier") {
+            return \'<br><span class="warning"><span class="fa fa-exclamation-triangle"></span> \' + escapeHtml(langSupplierNotMatched) + \'</span>\';
+        }
+        return "";
+    }
+
+    function isAutoCreateProducts() {
+        return $("#batch-auto-create-products").is(":checked");
+    }
+
+    function buildProductsHtml(inv, blockState, idx) {
+        if (blockState.blocked) {
+            return \'<span class="opacitymedium">\' + inv.total_lines + \' lines</span>\';
+        }
+        var productsHtml = inv.matched_lines + "/" + inv.total_lines + " " + langProductsMatched;
+        if (inv.all_products_matched) {
+            productsHtml = \'<span class="badge badge-status4">\' + productsHtml + \'</span>\';
+        } else if (isAutoCreateProducts()) {
+            productsHtml = \'<span class="badge badge-status1">\' + productsHtml + \'</span>\';
+        } else {
+            productsHtml = \'<span class="badge badge-status1">\' + productsHtml + \'</span>\';
+            var freeTextCount = inv.total_lines - inv.matched_lines;
+            if (freeTextCount > 0) {
+                productsHtml += \' <span class="badge badge-status0">\' + freeTextCount + "/" + inv.total_lines + " " + langProductFreeText + \'</span>\';
+            }
+            productsHtml += \'<br><span class="opacitymedium small">\' + escapeHtml(langProductsFreeTextWarning) + \'</span>\';
+        }
+        productsHtml += \' <a href="#" class="batch-toggle-lines" data-inv-idx="\' + idx + \'"><span class="fa fa-chevron-down"></span></a>\';
+        return productsHtml;
+    }
+
+    function buildUnmatchedLineProductCell(line) {
+        if (isAutoCreateProducts()) {
+            var willCreateInfo = \'<span class="badge badge-status1">\' + langWillCreate + \'</span>\';
+            if (line.description) {
+                willCreateInfo += \'<br><span class="opacitymedium">\' + escapeHtml(line.description);
+                if (line.indeks) willCreateInfo += \' [\' + escapeHtml(line.indeks) + \']\';
+                willCreateInfo += \'</span>\';
+            }
+            return willCreateInfo;
+        } else {
+            var freeTextInfo = \'<span class="badge badge-status0">\' + langProductFreeText + \'</span>\';
+            if (line.description) {
+                freeTextInfo += \'<br><span class="opacitymedium">\' + escapeHtml(line.description);
+                if (line.indeks) freeTextInfo += \' [\' + escapeHtml(line.indeks) + \']\';
+                freeTextInfo += \'</span>\';
+            }
+            return freeTextInfo;
+        }
+    }
+
+    function updateRowBlockedState($row, inv, idx) {
+        var blockState = getRowBlockedState(inv);
+        var $checkbox = $row.find(".batch-row-check");
+
+        $row.find(".batch-supplier-cell").html(buildSupplierHtml(inv, blockState));
+        $row.find(".batch-products-cell").html(buildProductsHtml(inv, blockState, idx));
+        $row.find(".batch-invoice-cell .batch-supplier-warning").remove();
+        var supplierWarning = buildSupplierWarningHtml(blockState);
+        if (supplierWarning) {
+            $row.find(".batch-invoice-cell").append(\'<span class="batch-supplier-warning">\' + supplierWarning + \'</span>\');
+        }
+
+        var $detailRow = $(".batch-detail-row[data-inv-idx=\'" + idx + "\']");
+
+        if (blockState.blocked) {
+            $checkbox.prop("checked", false).prop("disabled", true);
+            if (blockState.reason === "correction") {
+                $checkbox.attr("title", langCorrectionBlocked);
+            } else {
+                $checkbox.attr("title", langSupplierNotMatched);
+            }
+            $row.addClass("batch-blocked batch-row-inactive");
+            $detailRow.hide();
+            $row.find(".batch-toggle-lines span").removeClass("fa-chevron-up").addClass("fa-chevron-down");
+        } else {
+            if ($row.hasClass("batch-blocked")) {
+                $checkbox.prop("disabled", false).prop("checked", true).removeAttr("title");
+                $row.removeClass("batch-blocked batch-row-inactive");
+            }
+        }
+    }
+
+    function renderBatchPreview(invoices) {
+        var tbody = $("#batch-import-table tbody");
+        tbody.empty();
+
+        $.each(invoices, function(i, inv) {
+            var blockState = getRowBlockedState(inv);
+            var isBlocked = blockState.blocked;
+
+            var supplierHtml = buildSupplierHtml(inv, blockState);
+            var productsHtml = buildProductsHtml(inv, blockState, i);
+
+            var typeHtml = (inv.invoice_type === "KOR" || inv.invoice_type === "KOR_ZAL" || inv.invoice_type === "KOR_ROZ") ? \' <span class="badge badge-status1">\' + escapeHtml(inv.invoice_type) + \'</span>\' : "";
+
+            var warningsHtml = "";
+            if (inv.correction_blocked && inv.correction_issues && inv.correction_issues.length > 0) {
+                warningsHtml = \'<br>\';
+                for (var ci = 0; ci < inv.correction_issues.length; ci++) {
+                    warningsHtml += \'<span class="warning"><span class="fa fa-exclamation-triangle"></span> \' + escapeHtml(inv.correction_issues[ci]) + \'</span><br>\';
+                }
+            }
+            var swHtml = buildSupplierWarningHtml(blockState);
+            if (swHtml) warningsHtml += \'<span class="batch-supplier-warning">\' + swHtml + \'</span>\';
+
+            var blockTitle = "";
+            if (blockState.reason === "correction") blockTitle = langCorrectionBlocked;
+            else if (blockState.reason === "supplier") blockTitle = langSupplierNotMatched;
+
+            var checkboxHtml = isBlocked
+                ? \'<input type="checkbox" class="batch-row-check" disabled title="\' + escapeHtml(blockTitle) + \'">\'
+                : \'<input type="checkbox" class="batch-row-check" checked>\';
+
+            var rowClass = isBlocked ? \' class="batch-blocked batch-row-inactive"\' : \'\';
+
+            var tr = \'<tr data-id="\' + inv.id + \'" data-inv-idx="\' + i + \'" data-socid="\' + inv.socid + \'" data-supplier-matched="\' + (inv.supplier_matched ? "1" : "0") + \'"\' + rowClass + \'>\' +
+                \'<td class="center">\' + checkboxHtml + \'</td>\' +
+                \'<td class="batch-invoice-cell">\' + escapeHtml(inv.invoice_number) + typeHtml + \'<br><span class="opacitymedium">\' + inv.invoice_date + \'</span>\' + warningsHtml + \'</td>\' +
+                \'<td class="right nowraponall">\' + inv.total_gross + \'</td>\' +
+                \'<td class="batch-supplier-cell">\' + supplierHtml + \'</td>\' +
+                \'<td class="batch-products-cell">\' + productsHtml + \'</td>\' +
+                \'</tr>\';
+            tbody.append(tr);
+
+            if (inv.lines && inv.lines.length > 0) {
+                var detailHtml = \'<tr class="batch-detail-row" data-inv-idx="\' + i + \'" style="display:none;">\';
+                detailHtml += \'<td></td><td colspan="4">\';
+                detailHtml += \'<table class="noborder centpercent" style="background:#f8f8f8;">\';
+                detailHtml += \'<tr class="liste_titre"><th>#</th><th>\' + langDescription + \'</th><th>\' + langRef + \'</th><th class="right">\' + langQty + \'</th><th class="right">\' + langUnitPriceShort + \'</th><th class="right">\' + langVAT + \'</th><th class="right">\' + langTotalHT + \'</th><th>\' + langProduct + \'</th></tr>\';
+
+                $.each(inv.lines, function(j, line) {
+                    var vatDisplay = line.vat_rate === "zw" ? langVATExempt : (line.vat_rate ? parseInt(line.vat_rate) + "%" : "");
+                    var refDisplay = escapeHtml(line.indeks);
+                    if (line.gtin) {
+                        refDisplay += (refDisplay ? "<br>" : "") + \'<span class="opacitymedium">\' + escapeHtml(line.gtin) + \'</span>\';
+                    }
+
+                    detailHtml += \'<tr class="oddeven">\';
+                    detailHtml += \'<td>\' + line.line_num + \'</td>\';
+                    detailHtml += \'<td>\' + escapeHtml(line.description) + \'</td>\';
+                    detailHtml += \'<td>\' + (refDisplay || "–") + \'</td>\';
+                    detailHtml += \'<td class="right">\' + line.qty + \'</td>\';
+                    detailHtml += \'<td class="right">\' + line.unit_price_net + \'</td>\';
+                    detailHtml += \'<td class="right">\' + vatDisplay + \'</td>\';
+                    detailHtml += \'<td class="right">\' + line.net_amount + \'</td>\';
+                    if (line.product_matched) {
+                        detailHtml += \'<td><span class="badge badge-status4">\' + escapeHtml(line.product_ref || "") + \'</span> \' + escapeHtml(line.product_label || "") + \'<br><span class="opacitymedium">\' + getMatchMethodLabel(line.match_method) + \'</span></td>\';
+                    } else {
+                        detailHtml += \'<td class="batch-unmatched-product" data-inv-idx="\' + i + \'" data-line-idx="\' + j + \'">\' + buildUnmatchedLineProductCell(line) + \'</td>\';
+                    }
+                    detailHtml += \'</tr>\';
+                });
+
+                detailHtml += \'</table></td></tr>\';
+                tbody.append(detailHtml);
+            }
+        });
+
+        $("#batch-import-loading").hide();
+        $("#batch-import-content").show();
+    }
+
+    $(document).on("click", ".batch-toggle-lines", function(e) {
+        e.preventDefault();
+        var idx = $(this).data("inv-idx");
+        var $detailRow = $(".batch-detail-row[data-inv-idx=\'" + idx + "\']");
+        $detailRow.toggle();
+        $(this).find("span").toggleClass("fa-chevron-down fa-chevron-up");
+    });
+
+    $("#batch-select-all").on("change", function() {
+        var checked = $(this).is(":checked");
+        $(".batch-row-check:not(:disabled)").prop("checked", checked).trigger("change");
+    });
+
+    $("#batch-auto-create-suppliers").on("change", function() {
+        if (!batchData) return;
+        $("#batch-import-table tbody tr[data-id]").each(function() {
+            var $row = $(this);
+            var idx = parseInt($row.data("inv-idx"));
+            if (isNaN(idx) || !batchData[idx]) return;
+            var inv = batchData[idx];
+            if (inv.correction_blocked) return;
+            updateRowBlockedState($row, inv, idx);
+        });
+    });
+
+    $("#batch-auto-create-products").on("change", function() {
+        if (!batchData) return;
+        $(".batch-unmatched-product").each(function() {
+            var $cell = $(this);
+            var invIdx = parseInt($cell.data("inv-idx"));
+            var lineIdx = parseInt($cell.data("line-idx"));
+            if (isNaN(invIdx) || !batchData[invIdx]) return;
+            var line = batchData[invIdx].lines[lineIdx];
+            if (line && !line.product_matched) {
+                $cell.html(buildUnmatchedLineProductCell(line));
+            }
+        });
+        $("#batch-import-table tbody tr[data-id]").each(function() {
+            var $row = $(this);
+            var idx = parseInt($row.data("inv-idx"));
+            if (isNaN(idx) || !batchData[idx]) return;
+            var inv = batchData[idx];
+            var blockState = getRowBlockedState(inv);
+            $row.find(".batch-products-cell").html(buildProductsHtml(inv, blockState, idx));
+        });
+    });
+
+    $(document).on("change", ".batch-row-check", function() {
+        var $row = $(this).closest("tr");
+        var idx = $row.data("inv-idx");
+        var $detailRow = $(".batch-detail-row[data-inv-idx=\'" + idx + "\']");
+        if ($(this).is(":checked")) {
+            $row.removeClass("batch-row-inactive");
+            $detailRow.removeClass("batch-row-inactive");
+        } else {
+            $row.addClass("batch-row-inactive");
+            $detailRow.addClass("batch-row-inactive");
+        }
+    });
+
+    function executeBatchImport() {
+        if (!batchData) return;
+
+        var decisions = [];
+        var autoCreateSuppliers = $("#batch-auto-create-suppliers").is(":checked");
+        var autoCreateProducts = $("#batch-auto-create-products").is(":checked");
+
+        $("#batch-import-table tbody tr").each(function() {
+            var $row = $(this);
+            if (!$row.find(".batch-row-check").is(":checked")) return;
+
+            decisions.push({
+                id: parseInt($row.data("id")),
+                socid: parseInt($row.data("socid")) || 0,
+                auto_create_supplier: autoCreateSuppliers && $row.data("supplier-matched") !== "1" && parseInt($row.data("socid")) <= 0,
+                auto_create_products: autoCreateProducts
+            });
+        });
+
+        if (decisions.length === 0) return;
+
+        $("#batch-import-btn-confirm").prop("disabled", true).text(langImporting);
+        $("#batch-import-content").hide();
+        $("#batch-import-loading").show();
+
+        var payload = {
+            decisions: decisions,
+            auto_create_suppliers: autoCreateSuppliers,
+            auto_create_products: autoCreateProducts
+        };
+
+        $.ajax({
+            url: baseUrl + "?action=batch_import_execute&token=" + ajaxToken,
+            method: "POST",
+            contentType: "application/json",
+            data: JSON.stringify(payload),
+            dataType: "json",
+            success: function(data) {
+                $("#batch-import-loading").hide();
+                $("#batch-import-btn-confirm").hide();
+
+                var html = "<h3>" + langBatchResults + "</h3><ul>";
+                if (data.results) {
+                    $.each(data.results, function(i, r) {
+                        if (r.status === "OK") {
+                            html += \'<li><span class="badge badge-status4">OK</span> \' + escapeHtml(r.invoice_number || "#" + r.id) + \'</li>\';
+                        } else {
+                            html += \'<li><span class="badge badge-status8">\' + langError + \'</span> \' + escapeHtml(r.invoice_number || "#" + r.id) + \': \' + escapeHtml(r.error || "") + \'</li>\';
+                        }
+                    });
+                }
+                html += "</ul>";
+                if (data.success_count > 0) {
+                    html += \'<p><strong>\' + data.success_count + \' imported, \' + data.error_count + \' errors</strong></p>\';
+                }
+
+                $("#batch-import-results").html(html).show();
+
+                if (data.success_count > 0) {
+                    setTimeout(function() { location.reload(); }, 3000);
+                }
+            },
+            error: function() {
+                $("#batch-import-loading").hide();
+                $("#batch-import-results").html("<p class=\"error\">Connection error</p>").show();
+            }
+        });
+    }
+
+    function escapeHtml(str) {
+        if (!str) return "";
+        var div = document.createElement("div");
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+    }
+});
+</script>';
+
 
 llxFooter();
 $db->close();

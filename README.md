@@ -106,6 +106,31 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.0
+>- Importing of incoming invoices with individual and batch import from the incoming invoices list
+>- Supplier auto-matching by NIP and EU VAT ID
+>- Product auto-matching by product reference, supplier reference, and barcode
+>- Auto-creation of suppliers and products during batch import
+>- Batch import preview with validation warnings and blocking checks for correction invoices
+>- Updated import page with per-line product selection and supplier selection/creation
+>- Add import status tracking (New, Imported, Skipped, Error) with ability to reset or reopen
+>- Fixed VAT vs NIP for incoming invoices
+>- Incoming invoice sync now proper background processing to stop locking out the database when downloading thousands of invoices
+>- More info displayed during incoming invoice sync
+>- Block duplicate imports
+>- Link imported incoming invoices to the supplier invoices
+>- Fix KSeF verification URL on supplier invoices
+>- Values of 0 were incorrectly treated as empty when calculating fields
+>- Correction invoice type badges for KOR_ZAL and KOR_ROZ subtypes
+>- Updated "How To Use" page with importing documentation
+>- Fixed the mass actions for status and import tables
+>- Add import related settings
+>- Handle corrective invoices which increase total and mixed values (since Dolibarr doesn't really play nice with these)
+>- Incoming invoice handles multicurrency and takes exchange rate from XML
+>- PDF visualization auto-attached to imported supplier invoices
+>- Two modes for incoming invoices which increase the amount - 1. Zero out the original invoice and create a replacement invoice for finalized amount 2. create only replacement invoice with difference
+>- Warning when correction invoices have the same KSeF number as the corrected invoice
+
 >### Version v1.2.0
 >- Token/certificate choosing logic now chooses based on what is available
 >- Add setting to persist configuration through module disable/re-enable (defaults to persisting)

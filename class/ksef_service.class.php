@@ -822,6 +822,34 @@ class KsefService extends CommonObject
             return array('status' => 'NO_PENDING_FETCH');
         }
 
+        if ($syncState->fetch_status === KsefSyncState::FETCH_STATUS_READY_TO_PROCESS) {
+            return array(
+                'status' => 'READY_TO_PROCESS',
+                'reference' => $syncState->fetch_reference,
+                'invoice_count' => $syncState->process_total,
+            );
+        }
+
+        if ($syncState->fetch_status === KsefSyncState::FETCH_STATUS_DOWNLOADING) {
+            return array(
+                'status' => 'DOWNLOADING',
+                'reference' => $syncState->fetch_reference,
+                'parts_total' => $syncState->process_total,
+                'parts_done' => $syncState->process_offset,
+            );
+        }
+
+        if ($syncState->fetch_status === KsefSyncState::FETCH_STATUS_PROCESSING_BATCHES) {
+            return array(
+                'status' => 'PROCESSING_BATCHES',
+                'reference' => $syncState->fetch_reference,
+                'total' => $syncState->process_total,
+                'processed' => $syncState->process_offset,
+                'new' => $syncState->process_new,
+                'existing' => $syncState->process_existing,
+            );
+        }
+
         if ($syncState->isFetchTimedOut()) {
             $syncState->fetch_status = KsefSyncState::FETCH_STATUS_TIMEOUT;
             $syncState->fetch_error = 'Fetch request timed out';
@@ -875,6 +903,8 @@ class KsefService extends CommonObject
                 $syncState->fetch_key = '';
                 $syncState->fetch_iv = '';
                 $syncState->fetch_error = '';
+                $syncState->fetch_parts = '';
+                $syncState->fetch_hwm_data = '';
                 $syncState->last_sync = dol_now();
                 $syncState->last_sync_new = 0;
                 $syncState->last_sync_existing = 0;
@@ -891,148 +921,255 @@ class KsefService extends CommonObject
                 );
             }
 
-            dol_syslog("KSeF: Export completed, downloading package ({$invoiceCount} invoices)", LOG_INFO);
+            dol_syslog("KSeF: Export completed, ({$invoiceCount} invoices, {$partsCount} parts)", LOG_INFO);
 
-            // Decrypt stored keys
-            $aesKey = base64_decode(dol_decode($syncState->fetch_key));
-            $iv = base64_decode(dol_decode($syncState->fetch_iv));
+            $hwmData = array(
+                'isTruncated' => !empty($status['isTruncated']),
+                'lastPermanentStorageDate' => $status['lastPermanentStorageDate'] ?? null,
+                'permanentStorageHwmDate' => $status['permanentStorageHwmDate'] ?? null,
+                'completedDate' => $status['completedDate'] ?? null,
+                'invoiceCount' => $invoiceCount,
+            );
 
-            if (empty($aesKey) || empty($iv)) {
-                dol_syslog("KSeF: Key decryption failed", LOG_ERR);
-                $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
-                $syncState->fetch_error = 'Key decryption failed';
-                $syncState->save();
-                return array('status' => 'FAILED', 'error' => 'Key decryption failed');
-            }
-
-            // Download and decrypt
-            $tempZipFile = null;
-            try {
-                $tempZipFile = $client->downloadPackageToFile($status['parts'], $aesKey, $iv);
-            } catch (Exception $e) {
-                dol_syslog("KSeF: Download exception: " . $e->getMessage(), LOG_ERR);
-                $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
-                $syncState->fetch_error = 'Download exception: ' . $e->getMessage();
-                $syncState->save();
-                return array('status' => 'DOWNLOAD_FAILED', 'error' => $e->getMessage());
-            }
-
-            if ($tempZipFile === false || !file_exists($tempZipFile)) {
-                dol_syslog("KSeF: Download failed: " . $client->error, LOG_ERR);
-                $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
-                $syncState->fetch_error = $client->error ?: 'Download failed';
-                $syncState->save();
-                return array('status' => 'DOWNLOAD_FAILED', 'error' => $client->error ?: 'Download failed');
-            }
-
-            dol_syslog("KSeF: Package downloaded to temp file: " . $tempZipFile, LOG_INFO);
-
-            // Update HWM and clear fetch state
-            $isTruncated = !empty($status['isTruncated']);
-
-            if ($isTruncated && !empty($status['lastPermanentStorageDate'])) {
-                // Truncated batch
-                $syncState->hwm_date = date('c', $status['lastPermanentStorageDate']);
-                dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (from lastPermanentStorageDate - batch was truncated)", LOG_INFO);
-            } elseif (!empty($status['permanentStorageHwmDate'])) {
-                // Complete batch
-                $syncState->hwm_date = date('c', $status['permanentStorageHwmDate']);
-                dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (from permanentStorageHwmDate - batch complete)", LOG_INFO);
-            } elseif (!empty($status['lastPermanentStorageDate'])) {
-                $syncState->hwm_date = date('c', $status['lastPermanentStorageDate']);
-                dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (fallback from lastPermanentStorageDate)", LOG_INFO);
-            } else if (!empty($status['completedDate'])) {
-                $ts = strtotime($status['completedDate']);
-                if ($ts !== false) {
-                    $syncState->hwm_date = date('c', $ts);
-                    dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (last resort fallback from completedDate)", LOG_INFO);
-                }
-            }
-
-            // Clear state
-            $syncState->fetch_reference = '';
-            $syncState->fetch_status = '';
-            $syncState->fetch_started = 0;
-            $syncState->fetch_key = '';
-            $syncState->fetch_iv = '';
-            $syncState->fetch_error = '';
+            $syncState->fetch_parts = json_encode($status['parts']);
+            $syncState->fetch_hwm_data = json_encode($hwmData);
+            $syncState->fetch_status = KsefSyncState::FETCH_STATUS_READY_TO_PROCESS;
+            $syncState->process_total = $invoiceCount;
+            $syncState->process_offset = 0;
+            $syncState->process_new = 0;
+            $syncState->process_existing = 0;
             $syncState->save();
-            dol_syslog("KSeF: Fetch state cleared, starting batch processing", LOG_INFO);
-
-            // Process in batches to avoid PHP OOM errors
-            $batchSize = 1000;
-            $totalNew = 0;
-            $totalExisting = 0;
-            $totalErrors = 0;
-            $ksef = $this;
-
-            try {
-                $summary = $client->processPackageInBatches($tempZipFile, $batchSize, function($batch, $batchNum, $totalFiles) use ($ksef, $user, $environment, &$totalNew, &$totalExisting, &$totalErrors) {
-                    dol_syslog("KSeF: Starting callback for batch {$batchNum} with " . count($batch) . " invoices", LOG_INFO);
-
-                    $batchData = array('invoices' => $batch, 'metadata' => array());
-
-                    try {
-                        $result = $ksef->processIncomingPackage($batchData, $user, $environment);
-                        $totalNew += $result['new'];
-                        $totalExisting += $result['existing'];
-                        $totalErrors += $result['errors'] ?? 0;
-                        dol_syslog("KSeF: Batch {$batchNum} complete - new: {$result['new']}, existing: {$result['existing']}, errors: {$result['errors']}", LOG_INFO);
-                    } catch (Exception $e) {
-                        dol_syslog("KSeF: Batch {$batchNum} EXCEPTION: " . $e->getMessage(), LOG_ERR);
-                        $totalErrors++;
-                        throw $e;
-                    } catch (Error $e) {
-                        dol_syslog("KSeF: Batch {$batchNum} FATAL ERROR: " . $e->getMessage(), LOG_ERR);
-                        $totalErrors++;
-                        throw $e;
-                    }
-
-                    unset($batchData);
-                    unset($batch);
-                });
-            } catch (Exception $e) {
-                dol_syslog("KSeF: Batch processing exception: " . $e->getMessage(), LOG_ERR);
-                @unlink($tempZipFile);
-                $syncState->last_sync = dol_now();
-                $syncState->last_sync_new = $totalNew;
-                $syncState->last_sync_existing = $totalExisting;
-                $syncState->last_sync_total = $totalNew + $totalExisting;
-                $syncState->save();
-                return array(
-                    'status' => 'COMPLETED',
-                    'new' => $totalNew,
-                    'existing' => $totalExisting,
-                    'total' => $totalNew + $totalExisting,
-                    'errors' => 1,
-                    'error_details' => array('Processing interrupted: ' . $e->getMessage()),
-                    'truncated' => !empty($status['isTruncated'])
-                );
-            }
-
-            @unlink($tempZipFile);
-
-            $finalTotal = $summary ? $summary['total'] : ($totalNew + $totalExisting);
-            $syncState->last_sync = dol_now();
-            $syncState->last_sync_new = $totalNew;
-            $syncState->last_sync_existing = $totalExisting;
-            $syncState->last_sync_total = $finalTotal;
-            $syncState->save();
-
-            dol_syslog("KSeF: All batches complete - new: {$totalNew}, existing: {$totalExisting}, total: {$finalTotal}", LOG_INFO);
 
             return array(
-                'status' => 'COMPLETED',
-                'new' => $totalNew,
-                'existing' => $totalExisting,
-                'total' => $finalTotal,
-                'errors' => $totalErrors,
-                'truncated' => !empty($status['isTruncated'])
+                'status' => 'READY_TO_PROCESS',
+                'reference' => $syncState->fetch_reference,
+                'invoice_count' => $invoiceCount,
+                'parts_count' => $partsCount,
             );
         }
 
         dol_syslog("KSeF: Unknown export status: " . $status['status'], LOG_WARNING);
         return array('status' => $status['status']);
+    }
+
+
+    /**
+     * @brief Download and process incoming invoices
+     * @param User $user Current user
+     * @return array Result with status and counts
+     */
+    public function processIncomingDownload($user)
+    {
+        dol_include_once('/ksef/class/ksef_sync_state.class.php');
+        dol_include_once('/ksef/class/ksef_client.class.php');
+        dol_include_once('/ksef/class/ksef_incoming.class.php');
+
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+
+        $syncState = new KsefSyncState($this->db);
+        $syncState->load('incoming');
+
+        if ($syncState->fetch_status !== KsefSyncState::FETCH_STATUS_READY_TO_PROCESS) {
+            dol_syslog("KSeF: processIncomingDownload called but status is " . $syncState->fetch_status, LOG_WARNING);
+            return array('status' => 'SKIPPED', 'reason' => 'Not in READY_TO_PROCESS state');
+        }
+
+        $parts = json_decode($syncState->fetch_parts, true);
+        $hwmData = json_decode($syncState->fetch_hwm_data, true);
+
+        if (empty($parts)) {
+            dol_syslog("KSeF: processIncomingDownload no parts found", LOG_ERR);
+            $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
+            $syncState->fetch_error = 'No download parts found in state';
+            $syncState->save();
+            return array('status' => 'FAILED', 'error' => 'No download parts');
+        }
+
+        $aesKey = base64_decode(dol_decode($syncState->fetch_key));
+        $iv = base64_decode(dol_decode($syncState->fetch_iv));
+
+        if (empty($aesKey) || empty($iv)) {
+            dol_syslog("KSeF: Key decryption failed", LOG_ERR);
+            $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
+            $syncState->fetch_error = 'Key decryption failed';
+            $syncState->save();
+            return array('status' => 'FAILED', 'error' => 'Key decryption failed');
+        }
+
+        $partsTotal = count($parts);
+        $syncState->fetch_status = KsefSyncState::FETCH_STATUS_DOWNLOADING;
+        $syncState->process_total = $partsTotal;
+        $syncState->process_offset = 0;
+        $syncState->save();
+
+        dol_syslog("KSeF: Starting async download ({$partsTotal} parts)", LOG_INFO);
+
+        $client = new KsefClient($this->db, $environment);
+        $tempZipFile = null;
+        try {
+            $tempFile = tempnam(sys_get_temp_dir(), 'ksef_dl_');
+            if ($tempFile === false) {
+                throw new Exception("Failed to create temp file");
+            }
+
+            $fp = fopen($tempFile, 'wb');
+            if ($fp === false) {
+                throw new Exception("Failed to open temp file for writing");
+            }
+
+            foreach ($parts as $index => $part) {
+                $encrypted = $client->downloadPackagePart($part);
+                if ($encrypted === false) {
+                    fclose($fp);
+                    @unlink($tempFile);
+                    throw new Exception("Failed to download part $index");
+                }
+
+                $decrypted = $client->decryptPackageData($encrypted, $aesKey, $iv);
+                if ($decrypted === false) {
+                    fclose($fp);
+                    @unlink($tempFile);
+                    throw new Exception("Failed to decrypt part $index");
+                }
+
+                fwrite($fp, $decrypted);
+                unset($encrypted, $decrypted);
+
+                $syncState->process_offset = $index + 1;
+                $syncState->save();
+            }
+
+            fclose($fp);
+            $tempZipFile = $tempFile;
+            dol_syslog("KSeF: Package downloaded to temp file: " . $tempZipFile . " (" . filesize($tempZipFile) . " bytes)", LOG_INFO);
+        } catch (Exception $e) {
+            dol_syslog("KSeF: Download exception: " . $e->getMessage(), LOG_ERR);
+            $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
+            $syncState->fetch_error = 'Download exception: ' . $e->getMessage();
+            $syncState->save();
+            return array('status' => 'DOWNLOAD_FAILED', 'error' => $e->getMessage());
+        }
+
+        $isTruncated = !empty($hwmData['isTruncated']);
+
+        if ($isTruncated && !empty($hwmData['lastPermanentStorageDate'])) {
+            $syncState->hwm_date = date('c', $hwmData['lastPermanentStorageDate']);
+            dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (from lastPermanentStorageDate - batch was truncated)", LOG_INFO);
+        } elseif (!empty($hwmData['permanentStorageHwmDate'])) {
+            $syncState->hwm_date = date('c', $hwmData['permanentStorageHwmDate']);
+            dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (from permanentStorageHwmDate - batch complete)", LOG_INFO);
+        } elseif (!empty($hwmData['lastPermanentStorageDate'])) {
+            $syncState->hwm_date = date('c', $hwmData['lastPermanentStorageDate']);
+            dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (fallback from lastPermanentStorageDate)", LOG_INFO);
+        } elseif (!empty($hwmData['completedDate'])) {
+            $ts = strtotime($hwmData['completedDate']);
+            if ($ts !== false) {
+                $syncState->hwm_date = date('c', $ts);
+                dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date . " (last resort fallback from completedDate)", LOG_INFO);
+            }
+        }
+
+        $syncState->fetch_status = KsefSyncState::FETCH_STATUS_PROCESSING_BATCHES;
+        $syncState->process_total = $hwmData['invoiceCount'] ?? 0;
+        $syncState->process_offset = 0;
+        $syncState->process_new = 0;
+        $syncState->process_existing = 0;
+        $syncState->save();
+
+        dol_syslog("KSeF: Starting batch processing", LOG_INFO);
+
+        $batchSize = KsefSyncState::PROCESS_BATCH_SIZE;
+        $totalNew = 0;
+        $totalExisting = 0;
+        $totalErrors = 0;
+        $ksef = $this;
+
+        try {
+            $summary = $client->processPackageInBatches($tempZipFile, $batchSize, function($batch, $batchNum, $totalFiles) use ($ksef, $user, $environment, &$totalNew, &$totalExisting, &$totalErrors, $syncState) {
+                dol_syslog("KSeF: Starting callback for batch {$batchNum} with " . count($batch) . " invoices", LOG_INFO);
+
+                $batchData = array('invoices' => $batch, 'metadata' => array());
+
+                try {
+                    $result = $ksef->processIncomingPackage($batchData, $user, $environment);
+                    $totalNew += $result['new'];
+                    $totalExisting += $result['existing'];
+                    $totalErrors += $result['errors'] ?? 0;
+                    dol_syslog("KSeF: Batch {$batchNum} complete - new: {$result['new']}, existing: {$result['existing']}, errors: {$result['errors']}", LOG_INFO);
+                } catch (Exception $e) {
+                    dol_syslog("KSeF: Batch {$batchNum} EXCEPTION: " . $e->getMessage(), LOG_ERR);
+                    $totalErrors++;
+                    throw $e;
+                } catch (Error $e) {
+                    dol_syslog("KSeF: Batch {$batchNum} FATAL ERROR: " . $e->getMessage(), LOG_ERR);
+                    $totalErrors++;
+                    throw $e;
+                }
+
+                $syncState->process_offset += count($batch);
+                $syncState->process_new = $totalNew;
+                $syncState->process_existing = $totalExisting;
+                $syncState->save();
+
+                unset($batchData);
+                unset($batch);
+                gc_collect_cycles();
+            });
+        } catch (Exception $e) {
+            dol_syslog("KSeF: Batch processing exception: " . $e->getMessage(), LOG_ERR);
+            @unlink($tempZipFile);
+            $syncState->last_sync = dol_now();
+            $syncState->last_sync_new = $totalNew;
+            $syncState->last_sync_existing = $totalExisting;
+            $syncState->last_sync_total = $totalNew + $totalExisting;
+            $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
+            $syncState->fetch_error = 'Processing interrupted: ' . $e->getMessage();
+            $syncState->fetch_parts = '';
+            $syncState->fetch_hwm_data = '';
+            $syncState->save();
+            return array(
+                'status' => 'COMPLETED',
+                'new' => $totalNew,
+                'existing' => $totalExisting,
+                'total' => $totalNew + $totalExisting,
+                'errors' => 1,
+                'error_details' => array('Processing interrupted: ' . $e->getMessage()),
+                'truncated' => $isTruncated
+            );
+        }
+
+        @unlink($tempZipFile);
+
+        $finalTotal = $summary ? $summary['total'] : ($totalNew + $totalExisting);
+        $syncState->last_sync = dol_now();
+        $syncState->last_sync_new = $totalNew;
+        $syncState->last_sync_existing = $totalExisting;
+        $syncState->last_sync_total = $finalTotal;
+        $syncState->fetch_reference = '';
+        $syncState->fetch_status = '';
+        $syncState->fetch_started = 0;
+        $syncState->fetch_key = '';
+        $syncState->fetch_iv = '';
+        $syncState->fetch_error = '';
+        $syncState->fetch_parts = '';
+        $syncState->fetch_hwm_data = '';
+        $syncState->process_file = '';
+        $syncState->process_total = 0;
+        $syncState->process_offset = 0;
+        $syncState->process_new = 0;
+        $syncState->process_existing = 0;
+        $syncState->save();
+
+        dol_syslog("KSeF: All batches complete - new: {$totalNew}, existing: {$totalExisting}, total: {$finalTotal}", LOG_INFO);
+
+        return array(
+            'status' => 'COMPLETED',
+            'new' => $totalNew,
+            'existing' => $totalExisting,
+            'total' => $finalTotal,
+            'errors' => $totalErrors,
+            'truncated' => $isTruncated
+        );
     }
 
 
@@ -1060,11 +1197,17 @@ class KsefService extends CommonObject
         $incoming = new KsefIncoming($this->db);
         $parser = new FA3Parser($this->db);
 
+        $existingNumbers = $incoming->getExistingKsefNumbers(array_keys($packageData['invoices']), $environment);
+        $existingSet = array_flip($existingNumbers);
+
+        $this->db->begin();
+
         foreach ($packageData['invoices'] as $ksefNumber => $xmlContent) {
             $result['total']++;
 
-            if ($incoming->existsByKsefNumber($ksefNumber, $environment)) {
+            if (isset($existingSet[$ksefNumber])) {
                 $result['existing']++;
+                unset($packageData['invoices'][$ksefNumber]);
                 continue;
             }
 
@@ -1075,7 +1218,7 @@ class KsefService extends CommonObject
                 }
 
                 $newIncoming = new KsefIncoming($this->db);
-                if ($newIncoming->createFromParsed($parsed, $xmlContent, $ksefNumber, $environment, $user) > 0) {
+                if ($newIncoming->createFromParsed($parsed, $xmlContent, $ksefNumber, $environment, $user, true) > 0) {
                     $result['new']++;
                 } else {
                     throw new Exception($newIncoming->error ?: 'Create failed');
@@ -1084,10 +1227,15 @@ class KsefService extends CommonObject
                 $result['errors']++;
                 $result['error_details'][] = "{$ksefNumber}: " . $e->getMessage();
                 dol_syslog("KSeF: Error processing {$ksefNumber}: " . $e->getMessage(), LOG_ERR);
+                $this->db->rollback();
+                return $result;
             }
 
             unset($packageData['invoices'][$ksefNumber]);
         }
+
+        $this->db->commit();
+
         return $result;
     }
 
@@ -1290,7 +1438,7 @@ class KsefService extends CommonObject
             }
 
             if ($initResult['status'] === 'ALREADY_PROCESSING') {
-                // Another run already started — fall through to polling
+                // Another run already started - fall through to polling
                 dol_syslog("KSEF::cronSyncIncoming fetch already initiated, polling", LOG_INFO);
             }
 
@@ -1312,6 +1460,22 @@ class KsefService extends CommonObject
 
                 $status = $result['status'];
 
+                if ($status === 'READY_TO_PROCESS') {
+                    dol_syslog("KSEF::cronSyncIncoming READY_TO_PROCESS, starting download+process", LOG_INFO);
+                    $processResult = $this->processIncomingDownload($user);
+                    $new = $processResult['new'] ?? 0;
+                    $existing = $processResult['existing'] ?? 0;
+                    $total = $processResult['total'] ?? ($new + $existing);
+                    if (in_array($processResult['status'], array('COMPLETED'))) {
+                        $this->output = "Sync complete. New: $new, Existing: $existing, Total: $total";
+                        return 0;
+                    } else {
+                        $this->error = $processResult['error'] ?? $processResult['status'];
+                        $this->output = 'Processing failed: ' . $this->error;
+                        return -1;
+                    }
+                }
+
                 if ($status === 'COMPLETED') {
                     $new = $result['new'] ?? 0;
                     $existing = $result['existing'] ?? 0;
@@ -1332,6 +1496,11 @@ class KsefService extends CommonObject
                 if ($status === 'RATE_LIMITED') {
                     $this->output = 'Rate limited, will resume on next run';
                     return 0;
+                }
+
+                if (in_array($status, array('DOWNLOADING', 'PROCESSING_BATCHES'))) {
+                    dol_syslog("KSEF::cronSyncIncoming status=$status, waiting for background process to finish", LOG_INFO);
+                    sleep(5);
                 }
             }
 

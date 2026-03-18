@@ -34,6 +34,13 @@ KSEF_Status=Status wysyłki KSeF
 # ============================================
 KSEF_AUTH_CONFIG=Uwierzytelnianie
 KSEF_UI_CONFIG=Interfejs użytkownika
+KSEF_IMPORTING_CONFIG=Importowanie
+KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING=Automatyczne tworzenie dostawców podczas importu zbiorczego
+KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help=Gdy włączone, dostawcy którzy nie mogą być dopasowani do istniejącego kontrahenta zostaną automatycznie utworzeni podczas importu zbiorczego. Dopasowanie odbywa się po NIP lub numerze VAT UE. Nowi dostawcy są tworzeni z danymi z faktury KSeF (nazwa, adres, identyfikatory podatkowe). To ustawienie jest domyślną wartością dla importu zbiorczego i jest zapamiętywane z ostatniego importu.
+KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING=Automatyczne tworzenie produktów podczas importu zbiorczego
+KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help=Gdy włączone, produkty które nie mogą być dopasowane do istniejącego produktu zostaną automatycznie utworzone podczas importu zbiorczego. Dopasowanie jest próbowane po referencji produktu, referencji dostawcy i kodzie kreskowym/GTIN. Nowe produkty są tworzone z opisem, referencją, ceną, stawką VAT i kodem kreskowym z linii faktury. Jeśli nie potrzebujesz śledzić produktów ani łączyć pozycji faktur z katalogiem produktów, możesz zostawić tę opcję wyłączoną - wszystkie niedopasowane pozycje zostaną zaimportowane jako opisy tekstowe. To ustawienie jest domyślną wartością dla importu zbiorczego i jest zapamiętywane z ostatniego importu.
+KSEF_PRODUCT_REF_USE_INDEKS_SETTING=Użyj kodu produktu dostawcy (indeks) jako referencji przy automatycznym tworzeniu
+KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help=Gdy włączone, kod produktu dostawcy (pole indeks/P_7 z linii faktury) jest używany jako referencja produktu przy automatycznym tworzeniu nowych produktów. Gdy wyłączone, używana jest automatyczna numeracja Dolibarr.
 KSEF_CUSTOMIZATION_CONFIG=Dostosowanie
 KSEF_CUSTOMER_EXCLUSIONS=Wykluczenia kontrahentów
 KSEF_Configuration=Konfiguracja KSeF
@@ -93,7 +100,7 @@ KSEF_COMPANY_REGON_Help=Automatycznie pobierane z Identyfikatora zawodowego 3 (R
 KSEF_COMPANY_BDO=BDO firmy
 KSEF_COMPANY_BDO_Help=Automatycznie pobierane z Identyfikatora zawodowego 4 (BDO). Numer rejestrowy BDO.
 KSEF_Optional=Opcjonalne
-KSEF_PRODUCTION_WARNING=Środowisko produkcyjne — wysyłaj tylko oficjalne faktury. Wysłanych faktur nie można cofnąć.
+KSEF_PRODUCTION_WARNING=Środowisko produkcyjne - wysyłaj tylko oficjalne faktury. Wysłanych faktur nie można cofnąć.
 
 # ============================================
 # Features
@@ -323,7 +330,19 @@ KSEF_Receiving_Step3=Nowe faktury pojawią się na liście
 KSEF_ReceivingActions=Dla każdej faktury możesz wyświetlić szczegóły, pobrać oryginalny XML, pobrać PDF lub sprawdzić na portalu KSeF.
 
 KSEF_ImportingToDolibarr=Import do Dolibarr
-KSEF_ImportingToDolibarrDesc=Automatyczny import do faktur dostawców jest w przygotowaniu. Na razie pobierz PDF i utwórz fakturę dostawcy ręcznie używając go jako dokumentu źródłowego. Dzięki temu nie musisz logować się osobno do portalu KSeF.
+KSEF_ImportingToDolibarrDesc=Faktury przychodzące mogą być importowane jako faktury dostawców w Dolibarr. Moduł automatycznie dopasowuje dostawców po numerach identyfikacji podatkowej (NIP, EU VAT lub innych identyfikatorach profesjonalnych skonfigurowanych w Dolibarr) oraz pozycje po referencji produktu, referencji dostawcy lub kodzie kreskowym (GTIN).
+KSEF_Importing_HowItWorks=Jak to działa
+KSEF_Importing_Step1=Zsynchronizuj faktury przychodzące z KSeF (ręcznie lub przez zaplanowane zadanie)
+KSEF_Importing_Step2=Importuj faktury pojedynczo z zakładki "Import do Dolibarr" na karcie faktury, lub użyj importu zbiorczego z listy faktur przychodzących
+KSEF_Importing_Step3=Moduł automatycznie dopasowuje dostawcę i próbuje dopasować każdą pozycję do istniejącego produktu - najpierw po referencji produktu, potem po referencji dostawcy, a następnie po kodzie kreskowym
+KSEF_Importing_Step4=Pozycje bez dopasowania do produktu są importowane jako tekst na fakturze dostawcy. Jeśli w ustawieniach modułu włączona jest opcja "Automatycznie twórz produkty gdy nie znaleziono dopasowania", zamiast tego tworzone są nowe produkty
+KSEF_Importing_Individual=Import pojedynczy
+KSEF_Importing_IndividualDesc=Import pojedynczy pozwala na przegląd każdej faktury przed importem. Możesz wybrać lub utworzyć dostawcę (wstępnie wypełnionego danymi z faktury) i wybrać produkt do powiązania z każdą pozycją. Przycisk "+" obok każdej pozycji pozwala utworzyć nowy produkt wstępnie wypełniony referencją, opisem, ceną, stawką VAT i kodem kreskowym z faktury.
+KSEF_Importing_Batch=Import zbiorczy
+KSEF_Importing_BatchDesc=Import zbiorczy przetwarza wiele faktur jednocześnie z listy faktur przychodzących. Automatycznie dopasowuje dostawców i produkty tam, gdzie to możliwe.
+KSEF_Importing_StockNote=Import faktury nie wpływa automatycznie na stany magazynowe. Ruchy magazynowe następują dopiero po zatwierdzeniu zaimportowanej faktury dostawcy i tylko jeśli w ustawieniach modułu Stany magazynowe włączona jest opcja "Zwiększ stany rzeczywiste przy walidacji faktury dostawcy/noty kredytowej":
+KSEF_Importing_StockNoteLink=Ustawienia modułu Stany magazynowe
+KSEF_Importing_StockNoteFreeText=Pozycje zaimportowane jako tekst (bez powiązanego produktu) nie wpłyną na stany magazynowe niezależnie od tego ustawienia.
 
 # Customer Exclusions Section
 KSEF_CustomerExclusions=Wykluczenia klientów
@@ -726,7 +745,7 @@ KSEF_LastSyncResult=Ostatni wynik
 KSEF_SyncNotInitialized=Synchronizacja nie została zainicjowana. Kliknij „Synchronizuj teraz", aby rozpocząć.
 KSEF_SyncResults=Zsynchronizowano %s nowych, %s istniejących (z %s łącznie)
 KSEF_SyncResultShort=+%s nowych, %s istniejących (%s łącznie)
-KSEF_SyncTruncated=Dostępne są kolejne dane — synchronizuj ponownie, aby kontynuować.
+KSEF_SyncTruncated=Dostępne są kolejne dane - synchronizuj ponownie, aby kontynuować.
 KSEF_SyncErrors=Błędów podczas synchronizacji: %s
 KSEF_RateLimitActive=Limit zapytań: odczekaj %s
 KSEF_ResetSyncState=Resetuj synchronizację
@@ -743,6 +762,14 @@ KSEF_NewInvoices=Nowe
 KSEF_ExistingInvoices=Istniejące
 KSEF_ConfirmCancelFetch=Anulować bieżące pobieranie?
 KSEF_ResetAndRetry=Resetuj i spróbuj ponownie
+KSEF_Downloading=Pobieranie faktur...
+KSEF_ProcessingBatches=Przetwarzanie faktur
+KSEF_ReadyToProcess=Pobieranie gotowe, uruchamianie...
+KSEF_CurrentStatus=Aktualny status
+KSEF_PhaseWaitingKSeF=Oczekiwanie na przygotowanie eksportu przez KSeF...
+KSEF_PhaseReadyToProcess=Pobieranie gotowe, uruchamianie...
+KSEF_PhaseDownloading=Pobieranie faktur...
+KSEF_PhaseProcessingBatches=Przetwarzanie faktur (%s/%s)...
 NotSet=Nie ustawiono
 
 # ============================================
@@ -766,8 +793,11 @@ KSEF_VATBreakdown=Zestawienie VAT
 KSEF_VATExempt=Zwolnione
 KSEF_PaymentInfo=Informacje o płatności
 KSEF_CorrectsInvoice=Koryguje fakturę
+KSEF_CorrectsKsefNr=Koryguje nr KSeF
 KSEF_OriginalKsefNumber=Oryginalny numer KSeF
-KSEF_CorrectsXInvoices=Koryguje %s faktur
+KSEF_VendorRef=Nr faktury dostawcy
+KSEF_ImportedAs=Zaimportowano jako
+KSEF_CorrectsXInvoices=Koryguje %s faktur (szczegóły w tabeli po prawej)
 KSEF_CorrectedInvoices=Faktury korygowane
 KSEF_CorrectionReason=Przyczyna korekty
 
@@ -860,3 +890,120 @@ KSEF_CertValue_ValidUntil=Ważny do: %s
 KSEF_CertValue_Expired=WYGASŁ: %s
 KSEF_CertValue_Configured=Skonfigurowany
 KSEF_CertValue_NotConfigured=Nie skonfigurowany
+
+# ============================================
+# Import faktur przychodzących
+# ============================================
+KSEF_Import=Importuj
+KSEF_ImportDesc=Importuj fakturę jako fakturę dostawcy. Pozycje z wybranymi produktami zostaną powiązane, pozostałe będą zaimportowane jako tekst.
+KSEF_ImportConfirmTitle=Czy na pewno chcesz zaimportować tę fakturę?
+KSEF_ImportAsFreeText=tekst (bez powiązania z produktem)
+KSEF_ImportLinkedTo=powiązano z
+KSEF_ImportSkip=Pomiń
+KSEF_ImportSkipDesc=Oznacz tę fakturę jako pominiętą - nie będzie importowana
+KSEF_ImportSkipConfirm=Czy na pewno chcesz pominąć tę fakturę?
+KSEF_ImportSuccess=Faktura pomyślnie zaimportowana jako faktura dostawcy %s
+KSEF_ImportErrorNoSupplier=Proszę wybrać dostawcę przed importem
+KSEF_ImportErrorAlreadyImported=Ta faktura została już zaimportowana
+KSEF_SupplierAutoMatched=Dostawca dopasowany automatycznie po NIP
+KSEF_SupplierNotFound=Nie znaleziono dostawcy o NIP %s - proszę wybrać ręcznie
+KSEF_SupplierChangeSelection=Zmień
+KSEF_CreateProduct=Utwórz nowy produkt
+KSEF_CreateSupplier=Utwórz nowego dostawcę
+KSEF_ImportedInvoice=Zaimportowana faktura dostawcy
+KSEF_ReopenForImport=Otwórz ponownie do importu
+KSEF_InvoiceSkipped=Ta faktura została oznaczona jako pominięta
+KSEF_ProductColumn=Produkt (opcjonalnie)
+
+# ============================================
+# Import zbiorczy i Szybki import
+# ============================================
+KSEF_BatchImport=Import zbiorczy
+KSEF_BatchImportTitle=Podgląd importu zbiorczego
+KSEF_BatchImportConfirm=Importuj zaznaczone
+KSEF_BatchImporting=Importowanie...
+KSEF_BatchImportResults=Wyniki importu
+KSEF_BatchImportSuccessLine=Zaimportowano pomyślnie
+KSEF_BatchSupplierMatched=Dopasowany
+KSEF_BatchSupplierWillCreate=Zostanie utworzony
+KSEF_BatchProductsMatched=dopasowanych
+KSEF_BatchAutoCreateSuppliers=Automatycznie twórz dostawców gdy nie znaleziono dopasowania
+KSEF_BatchAutoCreateSuppliers_Help=Gdy zaznaczone, dostawcy którzy nie mogą być dopasowani po NIP lub numerze VAT UE do istniejącego kontrahenta zostaną automatycznie utworzeni z danymi z faktury KSeF (nazwa, adres, identyfikatory podatkowe). Gdy odznaczone, faktury z niedopasowanymi dostawcami zostaną pominięte podczas importu zbiorczego.
+KSEF_BatchAutoCreateProducts=Automatycznie twórz produkty gdy nie znaleziono dopasowania
+KSEF_BatchAutoCreateProducts_Help=Gdy zaznaczone, pozycje faktur które nie mogą być dopasowane do istniejącego produktu (po referencji produktu, referencji dostawcy lub kodzie kreskowym/GTIN) zostaną automatycznie utworzone jako nowe produkty. Gdy odznaczone, niedopasowane pozycje są importowane jako wolny tekst na fakturze dostawcy. Jeśli nie potrzebujesz śledzić produktów ani łączyć pozycji faktur z katalogiem produktów, możesz zostawić tę opcję wyłączoną - wszystkie pozycje zostaną zaimportowane jako opisy tekstowe.
+KSEF_BatchNoImportable=Brak faktur do importu w zaznaczeniu (tylko faktury o statusie NOWA/BŁĄD mogą być importowane)
+KSEF_BatchProductWillCreate=Zostanie utworzony
+KSEF_MatchedByRef=Dopasowano po ref. produktu
+KSEF_MatchedBySupplierRef=Dopasowano po ref. dostawcy
+KSEF_MatchedByBarcode=Dopasowano po kodzie kreskowym
+KSEF_MatchMethod=Metoda dopasowania
+KSEF_QuickImport=Szybki import
+KSEF_QuickImportAutoComplete=Faktura zaimportowana automatycznie (dostawca i wszystkie produkty dopasowane)
+
+# ============================================
+# Reset statusu importu
+# ============================================
+KSEF_ResetImportStatus=Resetuj status importu
+KSEF_LinkedInvoiceDeleted=Powiązana faktura dostawcy została usunięta
+KSEF_ImportStatusReset=Status importu został zresetowany. Możesz ponownie zaimportować tę fakturę.
+KSEF_LinkedInvoiceStillExists=Nie można zresetować - powiązana faktura dostawcy nadal istnieje
+KSEF_ConfirmResetImport=Powiązana faktura dostawcy już nie istnieje. Czy zresetować status tej faktury, aby umożliwić ponowny import?
+
+# ============================================
+# Stany magazynowe / Informacje
+# ============================================
+KSEF_StockWillIncrease=Stany magazynowe dopasowanych produktów zostaną zwiększone przy walidacji faktury
+KSEF_StockWillNotIncrease=Stany magazynowe dopasowanych produktów nie zostaną zwiększone przy walidacji faktury
+KSEF_StockAutoIncreaseEnabled=Stany magazynowe zostaną zaktualizowane po zatwierdzeniu zaimportowanej faktury. Zostaniesz poproszony o wybór magazynu. Pozycje zaimportowane jako tekst (bez powiązanego produktu) nie wpłyną na stany magazynowe.
+KSEF_StockAutoIncreaseDisabled=Automatyczne zwiększanie stanów magazynowych przy walidacji faktury jest wyłączone. Możesz je włączyć w ustawieniach modułu Stany magazynowe: "Zwiększ stany rzeczywiste przy walidacji faktury dostawcy/noty kredytowej". Pozycje zaimportowane jako tekst (bez powiązanego produktu) nie wpłyną na stany magazynowe.
+KSEF_ImportConfirmSupplier=Dostawca
+
+# ============================================
+# Import faktur korygujących
+# ============================================
+KSEF_ImportErrorOriginalNotImported=Nie można zaimportować faktury korygującej - najpierw należy zaimportować fakturę oryginalną. Proszę najpierw zaimportować "%s".
+KSEF_ImportErrorNoCorrectionsReference=Nie można zaimportować faktury korygującej - brak odniesienia do faktury korygowanej w danych XML
+KSEF_CorrectionNoReferenceData=Ta faktura korygująca nie zawiera odniesień do faktur korygowanych w danych XML
+KSEF_CorrectionChooseStrategy=Ta korekta dotyczy wielu faktur. Wybierz sposób importu:
+KSEF_CorrectionStandalone=Samodzielna nota kredytowa (bez powiązania z fakturą źródłową)
+KSEF_CorrectionStandaloneDesc=Wszystkie odniesienia do faktur korygowanych zostaną umieszczone w notatce
+KSEF_CorrectionLinkTo=Powiąż notę kredytową z: %s
+KSEF_CorrectionOverride=Zezwól na import bez wszystkich faktur oryginalnych
+KSEF_CorrectionNotAllImported=Nie wszystkie faktury korygowane zostały jeszcze zaimportowane do Dolibarr
+KSEF_CorrectionOriginalNotImported=Jeszcze nie zaimportowano
+KSEF_CorrectionStandaloneNoteText=Faktury korygowane: %s
+KSEF_UpwardCorrection=Ta korekta zwiększa kwotę faktury
+KSEF_UpwardCorrectionChoose=Wybierz sposób obsługi korekty w górę:
+KSEF_UpwardCorrectionDifference=Faktura uzupełniająca tylko na różnicę
+KSEF_UpwardCorrectionDifferenceDesc=Tworzy fakturę standardową na dodatkową kwotę (%s)
+KSEF_UpwardCorrectionReplace=Wyzeruj oryginał i utwórz fakturę zastępczą
+KSEF_UpwardCorrectionReplaceDesc=Tworzy notę kredytową zerującą oryginał oraz nową fakturę z poprawioną kwotą
+KSEF_UpwardCorrectionReplaceRequiresLink=Wymaga powiązania z fakturą oryginalną
+KSEF_UpwardCorrectionCreditNoteRef=Wyzerowanie: %s (korekta KSeF %s)
+KSEF_CorrectionSummaryLine=Korekta - stawka VAT %s
+KSEF_CorrectionItemDetail=netto: %s, ilość: %s %s
+KSEF_OriginalNotImported=Faktura oryginalna nie została jeszcze zaimportowana
+KSEF_ImportOriginalFirst=Najpierw zaimportuj fakturę oryginalną
+KSEF_OriginalNotInSystem=Faktura oryginalna nie została znaleziona w rekordach KSeF
+KSEF_LinkedInvoice=Powiązana faktura
+KSEF_CorrectedKsefNumberSameAsOwn=Numery KSeF faktury korygowanej i korygującej są identyczne - prawdopodobnie błąd wystawcy
+KSEF_InvoiceNumber=Numer faktury
+KSEF_BatchCorrectionBlocked=Faktura korygująca - nie można zaimportować w trybie zbiorczym
+KSEF_BatchCorrectionOriginalNotImported=Faktura oryginalna nie została jeszcze zaimportowana - najpierw zaimportuj ją przez import indywidualny
+KSEF_BatchCorrectionSelfReference=Numer KSeF faktury korygowanej jest identyczny z numerem KSeF tej faktury
+KSEF_BatchCorrectionOriginalNotInSystem=Faktura oryginalna nie została znaleziona w rekordach KSeF
+KSEF_BatchCorrectionNoReference=Faktura korygująca nie zawiera odniesienia do faktur korygowanych
+KSEF_BatchCorrectionUseIndividualImport=Użyj strony importu indywidualnego aby pominąć to ograniczenie
+KSEF_BatchSupplierNotMatched=Nie dopasowano dostawcy - włącz automatyczne tworzenie lub użyj importu indywidualnego
+KSEF_BatchSupplierNoMatch=Brak dopasowania
+KSEF_BatchProductFreeText=Wolny tekst
+KSEF_BatchProductsFreeTextWarning=Niedopasowane pozycje zostaną zaimportowane jako wolny tekst
+KSEF_ReplaceCreditNote=Nota korygująca (zerowanie oryginału)
+KSEF_ReplaceCreditNoteDesc=Zeruje oryginalną fakturę %s
+KSEF_ReplaceCreditNoteCardDesc=Nota korygująca zerująca oryginalną fakturę
+KSEF_ReplaceCreditNoteDesc_Source=Zeruje fakturę
+KSEF_ReplaceNewInvoice=Faktura zastępcza
+KSEF_ReplaceNewInvoiceDesc=Nowa faktura z poprawioną kwotą całkowitą
+KSEF_ViewCreditNote=Pokaż notę korygującą
+KSEF_ViewReplacementInvoice=Pokaż fakturę zastępczą
+KSEF_ImportMode=Tryb importu

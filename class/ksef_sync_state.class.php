@@ -46,8 +46,13 @@ class KsefSyncState
     public $process_offset;
     public $process_new;
     public $process_existing;
+    public $fetch_parts;
+    public $fetch_hwm_data;
 
     const FETCH_STATUS_PROCESSING = 'PROCESSING';
+    const FETCH_STATUS_READY_TO_PROCESS = 'READY_TO_PROCESS';
+    const FETCH_STATUS_DOWNLOADING = 'DOWNLOADING';
+    const FETCH_STATUS_PROCESSING_BATCHES = 'PROCESSING_BATCHES';
     const FETCH_STATUS_FAILED = 'FAILED';
     const FETCH_STATUS_TIMEOUT = 'TIMEOUT';
 
@@ -94,6 +99,8 @@ class KsefSyncState
         $this->fetch_key = dol_decode(getDolGlobalString($this->getConstName('FETCH_KEY'), ''));
         $this->fetch_iv = dol_decode(getDolGlobalString($this->getConstName('FETCH_IV'), ''));
         $this->fetch_error = getDolGlobalString($this->getConstName('FETCH_ERROR'), '');
+        $this->fetch_parts = getDolGlobalString($this->getConstName('FETCH_PARTS'), '');
+        $this->fetch_hwm_data = getDolGlobalString($this->getConstName('FETCH_HWM'), '');
 
         $this->process_file = getDolGlobalString($this->getConstName('PROC_FILE'), '');
         $this->process_total = getDolGlobalInt($this->getConstName('PROC_TOTAL'), 0);
@@ -126,6 +133,8 @@ class KsefSyncState
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_KEY'), dol_encode($this->fetch_key ?: ''), 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_IV'), dol_encode($this->fetch_iv ?: ''), 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_ERROR'), $this->fetch_error ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_PARTS'), $this->fetch_parts ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_HWM'), $this->fetch_hwm_data ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
 
         if (dolibarr_set_const($this->db, $this->getConstName('PROC_FILE'), $this->process_file ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('PROC_TOTAL'), $this->process_total ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
@@ -138,7 +147,15 @@ class KsefSyncState
 
     public function isFetchInProgress()
     {
-        return !empty($this->fetch_reference) && $this->fetch_status === self::FETCH_STATUS_PROCESSING;
+        if (empty($this->fetch_reference)) {
+            return false;
+        }
+        return in_array($this->fetch_status, array(
+            self::FETCH_STATUS_PROCESSING,
+            self::FETCH_STATUS_READY_TO_PROCESS,
+            self::FETCH_STATUS_DOWNLOADING,
+            self::FETCH_STATUS_PROCESSING_BATCHES,
+        ));
     }
 
     public function isFetchTimedOut()
@@ -157,6 +174,8 @@ class KsefSyncState
         $this->fetch_key = '';
         $this->fetch_iv = '';
         $this->fetch_error = '';
+        $this->fetch_parts = '';
+        $this->fetch_hwm_data = '';
         return $this->save();
     }
 

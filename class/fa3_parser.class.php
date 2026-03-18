@@ -150,9 +150,17 @@ class FA3Parser
             'address' => '',
             'email' => null,
             'phone' => null,
+            'kod_ue' => null,
+            'nr_vat_ue' => null,
         );
 
         $seller['nip'] = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:NIP');
+
+        $kodUE = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:KodUE', null);
+        if ($kodUE) $seller['kod_ue'] = $kodUE;
+        $nrVatUE = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:NrVatUE', null);
+        if ($nrVatUE) $seller['nr_vat_ue'] = $nrVatUE;
+
         $seller['name'] = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:Nazwa');
         $seller['country'] = $this->getValue($xpath, '//fa:Podmiot1/fa:Adres/fa:KodKraju', 'PL');
         $seller['address'] = $this->getValue($xpath, '//fa:Podmiot1/fa:Adres/fa:AdresL1');
@@ -326,7 +334,7 @@ class FA3Parser
         // 23% rate (P_13_1 / P_14_1)
         $net23 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_1');
         $vat23 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_1');
-        if ($net23 > 0 || $vat23 > 0) {
+        if ($net23 != 0 || $vat23 != 0) {
             $summary['23'] = array('net' => $net23, 'vat' => $vat23, 'vat_pln' => null);
             $vatPln23 = $this->getValue($xpath, '//fa:Fa/fa:P_14_1W', null);
             if ($vatPln23 !== null && $vatPln23 !== '') {
@@ -337,7 +345,7 @@ class FA3Parser
         // 8% rate (P_13_2 / P_14_2)
         $net8 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_2');
         $vat8 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_2');
-        if ($net8 > 0 || $vat8 > 0) {
+        if ($net8 != 0 || $vat8 != 0) {
             $summary['8'] = array('net' => $net8, 'vat' => $vat8, 'vat_pln' => null);
             $vatPln8 = $this->getValue($xpath, '//fa:Fa/fa:P_14_2W', null);
             if ($vatPln8 !== null && $vatPln8 !== '') {
@@ -348,7 +356,7 @@ class FA3Parser
         // 5% rate (P_13_3 / P_14_3)
         $net5 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_3');
         $vat5 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_3');
-        if ($net5 > 0 || $vat5 > 0) {
+        if ($net5 != 0 || $vat5 != 0) {
             $summary['5'] = array('net' => $net5, 'vat' => $vat5, 'vat_pln' => null);
             $vatPln5 = $this->getValue($xpath, '//fa:Fa/fa:P_14_3W', null);
             if ($vatPln5 !== null && $vatPln5 !== '') {
@@ -358,19 +366,19 @@ class FA3Parser
 
         // 0% rate (P_13_6_1)
         $net0 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_1');
-        if ($net0 > 0) {
+        if ($net0 != 0) {
             $summary['0'] = array('net' => $net0, 'vat' => 0.0);
         }
 
         // Exempt (P_13_6_2)
         $netZw = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_2');
-        if ($netZw > 0) {
+        if ($netZw != 0) {
             $summary['zw'] = array('net' => $netZw, 'vat' => 0.0);
         }
 
         // Not subject to tax (P_13_6_3)
         $netNp = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_3');
-        if ($netNp > 0) {
+        if ($netNp != 0) {
             $summary['np'] = array('net' => $netNp, 'vat' => 0.0);
         }
 
@@ -416,7 +424,7 @@ class FA3Parser
                 'discount' => null,
                 'net_amount' => 0.0,
                 'gross_amount' => null,
-                'vat_rate' => 0,
+                'vat_rate' => null,
                 'kurs_waluty' => null,
             );
 
@@ -463,7 +471,7 @@ class FA3Parser
                         $line['gross_amount'] = (float)$child->textContent;
                         break;
                     case 'P_12':
-                        $line['vat_rate'] = (int)$child->textContent;
+                        $line['vat_rate'] = trim($child->textContent);
                         break;
                     case 'CN':
                         $line['cn'] = trim($child->textContent);
@@ -480,27 +488,27 @@ class FA3Parser
             }
 
             // Calculate unit prices
-            if (empty($line['unit_price_net']) && !empty($line['net_amount']) && !empty($line['quantity'])) {
+            if ($this->isNullOrBlank($line['unit_price_net']) && !$this->isNullOrBlank($line['net_amount']) && !$this->isNullOrBlank($line['quantity']) && $line['quantity'] != 0) {
                 $line['unit_price_net'] = round($line['net_amount'] / $line['quantity'], 4);
             }
-            if (empty($line['unit_price_gross']) && !empty($line['gross_amount']) && !empty($line['quantity'])) {
+            if ($this->isNullOrBlank($line['unit_price_gross']) && !$this->isNullOrBlank($line['gross_amount']) && !$this->isNullOrBlank($line['quantity']) && $line['quantity'] != 0) {
                 $line['unit_price_gross'] = round($line['gross_amount'] / $line['quantity'], 4);
             }
 
             // calculate net from gross
             $vatRate = is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
             $vatMultiplier = 1 + $vatRate / 100;
-            if (empty($line['net_amount']) && !empty($line['gross_amount']) && $vatMultiplier > 0) {
+            if ($this->isNullOrBlank($line['net_amount']) && !$this->isNullOrBlank($line['gross_amount']) && $vatMultiplier > 0) {
                 $line['net_amount'] = round($line['gross_amount'] / $vatMultiplier, 2);
             }
-            if (empty($line['unit_price_net']) && !empty($line['unit_price_gross']) && $vatMultiplier > 0) {
+            if ($this->isNullOrBlank($line['unit_price_net']) && !$this->isNullOrBlank($line['unit_price_gross']) && $vatMultiplier > 0) {
                 $line['unit_price_net'] = round($line['unit_price_gross'] / $vatMultiplier, 4);
             }
             // Cross-calculate gross from net when gross is absent
-            if (empty($line['gross_amount']) && !empty($line['net_amount'])) {
+            if ($this->isNullOrBlank($line['gross_amount']) && !$this->isNullOrBlank($line['net_amount'])) {
                 $line['gross_amount'] = round($line['net_amount'] * $vatMultiplier, 2);
             }
-            if (empty($line['unit_price_gross']) && !empty($line['unit_price_net'])) {
+            if ($this->isNullOrBlank($line['unit_price_gross']) && !$this->isNullOrBlank($line['unit_price_net'])) {
                 $line['unit_price_gross'] = round($line['unit_price_net'] * $vatMultiplier, 4);
             }
 
@@ -575,7 +583,7 @@ class FA3Parser
         $dataZaplaty = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:DataZaplaty', null);
         if ($dataZaplaty) $payment['payment_date'] = $dataZaplaty;
 
-        // Bank account — full details
+        // Bank account - full details
         $nrRB = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:NrRB', null);
         if ($nrRB) $payment['bank_account'] = $nrRB;
         $swift = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:SWIFT', null);
@@ -798,6 +806,17 @@ class FA3Parser
             return $default;
         }
         return (float)$value;
+    }
+
+
+    /**
+     * @brief Check if null or blank
+     * @param mixed $val Value to check
+     * @return bool True if null or empty string
+     */
+    private function isNullOrBlank($val)
+    {
+        return $val === null || $val === '';
     }
 
 

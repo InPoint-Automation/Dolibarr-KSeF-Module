@@ -337,7 +337,6 @@ if (!$resql) {
 }
 $num = $db->num_rows($resql);
 
-$arrayofselected = is_array($toselect) ? $toselect : array();
 $param = '';
 if (!empty($contextpage) && $contextpage != $_SERVER["PHP_SELF"]) $param .= '&contextpage=' . urlencode($contextpage);
 if ($limit > 0 && $limit != $conf->liste_limit) $param .= '&limit=' . ((int)$limit);
@@ -359,11 +358,19 @@ if ($optioncss != '') $param .= '&optioncss=' . urlencode($optioncss);
 
 $arrayofmassactions = array(
     'retry' => img_picto('', 'technic', 'class="pictofixedwidth"') . $langs->trans("KSEF_RetrySubmission"),
-    'delete' => img_picto('', 'delete', 'class="pictofixedwidth"') . $langs->trans("Delete")
+    'predelete' => img_picto('', 'delete', 'class="pictofixedwidth"') . $langs->trans("Delete")
 );
 $massactionbutton = $form->selectMassAction('', $arrayofmassactions);
 
-print '<form method="POST" id="searchFormList" action="' . $_SERVER["PHP_SELF"] . '">';
+$arrayofselected = is_array($toselect) ? $toselect : array();
+
+// Build the select-all checkbox for the header
+$selectedfields = '';
+if (count($arrayofmassactions)) {
+    $selectedfields .= $form->showCheckAddButtons('checkforselect', 1);
+}
+
+print '<form method="POST" id="searchFormList" name="searchFormList" action="' . $_SERVER["PHP_SELF"] . '">';
 if ($optioncss != '') print '<input type="hidden" name="optioncss" value="' . $optioncss . '">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
 print '<input type="hidden" name="formfilteraction" id="formfilteraction" value="list">';
@@ -374,6 +381,12 @@ print '<input type="hidden" name="page" value="' . $page . '">';
 print '<input type="hidden" name="contextpage" value="' . $contextpage . '">';
 
 print_barre_liste($langs->trans("KSEF_Status"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $num, $nbtotalofrecords, 'object_ksef@ksef', 0, '', '', $limit, 0, 0, 1);
+
+$topicmail = '';
+$modelmail = '';
+$objecttmp = new KsefSubmission($db);
+$trackid = 'ksefs';
+include DOL_DOCUMENT_ROOT.'/core/tpl/massactions_pre.tpl.php';
 
 $submission = new KsefSubmission($db);
 $stats = $submission->getStatistics(30);
@@ -391,20 +404,28 @@ if (!empty($stats['common_errors'])) {
 
 print '<div class="div-table-responsive"><table class="tagtable nobottomiftotal liste">' . "\n";
 
+// Filter row: Invoice, Customer, KSeF Number, Status, Environment, OfflineMode, Date, Amount, Attempts, Actions, [Checkbox]
 print '<tr class="liste_titre_filter">';
-if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print '<td class="liste_titre center maxwidthsearch">' . $form->showFilterButtons('left') . '</td>';
+if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) {
+    print '<td class="liste_titre center maxwidthsearch">' . $form->showFilterButtons('left') . '</td>';
+}
 print '<td class="liste_titre left"><input class="flat" type="text" name="search_ref" value="' . dol_escape_htmltag($search_ref) . '" size="10"></td>';
-print '<td class="liste_titre left"></td>';
+print '<td class="liste_titre left"></td>'; // Customer
 print '<td class="liste_titre left"><input class="flat" type="text" name="search_ksef_number" value="' . dol_escape_htmltag($search_ksef_number) . '" size="10"></td>';
 print '<td class="liste_titre center">' . $form->selectarray('search_status', array('PENDING' => $langs->trans('KSEF_STATUS_PENDING'), 'SUBMITTED' => $langs->trans('KSEF_STATUS_SUBMITTED'), 'ACCEPTED' => $langs->trans('KSEF_STATUS_ACCEPTED'), 'REJECTED' => $langs->trans('KSEF_STATUS_REJECTED'), 'FAILED' => $langs->trans('KSEF_STATUS_FAILED'), 'TIMEOUT' => $langs->trans('KSEF_STATUS_TIMEOUT')), $search_status, 1, 0, 0, '', 0, 0, 0, '', 'maxwidth150') . '</td>';
 print '<td class="liste_titre center">' . $form->selectarray('search_environment', array('TEST' => $langs->trans('KSEF_ENV_TEST'), 'DEMO' => $langs->trans('KSEF_ENV_DEMO'), 'PRODUCTION' => $langs->trans('KSEF_ENV_PRODUCTION')), $search_environment, 1, 0, 0, '', 0, 0, 0, '', 'maxwidth100') . '</td>';
+print '<td class="liste_titre center"></td>'; // OfflineMode
 print '<td class="liste_titre center"><div class="nowrap">' . $form->selectDate($search_date_start, 'search_date_start', 0, 0, 1, '', 1, 0) . '</div></td>';
-print '<td class="liste_titre right"></td><td class="liste_titre center"></td>';
-print '<td class="liste_titre center maxwidthsearch">' . (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN') ? $form->showFilterButtons() : '') . '</td>';
+print '<td class="liste_titre right"></td>'; // Amount
+print '<td class="liste_titre center"></td>'; // Attempts
+print '<td class="liste_titre center"></td>'; // Actions
+if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) {
+    print '<td class="liste_titre center maxwidthsearch">' . $form->showFilterButtons() . '</td>';
+}
 print '</tr>' . "\n";
 
 print '<tr class="liste_titre">';
-if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList('', 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
+if (getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList($selectedfields, 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
 print_liste_field_titre("Invoice", $_SERVER["PHP_SELF"], "f.ref", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("Customer", $_SERVER["PHP_SELF"], "soc.nom", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("KSEF_Number", $_SERVER["PHP_SELF"], "s.ksef_number", "", $param, "", $sortfield, $sortorder);
@@ -415,7 +436,7 @@ print_liste_field_titre("Date", $_SERVER["PHP_SELF"], "s.date_submission", "", $
 print_liste_field_titre("Amount", $_SERVER["PHP_SELF"], "f.total_ttc", "", $param, '', $sortfield, $sortorder, 'right ');
 print_liste_field_titre("KSEF_Attempts", $_SERVER["PHP_SELF"], "", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("Actions", $_SERVER["PHP_SELF"], "", "", $param, '', '', '', 'center maxwidthsearch');
-if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList('', 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
+if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) print getTitleFieldOfList($selectedfields, 0, $_SERVER["PHP_SELF"], '', '', '', '', $sortfield, $sortorder, 'center maxwidthsearch ') . "\n";
 print '</tr>' . "\n";
 
 $i = 0;
@@ -467,8 +488,6 @@ while ($i < min($num, $limit)) {
     print '<td class="center">' . ($obj->total_attempts > 1 ? '<a href="' . DOL_URL_ROOT . '/custom/ksef/tab_ksef.php?id=' . $obj->fk_facture . '" class="classfortooltip" title="' . $langs->trans("KSEF_ViewAllAttemptsOnInvoice") . '"><span class="badge badge-info">' . $obj->total_attempts . '</span></a>' : '<span class="opacitymedium">1</span>') . '</td>';
 
     print '<td class="center nowraponall">';
-    if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN') && ($massactionbutton || $massaction)) print '<input id="cb' . $obj->rowid . '" class="flat checkforselect" type="checkbox" name="toselect[]" value="' . $obj->rowid . '"' . (in_array($obj->rowid, $arrayofselected) ? ' checked="checked"' : '') . '>';
-
     $can_retry = in_array($obj->status, array('FAILED', 'TIMEOUT', 'REJECTED', 'OFFLINE'));
     if ($obj->status == 'PENDING' && !empty($obj->offline_mode)) {$can_retry = true;}
     if ($can_retry && $user->hasRight('ksef', 'write')) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=retry&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_RetrySubmission") . '"><span class="fa fa-paper-plane paddingrightonly"></span></a>';}
@@ -478,12 +497,19 @@ while ($i < min($num, $limit)) {
     if (!empty($obj->fa3_xml)) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=download_xml&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_DownloadFA3XML") . '"><span class="fa fa-file-code paddingrightonly"></span></a>';}
     if ($obj->status == 'ACCEPTED' && !empty($obj->ksef_number)) {print '<a class="butAction classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=download_upo&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("KSEF_DownloadUPO") . '"><span class="fa fa-certificate paddingrightonly"></span></a>';}
     if ($user->hasRight('facture', 'supprimer')) {print '<a class="butActionDelete classfortooltip marginleftonly" href="' . $_SERVER["PHP_SELF"] . '?action=delete&id=' . $obj->rowid . '&token=' . newToken() . '" title="' . $langs->trans("Delete") . '"><span class="fa fa-trash paddingrightonly"></span></a>';}
+    print '</td>';
 
-    print '</td></tr>';
+    if (!getDolGlobalString('MAIN_CHECKBOX_LEFT_COLUMN')) {
+        print '<td class="nowrap center">';
+        if ($massactionbutton || $massaction) print '<input id="cb' . $obj->rowid . '" class="flat checkforselect" type="checkbox" name="toselect[]" value="' . $obj->rowid . '"' . (in_array($obj->rowid, $arrayofselected) ? ' checked="checked"' : '') . '>';
+        print '</td>';
+    }
+
+    print '</tr>';
     $i++;
 }
 
-if ($num == 0) print '<tr><td colspan="10"><span class="opacitymedium">' . $langs->trans("NoRecordFound") . '</span></td></tr>';
+if ($num == 0) print '<tr><td colspan="11"><span class="opacitymedium">' . $langs->trans("NoRecordFound") . '</span></td></tr>';
 
 $db->free($resql);
 print '</table></div></form>';

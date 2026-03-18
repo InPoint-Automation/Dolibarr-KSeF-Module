@@ -187,6 +187,14 @@ if ($action == 'update') {
     $purge_val = GETPOST('KSEF_PURGE_ON_DISABLE', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_PURGE_ON_DISABLE', $purge_val, 'chaine', 0, '', $conf->entity);
 
+    // Importing
+    $batch_auto_suppliers = GETPOST('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_SUPPLIERS', $batch_auto_suppliers, 'chaine', 0, '', $conf->entity);
+    $batch_auto_products = GETPOST('KSEF_BATCH_AUTO_CREATE_PRODUCTS', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_PRODUCTS', $batch_auto_products, 'chaine', 0, '', $conf->entity);
+    $product_ref_use_indeks = GETPOST('KSEF_PRODUCT_REF_USE_INDEKS', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_PRODUCT_REF_USE_INDEKS', $product_ref_use_indeks, 'chaine', 0, '', $conf->entity);
+
     // Optional Fields
     $fa3_nrklienta_val = GETPOST('KSEF_FA3_INCLUDE_NRKLIENTA', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_NRKLIENTA', $fa3_nrklienta_val, 'chaine', 0, '', $conf->entity);
@@ -639,6 +647,36 @@ print '<td>' . $form->textwithpicto($langs->trans('KSEF_PURGE_ON_DISABLE'), $lan
 print '<td>';
 print '<input type="checkbox" name="KSEF_PURGE_ON_DISABLE" id="KSEF_PURGE_ON_DISABLE" value="1" ' . (!empty($conf->global->KSEF_PURGE_ON_DISABLE) ? 'checked' : '') . '>';
 print ' <label for="KSEF_PURGE_ON_DISABLE">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '</table>';
+
+// Importing Settings
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_IMPORTING_CONFIG") . '</td></tr>';
+
+// Auto-create suppliers
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" id="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" value="1" ' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', '1') === '1' ? 'checked' : '') . '>';
+print ' <label for="KSEF_BATCH_AUTO_CREATE_SUPPLIERS">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// Auto-create products
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_PRODUCTS" id="KSEF_BATCH_AUTO_CREATE_PRODUCTS" value="1" ' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_PRODUCTS', '1') === '1' ? 'checked' : '') . '>';
+print ' <label for="KSEF_BATCH_AUTO_CREATE_PRODUCTS">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// Use indeks as product ref
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING'), $langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help')) . '</td>';
+print '<td>';
+print '<input type="checkbox" name="KSEF_PRODUCT_REF_USE_INDEKS" id="KSEF_PRODUCT_REF_USE_INDEKS" value="1" ' . (getDolGlobalString('KSEF_PRODUCT_REF_USE_INDEKS', '1') === '1' ? 'checked' : '') . '>';
+print ' <label for="KSEF_PRODUCT_REF_USE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
 print '</table>';

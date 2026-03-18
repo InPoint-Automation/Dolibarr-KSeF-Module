@@ -34,6 +34,13 @@ KSEF_Status=KSEF Submission Status
 # ============================================
 KSEF_AUTH_CONFIG=Authentication
 KSEF_UI_CONFIG=User Interface
+KSEF_IMPORTING_CONFIG=Importing
+KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING=Auto-create suppliers during batch import
+KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help=When enabled, suppliers that cannot be matched to an existing third party will be automatically created during batch import. Matching is done by NIP (Polish tax ID) or EU VAT number. New suppliers are created with the name, address, and tax identifiers from the KSeF invoice. This setting is the default for batch imports and is remembered from the last batch import.
+KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING=Auto-create products during batch import
+KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help=When enabled, products that cannot be matched to an existing product will be automatically created during batch import. Matching is attempted by product ref, supplier ref, and barcode/GTIN. New products are created with the description, ref, price, VAT rate, and barcode from the invoice line. If you do not need to track products or link invoice lines to your product catalog, you can leave this disabled - all unmatched lines will still be imported as free text descriptions. This setting is the default for batch imports and is remembered from the last batch import.
+KSEF_PRODUCT_REF_USE_INDEKS_SETTING=Use supplier's product code (indeks) as product ref when auto-creating
+KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help=When enabled, the supplier's product code (indeks/P_7 field from the invoice line) is used as the product reference when auto-creating new products. When disabled, Dolibarr's automatic numbering sequence is used instead.
 KSEF_CUSTOMIZATION_CONFIG=Customization
 KSEF_CUSTOMER_EXCLUSIONS=Customer Exclusions
 KSEF_Configuration=KSeF configuration
@@ -93,7 +100,7 @@ KSEF_COMPANY_REGON_Help=Auto-populated from Professional ID 3 (REGON). Statistic
 KSEF_COMPANY_BDO=Company BDO
 KSEF_COMPANY_BDO_Help=Auto-populated from Professional ID 4 (BDO). Waste Database register number.
 KSEF_Optional=Optional
-KSEF_PRODUCTION_WARNING=Production environment — only submit official invoices. Submissions cannot be reversed.
+KSEF_PRODUCTION_WARNING=Production environment - only submit official invoices. Submissions cannot be reversed.
 
 # ============================================
 # Features
@@ -323,7 +330,19 @@ KSEF_Receiving_Step3=New invoices appear in the list
 KSEF_ReceivingActions=For each invoice you can view the full details, download the original XML, download a PDF visualization, or verify it directly on the KSeF portal.
 
 KSEF_ImportingToDolibarr=Importing to Dolibarr
-KSEF_ImportingToDolibarrDesc=Automatic import to supplier invoices is still in development. For now, download the PDF visualization and create your supplier invoice manually using that as your source document. This saves you from having to log into the KSeF portal separately to view what your suppliers sent you.
+KSEF_ImportingToDolibarrDesc=Incoming invoices can be imported as supplier invoices in Dolibarr. The module automatically matches suppliers by their tax identification numbers (NIP, EU VAT, or other professional identifiers configured in Dolibarr) and line items by product reference, supplier product reference, or barcode (GTIN).
+KSEF_Importing_HowItWorks=How it works
+KSEF_Importing_Step1=Sync incoming invoices from KSeF (manually or via scheduled job)
+KSEF_Importing_Step2=Import invoices individually from the invoice's "Import to Dolibarr" tab, or use batch import from the incoming invoices list
+KSEF_Importing_Step3=The module auto-matches the supplier and attempts to match each line item to an existing product - first by product reference, then by supplier reference, then by barcode
+KSEF_Importing_Step4=Lines without a product match are imported as free text on the supplier invoice. If "Auto-create products when no match found" is enabled in module settings, new products are created instead
+KSEF_Importing_Individual=Individual import
+KSEF_Importing_IndividualDesc=Individual import allows you to review each invoice before importing. You can select or create a supplier (pre-filled from the invoice data) and choose which product to associate with each line item. A "+" button next to each line allows you to create a new product pre-filled with the reference, description, price, VAT rate, and barcode from the invoice.
+KSEF_Importing_Batch=Batch import
+KSEF_Importing_BatchDesc=Batch import processes multiple invoices at once from the incoming invoices list. It auto-matches suppliers and products where possible.
+KSEF_Importing_StockNote=Importing an invoice does not automatically affect stock levels. Stock movements only occur when the imported supplier invoice is validated, and only if "Increase real stocks on validation of vendor invoice/credit note" is enabled in the Stock module settings:
+KSEF_Importing_StockNoteLink=Stock module settings
+KSEF_Importing_StockNoteFreeText=Lines imported as free text (without a linked product) will not affect stock regardless of this setting.
 
 # Customer Exclusions Section
 KSEF_CustomerExclusions=Customer Exclusions
@@ -743,6 +762,14 @@ KSEF_NewInvoices=New
 KSEF_ExistingInvoices=Existing
 KSEF_ConfirmCancelFetch=Cancel current fetch?
 KSEF_ResetAndRetry=Reset and retry
+KSEF_Downloading=Downloading invoices...
+KSEF_ProcessingBatches=Processing invoices
+KSEF_ReadyToProcess=Download ready, starting...
+KSEF_CurrentStatus=Current Status
+KSEF_PhaseWaitingKSeF=Waiting for KSeF to prepare export...
+KSEF_PhaseReadyToProcess=Download ready, starting...
+KSEF_PhaseDownloading=Downloading invoices...
+KSEF_PhaseProcessingBatches=Processing invoices (%s/%s)...
 NotSet=Not set
 
 # ============================================
@@ -766,8 +793,11 @@ KSEF_VATBreakdown=VAT Breakdown
 KSEF_VATExempt=Exempt
 KSEF_PaymentInfo=Payment Information
 KSEF_CorrectsInvoice=Corrects Invoice
+KSEF_CorrectsKsefNr=Corrects KSeF Nr
 KSEF_OriginalKsefNumber=Original KSeF Number
-KSEF_CorrectsXInvoices=Corrects %s invoices
+KSEF_VendorRef=Vendor ref
+KSEF_ImportedAs=Imported as
+KSEF_CorrectsXInvoices=Corrects %s invoices (see table on right)
 KSEF_CorrectedInvoices=Corrected Invoices
 KSEF_CorrectionReason=Correction Reason
 
@@ -860,3 +890,120 @@ KSEF_CertValue_ValidUntil=Valid until: %s
 KSEF_CertValue_Expired=EXPIRED: %s
 KSEF_CertValue_Configured=Configured
 KSEF_CertValue_NotConfigured=Not configured
+
+# ============================================
+# Import Incoming Invoices
+# ============================================
+KSEF_Import=Import
+KSEF_ImportDesc=Import invoice as supplier invoice. Lines with selected products will be linked, others will be imported as free text.
+KSEF_ImportConfirmTitle=Are you sure you want to import this invoice?
+KSEF_ImportAsFreeText=free text (no product linked)
+KSEF_ImportLinkedTo=linked to
+KSEF_ImportSkip=Skip
+KSEF_ImportSkipDesc=Mark this invoice as skipped - it won't be imported
+KSEF_ImportSkipConfirm=Are you sure you want to skip this invoice?
+KSEF_ImportSuccess=Invoice successfully imported as supplier invoice %s
+KSEF_ImportErrorNoSupplier=Please select a supplier before importing
+KSEF_ImportErrorAlreadyImported=This invoice has already been imported
+KSEF_SupplierAutoMatched=Supplier auto-matched by NIP
+KSEF_SupplierNotFound=No supplier found matching NIP %s - please select manually
+KSEF_SupplierChangeSelection=Change
+KSEF_CreateProduct=Create new product
+KSEF_CreateSupplier=Create new supplier
+KSEF_ImportedInvoice=Imported Supplier Invoice
+KSEF_ReopenForImport=Re-open for import
+KSEF_InvoiceSkipped=This invoice was marked as skipped
+KSEF_ProductColumn=Product (optional)
+
+# ============================================
+# Batch Import & Quick Import
+# ============================================
+KSEF_BatchImport=Batch Import
+KSEF_BatchImportTitle=Batch Import Preview
+KSEF_BatchImportConfirm=Import Selected
+KSEF_BatchImporting=Importing...
+KSEF_BatchImportResults=Import Results
+KSEF_BatchImportSuccessLine=Imported successfully
+KSEF_BatchSupplierMatched=Matched
+KSEF_BatchSupplierWillCreate=Will create
+KSEF_BatchProductsMatched=matched
+KSEF_BatchAutoCreateSuppliers=Auto-create suppliers when no match found
+KSEF_BatchAutoCreateSuppliers_Help=When checked, suppliers that cannot be matched by NIP or EU VAT number to an existing third party will be automatically created with data from the KSeF invoice (name, address, tax identifiers). When unchecked, invoices with unmatched suppliers will be skipped during batch import.
+KSEF_BatchAutoCreateProducts=Auto-create products when no match found
+KSEF_BatchAutoCreateProducts_Help=When checked, invoice line items that cannot be matched to an existing product (by product ref, supplier ref, or barcode/GTIN) will be automatically created as new products. When unchecked, unmatched lines are imported as free text on the supplier invoice. If you do not need to track products or link invoice lines to your product catalog, you can leave this disabled - all lines will still be imported as free text descriptions.
+KSEF_BatchNoImportable=No importable invoices in selection (only NEW/ERROR status can be imported)
+KSEF_BatchProductWillCreate=Will create
+KSEF_MatchedByRef=Matched by product ref
+KSEF_MatchedBySupplierRef=Matched by supplier ref
+KSEF_MatchedByBarcode=Matched by barcode
+KSEF_MatchMethod=Match Method
+KSEF_QuickImport=Quick Import
+KSEF_QuickImportAutoComplete=Invoice auto-imported (supplier and all products matched)
+
+# ============================================
+# Reset Import Status
+# ============================================
+KSEF_ResetImportStatus=Reset Import Status
+KSEF_LinkedInvoiceDeleted=Linked supplier invoice has been deleted
+KSEF_ImportStatusReset=Import status has been reset. You can now re-import this invoice.
+KSEF_LinkedInvoiceStillExists=Cannot reset - the linked supplier invoice still exists
+KSEF_ConfirmResetImport=The linked supplier invoice no longer exists. Reset this invoice's status to allow re-importing?
+
+# ============================================
+# Stock / Inventory Info
+# ============================================
+KSEF_StockWillIncrease=Stocks of matched products will be increased on invoice validation
+KSEF_StockWillNotIncrease=Stocks of matched products will not be increased on invoice validation
+KSEF_StockAutoIncreaseEnabled=Stock will be adjusted when the imported invoice is validated. You will be asked to select a warehouse. Lines imported as free text (without a linked product) will not affect stock levels.
+KSEF_StockAutoIncreaseDisabled=Automatic stock increase on invoice validation is disabled. You can enable it under Stock module settings: "Increase real stocks on validation of vendor invoice/credit note". Lines imported as free text (without a linked product) will not affect stock levels.
+KSEF_ImportConfirmSupplier=Supplier
+
+# ============================================
+# Correction Invoice Import
+# ============================================
+KSEF_ImportErrorOriginalNotImported=Cannot import correction invoice - the original invoice must be imported first. Please import "%s" first.
+KSEF_ImportErrorNoCorrectionsReference=Cannot import correction invoice - no reference to corrected invoice found in XML data
+KSEF_CorrectionNoReferenceData=This correction invoice does not contain references to corrected invoices in the XML
+KSEF_CorrectionChooseStrategy=This correction applies to multiple invoices. Choose how to import:
+KSEF_CorrectionStandalone=Standalone credit note (no link to source invoice)
+KSEF_CorrectionStandaloneDesc=All corrected invoice references will be included in the note
+KSEF_CorrectionLinkTo=Link credit note to: %s
+KSEF_CorrectionOverride=Allow import without all originals imported
+KSEF_CorrectionNotAllImported=Not all corrected invoices have been imported to Dolibarr yet
+KSEF_CorrectionOriginalNotImported=Not yet imported
+KSEF_CorrectionStandaloneNoteText=Corrected invoices: %s
+KSEF_UpwardCorrection=This correction increases the invoice amount
+KSEF_UpwardCorrectionChoose=Choose how to handle the upward correction:
+KSEF_UpwardCorrectionDifference=Supplementary invoice for the difference only
+KSEF_UpwardCorrectionDifferenceDesc=Creates a standard invoice for the additional amount (%s)
+KSEF_UpwardCorrectionReplace=Zero out original and create replacement invoice
+KSEF_UpwardCorrectionReplaceDesc=Creates a credit note to cancel the original, plus a new invoice with the corrected total
+KSEF_UpwardCorrectionReplaceRequiresLink=Requires a linked original invoice
+KSEF_UpwardCorrectionCreditNoteRef=Zeroing out: %s (KSeF correction %s)
+KSEF_CorrectionSummaryLine=Correction - %s VAT rate
+KSEF_CorrectionItemDetail=net: %s, qty: %s %s
+KSEF_OriginalNotImported=Original invoice not yet imported
+KSEF_ImportOriginalFirst=Import original invoice first
+KSEF_OriginalNotInSystem=Original invoice not found in KSeF incoming records
+KSEF_LinkedInvoice=Linked Invoice
+KSEF_CorrectedKsefNumberSameAsOwn=Corrected and corrective invoice KSeF numbers are identical - likely error from invoice issuer
+KSEF_InvoiceNumber=Invoice Number
+KSEF_BatchCorrectionBlocked=Correction invoice - cannot batch import
+KSEF_BatchCorrectionOriginalNotImported=Original invoice not yet imported - import it first via individual import
+KSEF_BatchCorrectionSelfReference=Corrected KSeF number is identical to this invoice's KSeF number
+KSEF_BatchCorrectionOriginalNotInSystem=Original invoice not found in KSeF incoming records
+KSEF_BatchCorrectionNoReference=Correction invoice has no reference to corrected invoices
+KSEF_BatchCorrectionUseIndividualImport=Use individual import page to override
+KSEF_BatchSupplierNotMatched=Supplier not matched - enable auto-create or use individual import
+KSEF_BatchSupplierNoMatch=No match
+KSEF_BatchProductFreeText=Free text
+KSEF_BatchProductsFreeTextWarning=Unmatched lines will be imported as free text
+KSEF_ReplaceCreditNote=Credit Note (zeroing original)
+KSEF_ReplaceCreditNoteDesc=Zeroes out original invoice %s
+KSEF_ReplaceCreditNoteCardDesc=Credit note that zeroes out the original invoice
+KSEF_ReplaceCreditNoteDesc_Source=Zeroes out
+KSEF_ReplaceNewInvoice=Replacement Invoice
+KSEF_ReplaceNewInvoiceDesc=New invoice with the corrected total amount
+KSEF_ViewCreditNote=View Credit Note
+KSEF_ViewReplacementInvoice=View Replacement Invoice
+KSEF_ImportMode=Import Mode

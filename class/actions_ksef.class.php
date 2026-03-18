@@ -314,7 +314,7 @@ class ActionsKSEF
                     if (!empty($submission->offline_deadline)) {
                         $hours_remaining = ($submission->offline_deadline - dol_now()) / 3600;
                         if ($hours_remaining < 8) {
-                            print ' <span class="badge badge-warning" style="margin-left: 5px;"><i class="fa fa-clock-o"></i> ' . sprintf($langs->trans('KSEF_HoursRemaining'), round($hours_remaining)) . '</span>';
+                            print ' <span class="badge badge-warning" style="margin-left: 5px;"><i class="fa fa-clock-o"></i> ' . $langs->trans('KSEF_HoursRemaining', round($hours_remaining)) . '</span>';
                         }
                     }
                 }
@@ -859,7 +859,7 @@ class ActionsKSEF
                 if ($is_backdated) {
                     $title = $langs->trans('KSEF_OfflineBackdatedTitle');
                     $icon_color = '#ffc107';
-                    $message = sprintf($langs->trans('KSEF_OfflineBackdatedMessage'), $confirm_data['days_behind']);
+                    $message = $langs->trans('KSEF_OfflineBackdatedMessage', $confirm_data['days_behind']);
                 } else {
                     $title = $langs->trans('KSEF_OfflineConnectionTitle');
                     $icon_color = '#dc3545';
@@ -1268,6 +1268,98 @@ jQuery(document).ready(function() {
 });
 </script>';
 
+            // Display corrected invoice info for correction invoices (both TYPE_STANDARD and TYPE_CREDIT_NOTE)
+            // Rendered first so JS can reposition these rows near the top of the info table
+            dol_include_once('/ksef/class/ksef_incoming.class.php');
+            $incomingCorr = new KsefIncoming($db);
+            if ($incomingCorr->fetchBySupplierInvoice($object->id) > 0 && KsefIncoming::isCorrectionType($incomingCorr->invoice_type)) {
+                $correctionData = $incomingCorr->getCorrectionData();
+                $resolvedCorrections = $incomingCorr->resolveCorrectedInvoices();
+                $correctedCount = count($resolvedCorrections);
+
+                // Replace mode detection
+                $creditNoteInvoice = null;
+                $linkedInvoice = null;
+                $isReplaceMode = false;
+
+                if ($incomingCorr->fk_credit_note > 0) {
+                    $creditNoteInvoice = new FactureFournisseur($db);
+                    if ($creditNoteInvoice->fetch($incomingCorr->fk_credit_note) <= 0) {
+                        $creditNoteInvoice = null;
+                    }
+                }
+                if ($incomingCorr->fk_facture_fourn > 0 && $incomingCorr->fk_facture_fourn != $object->id) {
+                    $linkedInvoice = new FactureFournisseur($db);
+                    if ($linkedInvoice->fetch($incomingCorr->fk_facture_fourn) <= 0) {
+                        $linkedInvoice = null;
+                    }
+                }
+                $isReplaceMode = ($creditNoteInvoice !== null && ($linkedInvoice !== null || $incomingCorr->fk_facture_fourn == $object->id));
+
+                // Import mode row for replace mode
+                if ($isReplaceMode) {
+                    print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_ImportMode") . '</td>';
+                    print '<td colspan="3"><span class="badgeneutral">' . $langs->trans("KSEF_UpwardCorrectionReplace") . '</span></td></tr>';
+                }
+
+                // Single corrected invoice: rich display
+                if ($correctedCount == 1) {
+                    $rc = $resolvedCorrections[0];
+                    $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $incomingCorr->ksef_number);
+                    print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_CorrectsInvoice") . '</td><td colspan="3">';
+
+                    // KSeF number
+                    print $langs->trans("KSEF_CorrectsKsefNr") . ': ';
+                    if ($rc['incoming']) {
+                        print $rc['incoming']->getNomUrl(1);
+                    } elseif (!empty($rc['ksef_number'])) {
+                        print dol_escape_htmltag($rc['ksef_number']);
+                    } else {
+                        print '<span class="opacitymedium">-</span>';
+                    }
+                    if ($isSelfReference) {
+                        print '<br><span class="warning"><span class="fa fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_CorrectedKsefNumberSameAsOwn") . '</span>';
+                    }
+
+                    // Vendor invoice reference
+                    if (!empty($rc['invoice_number'])) {
+                        print '<br>' . $langs->trans("KSEF_VendorRef") . ': ';
+                        print dol_escape_htmltag($rc['invoice_number']);
+                    }
+
+                    // Dolibarr supplier invoice
+                    if ($rc['supplier_invoice']) {
+                        print '<br>' . $langs->trans("KSEF_ImportedAs") . ': ';
+                        print $rc['supplier_invoice']->getNomUrl(1) . ' ' . $rc['supplier_invoice']->getLibStatut(5);
+                    }
+
+                    print '</td></tr>';
+                } elseif ($correctedCount > 1) {
+                    // Multiple corrected invoices: summary row + table rendered via JS repositioning
+                    print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_CorrectedInvoices") . '</td><td colspan="3">';
+                    print $langs->trans("KSEF_CorrectsXInvoices", $correctedCount);
+                    print '</td></tr>';
+                }
+
+                // Correction reason
+                if (!empty($correctionData['reason'])) {
+                    print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_CorrectionReason") . '</td>';
+                    print '<td colspan="3">' . dol_escape_htmltag($correctionData['reason']) . '</td></tr>';
+                }
+
+                // Replace mode: show credit note and replacement invoice links
+                if ($isReplaceMode) {
+                    if ($creditNoteInvoice !== null) {
+                        print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_ReplaceCreditNote") . '</td>';
+                        print '<td colspan="3">' . $creditNoteInvoice->getNomUrl(1) . ' ' . $creditNoteInvoice->getLibStatut(5) . '</td></tr>';
+                    }
+                    if ($linkedInvoice !== null) {
+                        print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_ReplaceNewInvoice") . '</td>';
+                        print '<td colspan="3">' . $linkedInvoice->getNomUrl(1) . ' ' . $linkedInvoice->getLibStatut(5) . '</td></tr>';
+                    }
+                }
+            }
+
             // Display KSeF status (formatted, replaces raw extrafields)
             $ksefNumber = $object->array_options['options_ksef_number'] ?? '';
             $ksefStatus = $object->array_options['options_ksef_status'] ?? '';
@@ -1289,8 +1381,16 @@ jQuery(document).ready(function() {
                     strpos($ksefNumber, 'ERROR') === false);
 
                 if ($is_online_ksef_number) {
-                    $verifyUrl = ksefGetVerificationURL($ksefNumber, null, $environment);
-                    print '<a href="' . $verifyUrl . '" target="_blank" style="text-decoration: none;"><span class="badge badge-info">' . dol_escape_htmltag($ksefNumber) . '</span></a>';
+                    $verifyUrl = '';
+                    if ($incomingCorr->id > 0 && !empty($incomingCorr->fa3_xml)) {
+                        $verifyUrl = ksefGetVerificationUrlFromXml($ksefNumber, $incomingCorr->fa3_xml, $environment);
+                    }
+
+                    if (!empty($verifyUrl)) {
+                        print '<a href="' . $verifyUrl . '" target="_blank" style="text-decoration: none;"><span class="badge badge-info">' . dol_escape_htmltag($ksefNumber) . '</span></a>';
+                    } else {
+                        print '<span class="badge badge-info">' . dol_escape_htmltag($ksefNumber) . '</span>';
+                    }
                 } else {
                     print '<span class="badge badge-secondary">' . dol_escape_htmltag($ksefNumber) . '</span>';
                 }
@@ -1306,6 +1406,22 @@ jQuery(document).ready(function() {
             }
 
             print '</td></tr>';
+
+            // Reposition correction rows near the top of the info table (after supplier/date rows)
+            print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var corrRows = jQuery("tr").has("td:contains(\'' . dol_escape_js($langs->trans("KSEF_CorrectsInvoice")) . '\'), td:contains(\'' . dol_escape_js($langs->trans("KSEF_CorrectedInvoices")) . '\'), td:contains(\'' . dol_escape_js($langs->trans("KSEF_ImportMode")) . '\'), td:contains(\'' . dol_escape_js($langs->trans("KSEF_CorrectionReason")) . '\'), td:contains(\'' . dol_escape_js($langs->trans("KSEF_ReplaceCreditNote")) . '\'), td:contains(\'' . dol_escape_js($langs->trans("KSEF_ReplaceNewInvoice")) . '\')");
+    if (!corrRows.length) return;
+    // Find the invoice type row to insert after
+    var anchorRow = jQuery("table.border.tableforfield > tbody > tr, table.border.centpercent.tableforfield > tbody > tr").filter(function() {
+        var label = jQuery(this).children("td").first().text().trim();
+        return label === ' . json_encode($langs->transnoentities("Type")) . ';
+    }).first();
+    if (anchorRow.length) {
+        corrRows.detach().insertAfter(anchorRow);
+    }
+});
+</script>';
         }
 
         if ($currentcontext == 'thirdpartycard') {

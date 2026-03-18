@@ -1155,6 +1155,10 @@ function ksefGetInvoiceTypeBadge($type)
             return '<span class="badge badge-status4">VAT</span>';
         case 'KOR':
             return '<span class="badge badge-status1">KOR</span>';
+        case 'KOR_ZAL':
+            return '<span class="badge badge-status1">KOR_ZAL</span>';
+        case 'KOR_ROZ':
+            return '<span class="badge badge-status1">KOR_ROZ</span>';
         case 'ZAL':
             return '<span class="badge badge-status5">ZAL</span>';
         case 'ROZ':
@@ -1232,4 +1236,172 @@ function ksefGetInvoiceCurrency($invoice)
 
     global $conf;
     return !empty($conf->currency) ? $conf->currency : 'EUR';
+}
+
+
+/**
+ * Render a Dolibarr supplier invoice card display in the same style as incoming_card.php
+ *
+ * Shows fichecenter layout with left column (ref, type, date, status), right column
+ * (currency, amounts HT/VAT/TTC), and line items table below - mirroring how the
+ * incoming card and import pages display invoice data.
+ *
+ * @param FactureFournisseur $invoice       The supplier invoice to display
+ * @param string             $title         Section title/heading
+ * @param string             $icon          FontAwesome icon class (e.g. 'fa-minus-circle')
+ * @param string             $iconColor     CSS color for the icon
+ * @param string             $description   Optional description text below the title
+ * @param FactureFournisseur|null $originalInv  Optional original invoice (for credit notes that zero out an original)
+ * @return void
+ */
+function ksefPrintSupplierInvoiceCard($invoice, $title, $icon = '', $iconColor = '', $description = '', $originalInv = null)
+{
+    global $langs;
+
+    $invoice->fetch_lines();
+
+    $currency = !empty($invoice->multicurrency_code) ? $invoice->multicurrency_code : 'PLN';
+    $isMulticurrency = ($currency !== 'PLN');
+
+    // Section heading
+    print '<div class="div-table-responsive-no-min" style="margin-top: 15px; margin-bottom: 5px;">';
+    print '<table class="noborder centpercent">';
+    print '<tr class="liste_titre">';
+    print '<td class="liste_titre">';
+    if ($icon) {
+        print '<span class="fa ' . $icon . '" style="color: ' . dol_escape_htmltag($iconColor) . '; margin-right: 6px;"></span>';
+    }
+    print dol_escape_htmltag($title);
+    print '</td>';
+    print '</tr>';
+    print '</table>';
+    print '</div>';
+
+    // fichecenter layout
+    print '<div class="fichecenter">';
+
+    // Left column: key fields
+    print '<div class="fichehalfleft">';
+    print '<table class="border tableforfield centpercent">';
+
+    // Ref + status
+    print '<tr><td class="titlefield">' . $langs->trans("Ref") . '</td>';
+    print '<td>' . $invoice->getNomUrl(1) . ' ' . $invoice->getLibStatut(5) . '</td></tr>';
+
+    // Type
+    print '<tr><td>' . $langs->trans("Type") . '</td><td>';
+    if ($invoice->type == FactureFournisseur::TYPE_CREDIT_NOTE) {
+        print '<span class="badgeneutral">' . $langs->trans("InvoiceAvoir") . '</span>';
+    } else {
+        print '<span class="badgeneutral">' . $langs->trans("InvoiceStandard") . '</span>';
+    }
+    print '</td></tr>';
+
+    // Source invoice (for credit notes)
+    if ($originalInv) {
+        print '<tr><td>' . $langs->trans("KSEF_ReplaceCreditNoteDesc_Source") . '</td>';
+        print '<td>' . $originalInv->getNomUrl(1) . ' ' . $originalInv->getLibStatut(5) . '</td></tr>';
+    }
+
+    // Supplier ref
+    if (!empty($invoice->ref_supplier)) {
+        print '<tr><td>' . $langs->trans("RefSupplierBill") . '</td>';
+        print '<td>' . dol_escape_htmltag($invoice->ref_supplier) . '</td></tr>';
+    }
+
+    // Date
+    print '<tr><td>' . $langs->trans("DateInvoice") . '</td>';
+    print '<td>' . dol_print_date($invoice->date, 'day') . '</td></tr>';
+
+    // Description
+    if (!empty($description)) {
+        print '<tr><td>' . $langs->trans("Description") . '</td>';
+        print '<td><span class="opacitymedium">' . dol_escape_htmltag($description) . '</span></td></tr>';
+    }
+
+    print '</table>';
+    print '</div>'; // fichehalfleft
+
+    // Right column: amounts
+    print '<div class="fichehalfright">';
+    print '<table class="border tableforfield centpercent">';
+
+    // Currency
+    if ($isMulticurrency) {
+        print '<tr><td class="titlefieldmiddle">' . $langs->trans("Currency") . '</td>';
+        print '<td>' . dol_escape_htmltag($currency) . '</td></tr>';
+    }
+
+    // Amount HT
+    print '<tr>';
+    print '<td class="titlefieldmiddle">' . $langs->trans('AmountHT') . '</td>';
+    if ($isMulticurrency) {
+        print '<td class="nowrap amountcard right">' . price($invoice->multicurrency_total_ht, 0, $langs, 0, -1, -1, $currency) . '</td>';
+    } else {
+        print '<td class="nowrap amountcard right">' . price($invoice->total_ht, 0, $langs, 0, -1, -1, $currency) . '</td>';
+    }
+    print '</tr>';
+
+    // Amount VAT
+    print '<tr>';
+    print '<td>' . $langs->trans('AmountVAT') . '</td>';
+    if ($isMulticurrency) {
+        print '<td class="nowrap amountcard right">' . price($invoice->multicurrency_total_tva, 0, $langs, 0, -1, -1, $currency) . '</td>';
+    } else {
+        print '<td class="nowrap amountcard right">' . price($invoice->total_tva, 0, $langs, 0, -1, -1, $currency) . '</td>';
+    }
+    print '</tr>';
+
+    // Amount TTC
+    print '<tr>';
+    print '<td>' . $langs->trans('AmountTTC') . '</td>';
+    if ($isMulticurrency) {
+        print '<td class="nowrap amountcard right">' . price($invoice->multicurrency_total_ttc, 0, $langs, 0, -1, -1, $currency) . '</td>';
+    } else {
+        print '<td class="nowrap amountcard right">' . price($invoice->total_ttc, 0, $langs, 0, -1, -1, $currency) . '</td>';
+    }
+    print '</tr>';
+
+    print '</table>';
+    print '</div>'; // fichehalfright
+
+    print '</div>'; // fichecenter
+    print '<div class="clearboth"></div>';
+
+    // Line items table
+    if (!empty($invoice->lines)) {
+        print '<div class="div-table-responsive-no-min">';
+        print '<table class="noborder noshadow centpercent">';
+
+        print '<tr class="liste_titre nodrag nodrop">';
+        print '<td class="linecoldescription">' . $langs->trans("Description") . '</td>';
+        print '<td class="linecolvat right nowraponall">' . $langs->trans("VAT") . '</td>';
+        print '<td class="linecoluht right nowraponall">' . $langs->trans("PriceUHT") . '</td>';
+        print '<td class="linecolqty right">' . $langs->trans("Qty") . '</td>';
+        print '<td class="linecolht right">' . $langs->trans("TotalHT") . '</td>';
+        print '</tr>';
+
+        foreach ($invoice->lines as $line) {
+            $unitPrice = $isMulticurrency ? $line->multicurrency_subprice : $line->subprice;
+            $totalHT = $isMulticurrency ? $line->multicurrency_total_ht : $line->total_ht;
+
+            print '<tr class="oddeven">';
+            print '<td class="linecoldescription">' . dol_escape_htmltag($line->desc) . '</td>';
+            print '<td class="linecolvat nowrap right">' . vatrate($line->tva_tx) . '%</td>';
+            print '<td class="linecoluht nowraponall right">' . price($unitPrice, 0, '', 1, -1, 2) . '</td>';
+            print '<td class="linecolqty nowraponall right">' . price($line->qty, 0, '', 1, -1, 4) . '</td>';
+            print '<td class="linecolht nowrap right">' . price($totalHT, 0, '', 1, -1, 2) . '</td>';
+            print '</tr>';
+        }
+
+        // Total row
+        $totalHT = $isMulticurrency ? $invoice->multicurrency_total_ht : $invoice->total_ht;
+        print '<tr class="liste_total">';
+        print '<td colspan="4" class="right">' . $langs->trans("Total") . '</td>';
+        print '<td class="right nowraponall">' . price($totalHT, 0, $langs, 0, -1, -1, $currency) . '</td>';
+        print '</tr>';
+
+        print '</table>';
+        print '</div>';
+    }
 }

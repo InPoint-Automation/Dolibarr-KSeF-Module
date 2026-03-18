@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.2.0';
+        $this->version = '1.3.0';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -582,6 +582,53 @@ class modKSEF extends DolibarrModules
                         $db->free($resql);
                     }
                     dol_syslog("modKSEF::migration 1.2.0 - Re-parsed data for $migrated incoming invoices", LOG_INFO);
+                },
+            ),
+            '1.3.0' => array(
+                // seller_vat_id column
+                function () use ($db, $conf) {
+                    $sql_check = "SHOW COLUMNS FROM " . MAIN_DB_PREFIX . "ksef_incoming LIKE 'seller_vat_id'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $sql_alter = "ALTER TABLE " . MAIN_DB_PREFIX . "ksef_incoming ADD COLUMN seller_vat_id VARCHAR(50) AFTER seller_nip";
+                        $db->query($sql_alter);
+                        dol_syslog("modKSEF::migration 1.3.0 - Added seller_vat_id column", LOG_INFO);
+                    }
+                },
+                // Re-parse to populate seller_vat_id
+                function () use ($db, $conf) {
+                    $migrated = 0;
+                    $sql_incoming = "SELECT rowid, fa3_xml FROM " . MAIN_DB_PREFIX . "ksef_incoming"
+                        . " WHERE fa3_xml IS NOT NULL AND fa3_xml != ''"
+                        . " AND entity = " . (int) $conf->entity;
+                    $resql = $db->query($sql_incoming);
+                    if ($resql) {
+                        dol_include_once('/ksef/class/fa3_parser.class.php');
+                        $parser = new FA3Parser($db);
+                        while ($obj = $db->fetch_object($resql)) {
+                            $parsed = $parser->parse($obj->fa3_xml);
+                            if ($parsed && !empty($parsed['seller']['kod_ue']) && !empty($parsed['seller']['nr_vat_ue'])) {
+                                $vatId = $parsed['seller']['kod_ue'] . $parsed['seller']['nr_vat_ue'];
+                                $sql_update = "UPDATE " . MAIN_DB_PREFIX . "ksef_incoming"
+                                    . " SET seller_vat_id = '" . $db->escape($vatId) . "'"
+                                    . " WHERE rowid = " . (int) $obj->rowid;
+                                $db->query($sql_update);
+                                $migrated++;
+                            }
+                        }
+                        $db->free($resql);
+                    }
+                    dol_syslog("modKSEF::migration 1.3.0 - Populated seller_vat_id for $migrated incoming invoices", LOG_INFO);
+                },
+                // Add fk_credit_note column for replace-mode upward corrections
+                function () use ($db, $conf) {
+                    $sql_check = "SHOW COLUMNS FROM " . MAIN_DB_PREFIX . "ksef_incoming LIKE 'fk_credit_note'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $sql_alter = "ALTER TABLE " . MAIN_DB_PREFIX . "ksef_incoming ADD COLUMN fk_credit_note INTEGER DEFAULT NULL AFTER fk_facture_fourn";
+                        $db->query($sql_alter);
+                        dol_syslog("modKSEF::migration 1.3.0 - Added fk_credit_note column", LOG_INFO);
+                    }
                 },
             ),
         );
