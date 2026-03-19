@@ -58,6 +58,7 @@ $formfile = new FormFile($db);
 // Stats
 $submission = new KsefSubmission($db);
 $stats_outgoing = $submission->getStatistics(30);
+$stats_outgoing_total = $submission->getStatistics(99999);
 $stats_incoming = array('total' => 0, 'new' => 0, 'imported' => 0, 'skipped' => 0, 'error' => 0);
 $sql_inc = "SELECT import_status, COUNT(*) as cnt FROM " . MAIN_DB_PREFIX . "ksef_incoming WHERE entity IN (" . getEntity('invoice') . ") GROUP BY import_status";
 $resql_inc = $db->query($sql_inc);
@@ -71,6 +72,10 @@ if ($resql_inc) {
     }
     $db->free($resql_inc);
 }
+
+dol_include_once('/ksef/class/ksef_sync_state.class.php');
+$syncState = new KsefSyncState($db);
+$syncState->load('incoming');
 
 //Outgoing
 $latest_join = " INNER JOIN (SELECT fk_facture, MAX(date_submission) as latest_date FROM " . MAIN_DB_PREFIX . "ksef_submissions GROUP BY fk_facture) latest";
@@ -272,22 +277,22 @@ print '<div class="box divboxtable">';
 print '<table class="noborder boxtable centpercent">';
 print '<tr class="liste_titre box_titre"><th colspan="2">';
 print '<div class="tdoverflowmax400 maxwidth250onsmartphone float">';
-print $langs->trans("KSEF_Statistics") . ' (' . $langs->trans("KSEF_Last30Days") . ')';
+print $langs->trans("KSEF_Statistics");
 print '</div></th></tr>';
 
 print '<tr class="oddeven"><td>' . $langs->trans("KSEF_TotalSubmissions") . '</td>';
-print '<td class="right nowraponall"><strong>' . $stats_outgoing['total'] . '</strong></td></tr>';
+print '<td class="right nowraponall"><strong>' . $stats_outgoing_total['total'] . '</strong></td></tr>';
 
-print '<tr class="oddeven"><td>' . $langs->trans("KSEF_Accepted") . '</td>';
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_Accepted") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
 print '<td class="right nowraponall"><span class="badge badge-status4">' . $stats_outgoing['accepted'] . '</span></td></tr>';
 
-print '<tr class="oddeven"><td>' . $langs->trans("KSEF_Pending") . '</td>';
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_Pending") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
 print '<td class="right nowraponall"><span class="badge badge-status1">' . $stats_outgoing['pending'] . '</span></td></tr>';
 
-print '<tr class="oddeven"><td>' . $langs->trans("KSEF_Failed") . '</td>';
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_Failed") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
 print '<td class="right nowraponall"><span class="badge badge-status8">' . $stats_outgoing['failed'] . '</span></td></tr>';
 
-print '<tr class="liste_total"><td class="liste_total">' . $langs->trans("KSEF_SuccessRate") . '</td>';
+print '<tr class="liste_total"><td class="liste_total">' . $langs->trans("KSEF_SuccessRate") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
 print '<td class="liste_total right nowraponall"><strong>' . $stats_outgoing['success_rate'] . '%</strong></td></tr>';
 
 print '</table></div>';
@@ -420,6 +425,44 @@ if (!empty($stats_incoming['error'])) {
     print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusERROR") . '</td>';
     print '<td class="right nowraponall"><span class="badge badge-status8">' . $stats_incoming['error'] . '</span></td></tr>';
 }
+
+$ksefStartDate = strtotime('2026-02-01');
+$ksefPreStartDate = strtotime('2026-01-31');
+$todayTs = dol_now();
+$hwmTimestamp = !empty($syncState->hwm_date) ? $syncState->getContinuationDate() : null;
+if ($hwmTimestamp && $hwmTimestamp < $ksefPreStartDate) $hwmTimestamp = $ksefPreStartDate;
+if ($hwmTimestamp && $hwmTimestamp > $todayTs) $hwmTimestamp = $todayTs;
+$totalSpan = max($todayTs - $ksefStartDate, 1);
+$hwmPercent = $hwmTimestamp ? round((($hwmTimestamp - $ksefStartDate) / $totalSpan) * 100, 1) : 0;
+if ($hwmPercent < 0) $hwmPercent = 0;
+if ($hwmPercent > 100) $hwmPercent = 100;
+
+if ($hwmPercent >= 95) {
+    $barColor = '#4CAF50';
+    $barStatus = $langs->trans("KSEF_SyncProgressUpToDate");
+} elseif ($hwmPercent >= 50) {
+    $barColor = '#FF9800';
+    $barStatus = $langs->trans("KSEF_SyncProgressPartial");
+} elseif ($hwmTimestamp) {
+    $barColor = '#f44336';
+    $barStatus = $langs->trans("KSEF_SyncProgressBehind");
+} else {
+    $barColor = '#d0d0d0';
+    $barStatus = $langs->trans("KSEF_SyncNotStarted");
+}
+
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_SyncProgress") . '</td>';
+print '<td class="right nowraponall">';
+print '<div style="display: inline-block; width: 120px; height: 14px; background: #d0d0d0; border-radius: 3px; vertical-align: middle; margin-right: 6px;">';
+if ($hwmPercent > 0) {
+    print '<div style="height: 100%; width: ' . $hwmPercent . '%; background: ' . $barColor . '; border-radius: 3px;"></div>';
+}
+print '</div>';
+print '<span style="color: ' . $barColor . '; font-weight: 600; font-size: 0.85em;">' . $barStatus . '</span>';
+if ($hwmTimestamp && $hwmPercent < 100) {
+    print ' <span class="opacitymedium small">(' . $hwmPercent . '%)</span>';
+}
+print '</td></tr>';
 
 print '</table></div>';
 

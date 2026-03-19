@@ -106,6 +106,17 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.1
+>- Reject malformed/incorrect invoices without blocking correct invoices
+>- Batch processing improved so one malformed invoice no longer breaks entire batch
+>- Fix bad KSeF number extraction fallback
+>- Handle out-of-range dates
+>- Incoming sync chunks in to 60-day windows to stay within KSeF API limits
+>- Display sync errors from last sync in a popup list
+>- Sync coverage timeline bar to incoming list and index pages
+>- Statistics slightly improved
+>- Reset sync state now resets to KSeF start date
+
 >### Version v1.3.0
 >- Importing of incoming invoices with individual and batch import from the incoming invoices list
 >- Supplier auto-matching by NIP and EU VAT ID

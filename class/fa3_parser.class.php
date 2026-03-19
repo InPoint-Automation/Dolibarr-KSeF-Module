@@ -64,6 +64,17 @@ class FA3Parser
                 return false;
             }
 
+            $rootNs = $doc->documentElement->namespaceURI;
+            if ($rootNs !== KSEF_FA3_NAMESPACE) {
+                $kodSystemowy = '';
+                $kodNodes = $doc->getElementsByTagName('KodFormularza');
+                if ($kodNodes->length > 0) {
+                    $kodSystemowy = $kodNodes->item(0)->getAttribute('kodSystemowy');
+                }
+                $this->error = "Unsupported invoice schema: " . ($kodSystemowy ?: 'unknown') . " (namespace: {$rootNs}). Only FA(3) is supported.";
+                return false;
+            }
+
             $xpath = new DOMXPath($doc);
             $xpath->registerNamespace('fa', KSEF_FA3_NAMESPACE);
 

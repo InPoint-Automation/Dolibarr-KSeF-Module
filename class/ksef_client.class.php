@@ -1828,8 +1828,13 @@ class KsefClient
 
                 $ksefNumber = $this->extractKsefNumberFromContent($content, $filename);
                 if ($ksefNumber) {
+                    if (isset($batch[$ksefNumber])) {
+                        dol_syslog("KsefClient::processPackageInBatches WARNING: duplicate KSeF number {$ksefNumber} from file {$filename} - overwriting previous entry", LOG_WARNING);
+                    }
                     $batch[$ksefNumber] = $content;
                     $invoiceCount++;
+                } else {
+                    dol_syslog("KsefClient::processPackageInBatches WARNING: could not extract KSeF number from file {$filename} - skipping", LOG_WARNING);
                 }
 
                 if (count($batch) >= $batchSize) {
@@ -1871,9 +1876,6 @@ class KsefClient
      */
     private function extractKsefNumberFromContent($content, $filename)
     {
-        if (preg_match('/(\d{10}-\d{8}-[A-Z0-9-]+)/i', $content, $matches)) {
-            return $matches[1];
-        }
         $basename = pathinfo($filename, PATHINFO_FILENAME);
         if (preg_match('/^(\d{10}-\d{8}-[A-Z0-9-]+)$/i', $basename)) {
             return $basename;

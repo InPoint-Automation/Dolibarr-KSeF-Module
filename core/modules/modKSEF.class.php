@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.0';
+        $this->version = '1.3.1';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -90,18 +90,6 @@ class modKSEF extends DolibarrModules
         $this->warnings_activation_ext = array();
 
         $this->const = array();
-        $r = 0;
-
-        // PDF & QR Settings
-        $this->const[$r++] = array('KSEF_ADD_TO_PDF', 'chaine', '1', 'Add KSEF number to invoice PDFs', 0, 'current', 0);
-        $this->const[$r++] = array('KSEF_ADD_QR', 'chaine', '1', 'Add KSEF QR code to invoice PDFs', 0, 'current', 0);
-        $this->const[$r++] = array('KSEF_QR_SIZE', 'chaine', '25', 'QR code size in mm', 0, 'current', 0);
-
-        // UI Customization
-        $this->const[$r++] = array('KSEF_BUTTON_COLOR', 'chaine', '#dc3545', 'KSeF button color', 0, 'current', 0);
-
-        // Purge all configuration when module is disabled?
-        $this->const[$r++] = array('KSEF_PURGE_ON_DISABLE', 'chaine', '0', 'Remove all configuration data when module is disabled', 0, 'current', 0);
 
 
         if (!isset($conf->ksef) || !isset($conf->ksef->enabled)) {
@@ -291,6 +279,17 @@ class modKSEF extends DolibarrModules
         if ($result < 0) return -1;
 
         $persistentDefaults = array(
+            // PDF & QR Settings
+            'KSEF_ADD_TO_PDF'        => '1',
+            'KSEF_ADD_QR'            => '1',
+            'KSEF_QR_SIZE'           => '25',
+
+            // UI Customization
+            'KSEF_BUTTON_COLOR'      => '#dc3545',
+
+            // Purge all configuration when module is disabled?
+            'KSEF_PURGE_ON_DISABLE'  => '0',
+
             // Company & Environment
             'KSEF_COMPANY_NIP'       => '',
             'KSEF_COMPANY_KRS'       => '',
@@ -661,6 +660,17 @@ class modKSEF extends DolibarrModules
         // purge on disable
         if (!empty($conf->global->KSEF_PURGE_ON_DISABLE)) {
             $constantsToPurge = array(
+                // PDF & QR Settings
+                'KSEF_ADD_TO_PDF',
+                'KSEF_ADD_QR',
+                'KSEF_QR_SIZE',
+
+                // UI Customization
+                'KSEF_BUTTON_COLOR',
+
+                // Purge on disable (reset itself too)
+                'KSEF_PURGE_ON_DISABLE',
+
                 // Company & Environment
                 'KSEF_COMPANY_NIP',
                 'KSEF_COMPANY_KRS',

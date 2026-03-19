@@ -82,6 +82,23 @@ class KsefIncoming extends CommonObject
 
 
     /**
+     * @brief Safe strtotime
+     * @param string $dateStr Date string
+     * @return int|null Unix timestamp or null
+     */
+    private static function safeStrtotime($dateStr)
+    {
+        if (empty($dateStr)) return null;
+        $ts = strtotime($dateStr);
+        if ($ts === false || $ts < 0 || $ts > 2147483647) {
+            dol_syslog("KsefIncoming::safeStrtotime: out of range or invalid date '{$dateStr}' (ts={$ts})", LOG_WARNING);
+            return null;
+        }
+        return $ts;
+    }
+
+
+    /**
      * @brief Create new incoming invoice record
      * @param $user User object
      * @param $notrigger Skip triggers flag
@@ -460,6 +477,7 @@ class KsefIncoming extends CommonObject
         $sql = "SELECT ksef_number FROM " . MAIN_DB_PREFIX . $this->table_element;
         $sql .= " WHERE ksef_number IN (" . implode(',', $escaped) . ")";
         $sql .= " AND environment = '" . $this->db->escape($environment) . "'";
+        $sql .= " AND entity IN (" . getEntity($this->element) . ")";
 
         $resql = $this->db->query($sql);
         if ($resql) {
@@ -503,8 +521,8 @@ class KsefIncoming extends CommonObject
         $this->buyer_name = $parsedData['buyer']['name'] ?? '';
         $this->invoice_number = $parsedData['invoice']['number'] ?? '';
         $this->invoice_type = $parsedData['invoice']['type'] ?? 'VAT';
-        $this->invoice_date = !empty($parsedData['invoice']['date']) ? strtotime($parsedData['invoice']['date']) : null;
-        $this->sale_date = !empty($parsedData['invoice']['sale_date']) ? strtotime($parsedData['invoice']['sale_date']) : null;
+        $this->invoice_date = self::safeStrtotime($parsedData['invoice']['date'] ?? '');
+        $this->sale_date = self::safeStrtotime($parsedData['invoice']['sale_date'] ?? '');
         $this->currency = $parsedData['invoice']['currency'] ?? 'PLN';
         $this->total_net = $parsedData['invoice']['total_net'] ?? 0;
         $this->total_vat = $parsedData['invoice']['total_vat'] ?? 0;
@@ -538,18 +556,18 @@ class KsefIncoming extends CommonObject
             }
             $this->line_items = json_encode($linesToStore);
         }
-        $this->payment_due_date = !empty($parsedData['payment']['due_date']) ? strtotime($parsedData['payment']['due_date']) : null;
+        $this->payment_due_date = self::safeStrtotime($parsedData['payment']['due_date'] ?? '');
         $this->payment_method = $parsedData['payment']['method'] ?? null;
         $this->bank_account = $parsedData['payment']['bank_account'] ?? null;
         if (!empty($parsedData['correction'])) {
             $firstCorrected = $parsedData['correction']['corrected_invoices'][0] ?? array();
             $this->corrected_ksef_number = $firstCorrected['ksef_number'] ?? null;
             $this->corrected_invoice_number = $firstCorrected['invoice_number'] ?? null;
-            $this->corrected_invoice_date = !empty($firstCorrected['invoice_date']) ? strtotime($firstCorrected['invoice_date']) : null;
+            $this->corrected_invoice_date = self::safeStrtotime($firstCorrected['invoice_date'] ?? '');
             $this->correction_data = json_encode($parsedData['correction']);
         }
         $this->fa3_xml = $rawXml;
-        $this->fa3_creation_date = !empty($parsedData['header']['creation_date']) ? strtotime($parsedData['header']['creation_date']) : null;
+        $this->fa3_creation_date = self::safeStrtotime($parsedData['header']['creation_date'] ?? '');
         $this->fa3_system_info = $parsedData['header']['system_info'] ?? '';
         $this->fetch_date = dol_now();
         $this->environment = $environment;

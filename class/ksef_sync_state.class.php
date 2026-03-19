@@ -34,6 +34,7 @@ class KsefSyncState
     public $last_sync_new;
     public $last_sync_existing;
     public $last_sync_total;
+    public $last_sync_errors;
     public $rate_limit_until;
     public $fetch_reference;
     public $fetch_status;
@@ -91,6 +92,7 @@ class KsefSyncState
         $this->last_sync_new = getDolGlobalInt($this->getConstName('LAST_NEW'), 0);
         $this->last_sync_existing = getDolGlobalInt($this->getConstName('LAST_EXISTING'), 0);
         $this->last_sync_total = getDolGlobalInt($this->getConstName('LAST_TOTAL'), 0);
+        $this->last_sync_errors = getDolGlobalString($this->getConstName('LAST_ERRORS'), '');
         $this->rate_limit_until = getDolGlobalInt($this->getConstName('RATE_LIMIT'), 0);
 
         $this->fetch_reference = getDolGlobalString($this->getConstName('FETCH_REF'), '');
@@ -125,6 +127,7 @@ class KsefSyncState
         if (dolibarr_set_const($this->db, $this->getConstName('LAST_NEW'), $this->last_sync_new ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('LAST_EXISTING'), $this->last_sync_existing ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('LAST_TOTAL'), $this->last_sync_total ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('LAST_ERRORS'), $this->last_sync_errors ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('RATE_LIMIT'), $this->rate_limit_until ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
 
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_REF'), $this->fetch_reference ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;

@@ -774,9 +774,21 @@ class KsefService extends CommonObject
         // HWM date or default to 2026-01-31 (day before KSeF start date)
         $fromDate = !empty($syncState->hwm_date) ? $syncState->hwm_date : '2026-01-31T00:00:00+01:00';
 
-        dol_syslog("KSeF: Initiating incoming fetch from: " . $fromDate, LOG_INFO);
+        $maxChunkDays = 60;
+        $fromTs = strtotime($fromDate);
+        $toDate = null;
 
-        $initResult = $client->initHwmExport($fromDate, 'subject2', $encryptionData['encryption_info']);
+        if ($fromTs !== false) {
+            $chunkEndTs = strtotime("+{$maxChunkDays} days", $fromTs);
+            if ($chunkEndTs < time()) {
+                $toDate = date('c', $chunkEndTs);
+                dol_syslog("KSeF: Date range exceeds {$maxChunkDays} days, chunking to: " . $toDate, LOG_INFO);
+            }
+        }
+
+        dol_syslog("KSeF: Initiating incoming fetch from: " . $fromDate . ($toDate ? " to: " . $toDate : ''), LOG_INFO);
+
+        $initResult = $client->initHwmExport($fromDate, 'subject2', $encryptionData['encryption_info'], $toDate);
         if (!$initResult) {
             $this->error = $client->error;
             return false;
@@ -909,6 +921,7 @@ class KsefService extends CommonObject
                 $syncState->last_sync_new = 0;
                 $syncState->last_sync_existing = 0;
                 $syncState->last_sync_total = 0;
+                $syncState->last_sync_errors = '';
                 $syncState->save();
 
                 return array(
@@ -1074,6 +1087,7 @@ class KsefService extends CommonObject
         $syncState->process_offset = 0;
         $syncState->process_new = 0;
         $syncState->process_existing = 0;
+        $syncState->process_file = $tempZipFile;
         $syncState->save();
 
         dol_syslog("KSeF: Starting batch processing", LOG_INFO);
@@ -1082,10 +1096,11 @@ class KsefService extends CommonObject
         $totalNew = 0;
         $totalExisting = 0;
         $totalErrors = 0;
+        $allErrorDetails = array();
         $ksef = $this;
 
         try {
-            $summary = $client->processPackageInBatches($tempZipFile, $batchSize, function($batch, $batchNum, $totalFiles) use ($ksef, $user, $environment, &$totalNew, &$totalExisting, &$totalErrors, $syncState) {
+            $summary = $client->processPackageInBatches($tempZipFile, $batchSize, function($batch, $batchNum, $totalFiles) use ($ksef, $user, $environment, &$totalNew, &$totalExisting, &$totalErrors, &$allErrorDetails, $syncState) {
                 dol_syslog("KSeF: Starting callback for batch {$batchNum} with " . count($batch) . " invoices", LOG_INFO);
 
                 $batchData = array('invoices' => $batch, 'metadata' => array());
@@ -1095,6 +1110,9 @@ class KsefService extends CommonObject
                     $totalNew += $result['new'];
                     $totalExisting += $result['existing'];
                     $totalErrors += $result['errors'] ?? 0;
+                    if (!empty($result['error_details'])) {
+                        $allErrorDetails = array_merge($allErrorDetails, $result['error_details']);
+                    }
                     dol_syslog("KSeF: Batch {$batchNum} complete - new: {$result['new']}, existing: {$result['existing']}, errors: {$result['errors']}", LOG_INFO);
                 } catch (Exception $e) {
                     dol_syslog("KSeF: Batch {$batchNum} EXCEPTION: " . $e->getMessage(), LOG_ERR);
@@ -1122,13 +1140,15 @@ class KsefService extends CommonObject
             $syncState->last_sync_new = $totalNew;
             $syncState->last_sync_existing = $totalExisting;
             $syncState->last_sync_total = $totalNew + $totalExisting;
+            $syncState->last_sync_errors = json_encode(array_slice($allErrorDetails, 0, 100));
             $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
             $syncState->fetch_error = 'Processing interrupted: ' . $e->getMessage();
             $syncState->fetch_parts = '';
             $syncState->fetch_hwm_data = '';
+            $syncState->process_file = '';
             $syncState->save();
             return array(
-                'status' => 'COMPLETED',
+                'status' => 'FAILED',
                 'new' => $totalNew,
                 'existing' => $totalExisting,
                 'total' => $totalNew + $totalExisting,
@@ -1145,6 +1165,7 @@ class KsefService extends CommonObject
         $syncState->last_sync_new = $totalNew;
         $syncState->last_sync_existing = $totalExisting;
         $syncState->last_sync_total = $finalTotal;
+        $syncState->last_sync_errors = !empty($allErrorDetails) ? json_encode(array_slice($allErrorDetails, 0, 100)) : '';
         $syncState->fetch_reference = '';
         $syncState->fetch_status = '';
         $syncState->fetch_started = 0;
@@ -1200,8 +1221,6 @@ class KsefService extends CommonObject
         $existingNumbers = $incoming->getExistingKsefNumbers(array_keys($packageData['invoices']), $environment);
         $existingSet = array_flip($existingNumbers);
 
-        $this->db->begin();
-
         foreach ($packageData['invoices'] as $ksefNumber => $xmlContent) {
             $result['total']++;
 
@@ -1211,6 +1230,7 @@ class KsefService extends CommonObject
                 continue;
             }
 
+            $this->db->begin();
             try {
                 $parsed = $parser->parse($xmlContent);
                 if (!$parsed) {
@@ -1219,24 +1239,63 @@ class KsefService extends CommonObject
 
                 $newIncoming = new KsefIncoming($this->db);
                 if ($newIncoming->createFromParsed($parsed, $xmlContent, $ksefNumber, $environment, $user, true) > 0) {
+                    $this->db->commit();
                     $result['new']++;
                 } else {
                     throw new Exception($newIncoming->error ?: 'Create failed');
                 }
             } catch (Exception $e) {
+                $this->db->rollback();
                 $result['errors']++;
                 $result['error_details'][] = "{$ksefNumber}: " . $e->getMessage();
                 dol_syslog("KSeF: Error processing {$ksefNumber}: " . $e->getMessage(), LOG_ERR);
-                $this->db->rollback();
-                return $result;
             }
 
             unset($packageData['invoices'][$ksefNumber]);
         }
 
-        $this->db->commit();
-
         return $result;
+    }
+
+
+    /**
+     * @brief Handle status check
+     * @param KsefSyncState $syncState Current sync state
+     * @param User $user Current user
+     * @param string $environment KSeF environment
+     * @return array Status array for AJAX response
+     */
+    private function continueProcessingBatch($syncState, $user, $environment)
+    {
+        if ($syncState->isProcessingTimedOut()) {
+            dol_syslog("KSeF: Batch processing timed out - marking as failed", LOG_WARNING);
+            $syncState->last_sync = dol_now();
+            $syncState->last_sync_new = $syncState->process_new;
+            $syncState->last_sync_existing = $syncState->process_existing;
+            $syncState->last_sync_total = $syncState->process_new + $syncState->process_existing;
+            $syncState->fetch_status = KsefSyncState::FETCH_STATUS_FAILED;
+            $syncState->fetch_error = 'Batch processing timed out. '
+                . $syncState->process_new . ' new and '
+                . $syncState->process_existing . ' existing were processed before timeout. '
+                . 'Use "Reset & Retry" to restart.';
+            $syncState->clearProcessingState();
+            $syncState->save();
+            return array(
+                'status' => 'FAILED',
+                'error' => $syncState->fetch_error,
+                'new' => $syncState->process_new,
+                'existing' => $syncState->process_existing,
+            );
+        }
+
+        return array(
+            'status' => 'PROCESSING_BATCHES',
+            'reference' => $syncState->fetch_reference,
+            'total' => $syncState->process_total,
+            'processed' => $syncState->process_offset,
+            'new' => $syncState->process_new,
+            'existing' => $syncState->process_existing,
+        );
     }
 
 
@@ -1268,12 +1327,11 @@ class KsefService extends CommonObject
     }
 
     /**
-     * @brief Reset sync state to X days ago
+     * @brief Reset sync state to 2026-01-31
      * @param User $user Current user
-     * @param int $daysBack Number of days to go back
      * @return bool Success
      */
-    public function resetIncomingSyncState($user, $daysBack = 30)
+    public function resetIncomingSyncState($user)
     {
         dol_include_once('/ksef/class/ksef_sync_state.class.php');
 
@@ -1285,7 +1343,7 @@ class KsefService extends CommonObject
         $syncState->fetch_key = '';
         $syncState->fetch_iv = '';
         $syncState->fetch_error = '';
-        $syncState->hwm_date = date('c', strtotime("-{$daysBack} days"));
+        $syncState->hwm_date = '2026-01-31T00:00:00+01:00';
         $syncState->last_sync = 0;
         $syncState->last_sync_new = 0;
         $syncState->last_sync_existing = 0;

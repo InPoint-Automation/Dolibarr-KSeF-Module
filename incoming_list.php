@@ -62,6 +62,7 @@ $confirm = GETPOST('confirm', 'alpha');
 $toselect = GETPOST('toselect', 'array');
 $contextpage = GETPOST('contextpage', 'aZ09') ? GETPOST('contextpage', 'aZ09') : 'ksef_incoming_list';
 $optioncss = GETPOST('optioncss', 'alpha');
+$show_errors = GETPOST('show_errors', 'int');
 
 // Search filters
 $search_seller_nip = GETPOST('search_seller_nip', 'alpha');
@@ -485,9 +486,8 @@ if (empty($reshook)) {
 
     // Reset sync state (admin)
     if ($action == 'confirm_reset' && $confirm == 'yes' && $user->admin) {
-        $daysBack = GETPOST('reset_days', 'int') ?: 30;
-        if ($ksef->resetIncomingSyncState($user, $daysBack)) {
-            setEventMessages($langs->trans('KSEF_SyncStateReset', $daysBack), null, 'mesgs');
+        if ($ksef->resetIncomingSyncState($user)) {
+            setEventMessages($langs->trans('KSEF_SyncStateReset'), null, 'mesgs');
         } else {
             setEventMessages($langs->trans('Error'), null, 'errors');
         }
@@ -583,10 +583,7 @@ if ($action == 'clearall') {
 }
 
 if ($action == 'reset') {
-    $formquestion = array(
-        array('type' => 'text', 'name' => 'reset_days', 'label' => $langs->trans('KSEF_ResetDaysBack'), 'value' => '30', 'size' => 5)
-    );
-    print $form->formconfirm($_SERVER["PHP_SELF"], $langs->trans('KSEF_ResetSyncState'), $langs->trans('KSEF_ConfirmResetSync'), 'confirm_reset', $formquestion, 0, 1);
+    print $form->formconfirm($_SERVER["PHP_SELF"], $langs->trans('KSEF_ResetSyncState'), $langs->trans('KSEF_ConfirmResetSync'), 'confirm_reset', '', 0, 1);
 }
 
 // Get state and stats
@@ -594,6 +591,7 @@ $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
 $syncState = $ksef->getIncomingSyncState();
 $syncState->getDisplayValues(); // Populate compatibility fields
 $stats = $incoming->getStatistics(30);
+$stats_all = $incoming->getStatistics(99999);
 
 $isPolling = GETPOST('polling', 'int') || $syncState->isFetchInProgress();
 $currentFetchPhase = $syncState->fetch_status;
@@ -889,21 +887,103 @@ print '<div class="fichetwothirdright">';
 
 print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder nohover centpercent">';
-print '<tr class="liste_titre"><th colspan="2">' . $langs->trans("Statistics") . ' (' . $langs->trans("KSEF_Last30Days") . ')</th></tr>';
+print '<tr class="liste_titre"><th colspan="2">' . $langs->trans("Statistics") . '</th></tr>';
 
 print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("Total") . '</td>';
-print '<td class="right"><strong>' . (int)($stats['total'] ?? 0) . '</strong></td></tr>';
+print '<td class="right"><strong>' . (int)($stats_all['total'] ?? 0) . '</strong></td></tr>';
 
-print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusNEW") . '</td>';
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusNEW") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
 print '<td class="right"><span class="badge badge-status1">' . (int)($stats['new'] ?? 0) . '</span></td></tr>';
 
-print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusIMPORTED") . '</td>';
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusIMPORTED") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
 print '<td class="right"><span class="badge badge-status4">' . (int)($stats['imported'] ?? 0) . '</span></td></tr>';
 
 if (!empty($stats['error'])) {
-    print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusERROR") . '</td>';
+    print '<tr class="oddeven"><td>' . $langs->trans("KSEF_ImportStatusERROR") . ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Last30Days") . ')</span></td>';
     print '<td class="right"><span class="badge badge-status8">' . (int)$stats['error'] . '</span></td></tr>';
 }
+
+$ksefStartDate = strtotime('2026-02-01');
+$ksefPreStartDate = strtotime('2026-01-31');
+$today = dol_now();
+$hwmTimestamp = $syncState ? $syncState->getContinuationDate() : null;
+if ($hwmTimestamp && $hwmTimestamp < $ksefPreStartDate) $hwmTimestamp = $ksefPreStartDate;
+if ($hwmTimestamp && $hwmTimestamp > $today) $hwmTimestamp = $today;
+$totalSpan = max($today - $ksefStartDate, 1);
+$hwmPercent = $hwmTimestamp ? round((($hwmTimestamp - $ksefStartDate) / $totalSpan) * 100, 1) : 0;
+if ($hwmPercent < 0) $hwmPercent = 0;
+if ($hwmPercent > 100) $hwmPercent = 100;
+$startLabel = dol_print_date($ksefStartDate, 'day');
+$hwmLabel = $hwmTimestamp ? dol_print_date($hwmTimestamp, 'day') : '';
+$todayLabel = dol_print_date($today, 'day');
+
+$timelineDividers = array();
+$spanMonths = (int) round(($today - $ksefStartDate) / (30.44 * 86400));
+$divStep = ($spanMonths <= 12) ? 'month' : '6months';
+$divDate = strtotime('+1 month', strtotime(date('Y-m-01', $ksefStartDate)));
+while ($divDate < $today) {
+    $divPercent = round((($divDate - $ksefStartDate) / $totalSpan) * 100, 1);
+    if ($divPercent > 2 && $divPercent < 98) {
+        $timelineDividers[] = array('percent' => $divPercent, 'label' => dol_print_date($divDate, '%m/%Y'));
+    }
+    $divDate = strtotime(($divStep === 'month' ? '+1 month' : '+6 months'), $divDate);
+}
+
+if ($hwmPercent >= 95) {
+    $barColor = '#4CAF50';
+    $barStatus = $langs->trans("KSEF_SyncProgressUpToDate");
+} elseif ($hwmPercent >= 50) {
+    $barColor = '#FF9800';
+    $barStatus = $langs->trans("KSEF_SyncProgressPartial");
+} elseif ($hwmTimestamp) {
+    $barColor = '#f44336';
+    $barStatus = $langs->trans("KSEF_SyncProgressBehind");
+} else {
+    $barColor = '#d0d0d0';
+    $barStatus = $langs->trans("KSEF_SyncNotStarted");
+}
+
+print '<tr class="oddeven"><td colspan="2" style="padding: 8px;">';
+print '<div class="liste_titre" style="margin-bottom: 0; min-height: 20px; padding-bottom: 0;">' . $langs->trans("KSEF_SyncProgress") . '</div>';
+
+print '<div style="position: relative; height: 18px; font-size: 0.7em; color: #888; font-weight: 600;">';
+foreach ($timelineDividers as $div) {
+    if ($div['percent'] < 5 || $div['percent'] > 95) continue;
+    print '<div style="position: absolute; left: ' . $div['percent'] . '%; transform: translateX(-50%); bottom: 0; text-align: center; white-space: nowrap;">' . $div['label'] . '</div>';
+}
+print '</div>';
+
+print '<div style="position: relative; height: 28px; background: #d0d0d0; border-radius: 3px; overflow: visible; border-left: 3px solid #666; border-right: 3px solid #666;">';
+if ($hwmPercent > 0) {
+    print '<div style="position: absolute; top: 0; left: 0; height: 100%; width: ' . $hwmPercent . '%; background: ' . $barColor . '; transition: width 0.5s;"></div>';
+}
+if ($hwmTimestamp && $hwmPercent > 0 && $hwmPercent < 100) {
+    print '<div style="position: absolute; top: -4px; left: ' . $hwmPercent . '%; width: 3px; height: calc(100% + 8px); background: #555; z-index: 2; transform: translateX(-50%);"></div>';
+}
+foreach ($timelineDividers as $div) {
+    if ($div['percent'] < 5 || $div['percent'] > 95) continue;
+    print '<div style="position: absolute; top: 0; left: ' . $div['percent'] . '%; width: 0; height: 100%; border-left: 1px dashed rgba(0,0,0,0.25); z-index: 1;"></div>';
+}
+print '</div>';
+
+print '<div style="position: relative; height: 36px; margin-top: 2px; font-size: 0.72em; font-weight: 600; overflow: visible;">';
+print '<div style="position: absolute; left: 0; top: 2px; text-align: left; white-space: nowrap; color: #333;">' . $startLabel . '</div>';
+if ($hwmTimestamp && $hwmPercent > 8 && $hwmPercent < 88) {
+    print '<div style="position: absolute; left: ' . $hwmPercent . '%; text-align: center; transform: translateX(-50%); top: 2px; white-space: nowrap;">';
+    print '<span style="color: ' . $barColor . ';">SYNC</span><br><span style="color: ' . $barColor . ';">' . $hwmLabel . '</span>';
+    print '</div>';
+}
+print '<div style="position: absolute; right: 0; top: 2px; text-align: right; white-space: nowrap; color: #333;">' . $langs->trans("Today") . '<br>' . $todayLabel . '</div>';
+print '</div>';
+
+print '<div style="text-align: center; margin-top: 0; font-size: 0.8em;">';
+print '<span style="color: ' . $barColor . '; font-weight: 600;">' . $barStatus . '</span>';
+if ($hwmTimestamp && $hwmPercent < 100) {
+    print ' <span style="color: #888;">(' . $hwmPercent . '%)</span>';
+}
+print '</div>';
+
+print '</td></tr>';
 
 print '</table>';
 print '</div>';
@@ -929,12 +1009,56 @@ print '</div>';
 print '<div class="clearboth"></div>';
 print '<br>';
 
+$lastSyncErrors = array();
+if ($syncState && !empty($syncState->last_sync_errors)) {
+    $lastSyncErrors = json_decode($syncState->last_sync_errors, true);
+    if (!is_array($lastSyncErrors)) $lastSyncErrors = array();
+}
+if (!empty($lastSyncErrors)) {
+    $errCount = count($lastSyncErrors);
+    print '<div class="warning" style="padding: 8px 12px; margin-bottom: 10px;">';
+    print '<span class="fa fa-exclamation-triangle" style="margin-right: 6px;"></span> ';
+    print $langs->trans('KSEF_SyncErrorsExist', $errCount);
+    if (empty($show_errors)) {
+        print ' <a class="butAction small" href="' . $_SERVER["PHP_SELF"] . '?show_errors=1&token=' . newToken() . '">';
+        print '<span class="fa fa-eye" style="margin-right: 4px;"></span>' . $langs->trans('KSEF_ViewErrors') . '</a>';
+    } else {
+        print ' <a class="butAction small" href="' . $_SERVER["PHP_SELF"] . '?token=' . newToken() . '">';
+        print '<span class="fa fa-eye-slash" style="margin-right: 4px;"></span>' . $langs->trans('KSEF_HideErrors') . '</a>';
+    }
+    print '</div>';
+
+    if (!empty($show_errors)) {
+        print '<div class="div-table-responsive-no-min">';
+        print '<table class="noborder centpercent">';
+        print '<tr class="liste_titre">';
+        print '<th>' . $langs->trans('KSEF_ErrorKsefNumber') . '</th>';
+        print '<th>' . $langs->trans('KSEF_ErrorMessage') . '</th>';
+        print '</tr>';
+
+        foreach ($lastSyncErrors as $errLine) {
+            $parts = explode(': ', $errLine, 2);
+            $errKsef = $parts[0] ?? '';
+            $errMsg = $parts[1] ?? $errLine;
+            print '<tr class="oddeven">';
+            print '<td class="tdoverflowmax200">' . dol_escape_htmltag($errKsef) . '</td>';
+            print '<td class="small">' . dol_escape_htmltag($errMsg) . '</td>';
+            print '</tr>';
+        }
+
+        print '</table>';
+        print '</div>';
+        print '<br>';
+    }
+}
+
 $filters = array();
 if (!empty($search_seller_nip)) $filters['seller_nip'] = $search_seller_nip;
 if (!empty($search_seller_name)) $filters['seller_name'] = $search_seller_name;
 if (!empty($search_invoice_number)) $filters['invoice_number'] = $search_invoice_number;
 if (!empty($search_ksef_number)) $filters['ksef_number'] = $search_ksef_number;
 if (!empty($search_import_status) && $search_import_status != '-1') $filters['import_status'] = $search_import_status;
+$filters['environment'] = $environment;
 
 $nbtotalofrecords = $incoming->countAll($filters);
 
