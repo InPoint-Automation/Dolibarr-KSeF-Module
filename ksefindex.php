@@ -204,7 +204,7 @@ print '<div class="info-box-content">';
 print '<div class="info-box-title" title="' . dol_escape_htmltag($langs->trans("KSEF_Configuration")) . '">' . $langs->trans("KSEF_Configuration") . '</div>';
 print '<div class="info-box-lines">';
 print '<div class="info-box-line spanoverflow nowrap">';
-print '<div class="marginrightonly inline-block valignmiddle info-box-line-text">' . $langs->trans("KSEF_Environment") . '</div>';
+print '<div class="marginrightonly inline-block valignmiddle info-box-line-text">' . $langs->trans("KSEF_ENVIRONMENT") . '</div>';
 print '<div class="inline-block nowraponall">' . ksefGetEnvironmentBadge($environment) . '</div>';
 print '</div>';
 print '<div class="info-box-line spanoverflow nowrap">';

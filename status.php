@@ -430,7 +430,7 @@ print_liste_field_titre("Invoice", $_SERVER["PHP_SELF"], "f.ref", "", $param, ""
 print_liste_field_titre("Customer", $_SERVER["PHP_SELF"], "soc.nom", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("KSEF_Number", $_SERVER["PHP_SELF"], "s.ksef_number", "", $param, "", $sortfield, $sortorder);
 print_liste_field_titre("Status", $_SERVER["PHP_SELF"], "s.status", "", $param, '', $sortfield, $sortorder, 'center ');
-print_liste_field_titre("KSEF_Environment", $_SERVER["PHP_SELF"], "s.environment", "", $param, '', $sortfield, $sortorder, 'center ');
+print_liste_field_titre("KSEF_ENVIRONMENT", $_SERVER["PHP_SELF"], "s.environment", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("KSEF_OfflineMode", $_SERVER["PHP_SELF"], "s.offline_mode", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("Date", $_SERVER["PHP_SELF"], "s.date_submission", "", $param, '', $sortfield, $sortorder, 'center ');
 print_liste_field_titre("Amount", $_SERVER["PHP_SELF"], "f.total_ttc", "", $param, '', $sortfield, $sortorder, 'right ');

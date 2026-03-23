@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.1';
+        $this->version = '1.3.2';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -109,7 +109,7 @@ class modKSEF extends DolibarrModules
                 'label'          => 'KSEF - Check pending/submitted invoice statuses',
                 'jobtype'        => 'method',
                 'class'          => '/ksef/class/ksef_service.class.php',
-                'objectname'     => 'KSEF',
+                'objectname'     => 'KsefService',
                 'method'         => 'cronCheckStatuses',
                 'parameters'     => '',
                 'comment'        => 'Poll KSeF for status of PENDING/SUBMITTED/TIMEOUT invoices',
@@ -123,7 +123,7 @@ class modKSEF extends DolibarrModules
                 'label'          => 'KSEF - Sync incoming invoices',
                 'jobtype'        => 'method',
                 'class'          => '/ksef/class/ksef_service.class.php',
-                'objectname'     => 'KSEF',
+                'objectname'     => 'KsefService',
                 'method'         => 'cronSyncIncoming',
                 'parameters'     => '',
                 'comment'        => 'Fetch new incoming invoices from KSeF',
@@ -137,7 +137,7 @@ class modKSEF extends DolibarrModules
                 'label'          => 'KSEF - Download UPO confirmations',
                 'jobtype'        => 'method',
                 'class'          => '/ksef/class/ksef_service.class.php',
-                'objectname'     => 'KSEF',
+                'objectname'     => 'KsefService',
                 'method'         => 'cronDownloadUPOs',
                 'parameters'     => '',
                 'comment'        => 'Download UPO XML for accepted submissions that lack it',
@@ -151,7 +151,7 @@ class modKSEF extends DolibarrModules
                 'label'          => 'KSEF - Warn approaching offline deadlines',
                 'jobtype'        => 'method',
                 'class'          => '/ksef/class/ksef_service.class.php',
-                'objectname'     => 'KSEF',
+                'objectname'     => 'KsefService',
                 'method'         => 'cronWarnDeadlines',
                 'parameters'     => '',
                 'comment'        => 'Log warnings for offline invoices with deadlines in next 24h',
@@ -295,6 +295,12 @@ class modKSEF extends DolibarrModules
             'KSEF_COMPANY_KRS'       => '',
             'KSEF_COMPANY_REGON'     => '',
             'KSEF_COMPANY_BDO'       => '',
+
+            // Field Mapping
+            'KSEF_FIELD_NIP'         => 'idprof1',
+            'KSEF_FIELD_KRS'         => 'idprof2',
+            'KSEF_FIELD_REGON'       => 'idprof3',
+            'KSEF_FIELD_BDO'         => 'idprof4',
             'KSEF_ENVIRONMENT'       => 'DEMO',
             'KSEF_TIMEOUT'           => '5',
 
@@ -628,6 +634,54 @@ class modKSEF extends DolibarrModules
                         $db->query($sql_alter);
                         dol_syslog("modKSEF::migration 1.3.0 - Added fk_credit_note column", LOG_INFO);
                     }
+                },
+            ),
+            '1.3.2' => array(
+                // Fix cron jobs
+                function () use ($db, $conf) {
+                    $sql = "UPDATE " . MAIN_DB_PREFIX . "cronjob"
+                        . " SET objectname = 'KsefService'"
+                        . " WHERE objectname = 'KSEF'"
+                        . " AND classesname = '/ksef/class/ksef_service.class.php'"
+                        . " AND entity IN (0, " . ((int) $conf->entity) . ")";
+                    $db->query($sql);
+                    dol_syslog("modKSEF::migration 1.3.2 - Fixed cron job objectname KSEF -> KsefService", LOG_INFO);
+                },
+                // Re-parse incoming invoices
+                function () use ($db, $conf) {
+                    $migrated = 0;
+                    $sql_incoming = "SELECT rowid, fa3_xml FROM " . MAIN_DB_PREFIX . "ksef_incoming"
+                        . " WHERE fa3_xml IS NOT NULL AND fa3_xml != ''"
+                        . " AND entity = " . (int) $conf->entity;
+                    $resql = $db->query($sql_incoming);
+                    if ($resql) {
+                        dol_include_once('/ksef/class/fa3_parser.class.php');
+                        $parser = new FA3Parser($db);
+                        while ($obj = $db->fetch_object($resql)) {
+                            $parsed = $parser->parse($obj->fa3_xml);
+                            if ($parsed) {
+                                $updates = array();
+                                $updates[] = "total_net = " . (float) ($parsed['invoice']['total_net'] ?? 0);
+                                $updates[] = "total_vat = " . (float) ($parsed['invoice']['total_vat'] ?? 0);
+                                $updates[] = "total_gross = " . (float) ($parsed['invoice']['total_gross'] ?? 0);
+                                if (!empty($parsed['vat_summary'])) {
+                                    $updates[] = "vat_summary = '" . $db->escape(json_encode($parsed['vat_summary'])) . "'";
+                                }
+                                if (!empty($parsed['lines'])) {
+                                    $updates[] = "line_items = '" . $db->escape(json_encode($parsed['lines'])) . "'";
+                                }
+                                $sql_update = "UPDATE " . MAIN_DB_PREFIX . "ksef_incoming"
+                                    . " SET " . implode(", ", $updates)
+                                    . " WHERE rowid = " . (int) $obj->rowid;
+                                $db->query($sql_update);
+                                $migrated++;
+                            } else {
+                                dol_syslog("modKSEF::migration 1.3.2 - Failed to parse invoice rowid=" . (int) $obj->rowid, LOG_WARNING);
+                            }
+                        }
+                        $db->free($resql);
+                    }
+                    dol_syslog("modKSEF::migration 1.3.2 - Re-parsed data for $migrated incoming invoices (fix unit prices)", LOG_INFO);
                 },
             ),
         );

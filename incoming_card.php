@@ -396,7 +396,7 @@ if (empty($reshook)) {
     print '</td></tr>';
 
     // KSeF Environment
-    print '<tr><td>' . $langs->trans("KSEF_Environment") . '</td>';
+    print '<tr><td>' . $langs->trans("KSEF_ENVIRONMENT") . '</td>';
     print '<td>' . ksefGetEnvironmentBadge($object->environment) . '</td></tr>';
 
     // Fetched On

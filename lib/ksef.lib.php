@@ -159,6 +159,308 @@ function ksefValidateNIP($nip)
 }
 
 /**
+ * @brief Strip the 2-letter country prefix from a VAT ID
+ * @param string $vatId VAT ID
+ * @return string VAT ID without country prefix
+ */
+function ksefStripVATPrefix($vatId)
+{
+    $vatId = trim($vatId);
+    if (preg_match('/^[A-Za-z]{2}(.+)$/', $vatId, $m)) {
+        return $m[1];
+    }
+    return $vatId;
+}
+
+/**
+ * @brief Infer country code
+ * @param object $thirdparty Societe or mysoc object
+ * @return string 2-letter country code (uppercase)
+ */
+function ksefInferCountryCode($thirdparty)
+{
+    if (!empty($thirdparty->country_code)) {
+        return strtoupper($thirdparty->country_code);
+    }
+    if (!empty($thirdparty->tva_intra) && preg_match('/^([A-Za-z]{2})/', trim($thirdparty->tva_intra), $m)) {
+        return strtoupper($m[1]);
+    }
+    return 'PL';
+}
+
+/**
+ * @brief Get the configured field name
+ * @param string $identifier One of: 'NIP', 'KRS', 'REGON', 'BDO'
+ * @return string Field name
+ */
+function ksefGetFieldName($identifier)
+{
+    global $conf;
+
+    $defaults = array(
+        'NIP'   => 'idprof1',
+        'KRS'   => 'idprof2',
+        'REGON' => 'idprof3',
+        'BDO'   => 'idprof4',
+    );
+
+    $validFields = array('idprof1', 'idprof2', 'idprof3', 'idprof4', 'idprof5', 'idprof6', 'tva_intra');
+
+    $constName = 'KSEF_FIELD_' . strtoupper($identifier);
+    if (!empty($conf->global->$constName)) {
+        $val = $conf->global->$constName;
+        if (in_array($val, $validFields)) {
+            return $val;
+        }
+        return isset($defaults[$identifier]) ? $defaults[$identifier] : '';
+    }
+
+    return isset($defaults[$identifier]) ? $defaults[$identifier] : '';
+}
+
+/**
+ * @brief Get the value of a configured identifier field
+ * @param object $thirdparty Societe or mysoc object
+ * @param string $identifier One of: 'NIP', 'KRS', 'REGON', 'BDO'
+ * @return string The raw field value
+ */
+function ksefGetIdentifierField($thirdparty, $identifier)
+{
+    $fieldName = ksefGetFieldName($identifier);
+
+    if (!empty($fieldName) && !empty($thirdparty->$fieldName)) {
+        return $thirdparty->$fieldName;
+    }
+
+    if ($identifier === 'NIP' && $fieldName !== 'tva_intra' && !empty($thirdparty->tva_intra)) {
+        return $thirdparty->tva_intra;
+    }
+
+    return '';
+}
+
+/**
+ * @brief Get translated field options
+ * @param bool $includeNone for optional fields like KRS/REGON/BDO
+ * @return array array of field_name to translated label
+ */
+function ksefGetFieldOptions($includeNone = false)
+{
+    global $langs, $mysoc;
+
+    $country_code = !empty($mysoc->country_code) ? $mysoc->country_code : 'PL';
+    $langs->load("companies");
+
+    $options = array();
+    if ($includeNone) {
+        $options[''] = $langs->trans("KSEF_FIELD_NONE");
+    }
+
+    for ($i = 1; $i <= 6; $i++) {
+        // Use Dolibarr's country-specific label
+        $longKey = "ProfId" . $i;
+        $longLabel = $langs->transcountry($longKey, $country_code);
+        if (empty($longLabel) || $longLabel === $longKey . $country_code || $longLabel === $longKey) {
+            $longLabel = '';
+        }
+        $shortKey = "ProfId" . $i . "Short";
+        $shortLabel = $langs->trans($shortKey);
+        if (empty($shortLabel) || $shortLabel === $shortKey) {
+            $shortLabel = "Prof. ID " . $i;
+        }
+        if (!empty($longLabel) && $longLabel !== $shortLabel) {
+            $options['idprof' . $i] = $shortLabel . ' - ' . $longLabel . ' (idprof' . $i . ')';
+        } else {
+            $options['idprof' . $i] = $shortLabel . ' (idprof' . $i . ')';
+        }
+    }
+
+    $vatLabel = $langs->trans("VATIntra");
+    if (empty($vatLabel) || $vatLabel === 'VATIntra') {
+        $vatLabel = 'VAT Intra';
+    }
+    $options['tva_intra'] = $vatLabel . ' (tva_intra)';
+
+    return $options;
+}
+
+/**
+ * @brief Get the list of translation override keys
+ * @return array Array of key => alue pairs
+ */
+function ksefGetManagedTranslationOverrides()
+{
+    $overrides = array();
+
+    $identifiers = array(
+        'NIP'   => 'NIP',
+        'KRS'   => 'KRS',
+        'REGON' => 'REGON',
+        'BDO'   => 'BDO',
+    );
+
+    foreach ($identifiers as $ident => $label) {
+        $fieldName = ksefGetFieldName($ident);
+        if (empty($fieldName)) {
+            continue;
+        }
+
+        if ($fieldName === 'tva_intra') {
+            if ($ident === 'NIP') {
+                $overrides['VATIntra'] = 'VAT/NIP';
+                $overrides['VATIntraShort'] = 'VAT/NIP';
+            } else {
+                $overrides['VATIntra'] = $label;
+                $overrides['VATIntraShort'] = $label;
+            }
+        } elseif (preg_match('/^idprof(\d+)$/', $fieldName, $m)) {
+            $overrides['ProfId' . $m[1] . 'PL'] = $label;
+            $overrides['ProfId' . $m[1] . 'ShortPL'] = $label;
+        }
+    }
+
+    if (!isset($overrides['VATIntra'])) {
+        $overrides['VATIntra'] = 'VAT';
+        $overrides['VATIntraShort'] = 'VAT';
+    }
+
+    return $overrides;
+}
+
+/**
+ * @brief All translation keys that KSeF manages
+ * @return array List of transkey strings
+ */
+function ksefGetAllManagedTransKeys()
+{
+    $keys = array('VATIntra', 'VATIntraShort');
+    for ($i = 1; $i <= 6; $i++) {
+        $keys[] = 'ProfId' . $i . 'PL';
+        $keys[] = 'ProfId' . $i . 'ShortPL';
+    }
+    return $keys;
+}
+
+/**
+ * @brief Apply translation overrides
+ * @param DoliDB $db Database handler
+ * @param array $languages Array of language codes
+ * @return int 1 on success, -1 on error
+ */
+function ksefApplyTranslationOverrides($db, $languages)
+{
+    global $conf;
+
+    if (empty($languages)) {
+        return -1;
+    }
+
+    if (empty($conf->global->MAIN_ENABLE_OVERWRITE_TRANSLATION)) {
+        dolibarr_set_const($db, 'MAIN_ENABLE_OVERWRITE_TRANSLATION', '1', 'chaine', 0, '', $conf->entity);
+    }
+
+    $overrides = ksefGetManagedTranslationOverrides();
+    $allManagedKeys = ksefGetAllManagedTransKeys();
+
+    $db->begin();
+
+    // Remove existing
+    foreach ($allManagedKeys as $transkey) {
+        foreach ($languages as $lang) {
+            $sql = "DELETE FROM " . MAIN_DB_PREFIX . "overwrite_trans";
+            $sql .= " WHERE transkey = '" . $db->escape($transkey) . "'";
+            $sql .= " AND lang = '" . $db->escape($lang) . "'";
+            $sql .= " AND entity IN (0, " . ((int) $conf->entity) . ")";
+            $db->query($sql);
+        }
+    }
+
+    // Insert new
+    foreach ($overrides as $transkey => $transvalue) {
+        foreach ($languages as $lang) {
+            $sql = "INSERT INTO " . MAIN_DB_PREFIX . "overwrite_trans (lang, transkey, transvalue, entity)";
+            $sql .= " VALUES ('" . $db->escape($lang) . "', '" . $db->escape($transkey) . "',";
+            $sql .= " '" . $db->escape($transvalue) . "', " . ((int) $conf->entity) . ")";
+            if (!$db->query($sql)) {
+                $db->rollback();
+                return -1;
+            }
+        }
+    }
+
+    $db->commit();
+    return 1;
+}
+
+/**
+ * @brief Remove all KSeF-managed translation override
+ * @param DoliDB $db Database handler
+ * @param array $languages Array of language codes
+ * @return int 1 on success, -1 on error
+ */
+function ksefRemoveTranslationOverrides($db, $languages)
+{
+    global $conf;
+
+    if (empty($languages)) {
+        return -1;
+    }
+
+    $allManagedKeys = ksefGetAllManagedTransKeys();
+
+    $db->begin();
+
+    foreach ($allManagedKeys as $transkey) {
+        foreach ($languages as $lang) {
+            $sql = "DELETE FROM " . MAIN_DB_PREFIX . "overwrite_trans";
+            $sql .= " WHERE transkey = '" . $db->escape($transkey) . "'";
+            $sql .= " AND lang = '" . $db->escape($lang) . "'";
+            $sql .= " AND entity IN (0, " . ((int) $conf->entity) . ")";
+            if (!$db->query($sql)) {
+                $db->rollback();
+                return -1;
+            }
+        }
+    }
+
+    $db->commit();
+    return 1;
+}
+
+/**
+ * @brief Check which KSeF-managed translation
+ * @param DoliDB $db Database handler
+ * @return array Array of existing overrides
+ */
+function ksefGetCurrentTranslationOverrides($db)
+{
+    global $conf;
+
+    $allManagedKeys = ksefGetAllManagedTransKeys();
+    $escaped = array_map(function ($k) use ($db) {
+        return "'" . $db->escape($k) . "'";
+    }, $allManagedKeys);
+
+    $sql = "SELECT lang, transkey, transvalue FROM " . MAIN_DB_PREFIX . "overwrite_trans";
+    $sql .= " WHERE transkey IN (" . implode(',', $escaped) . ")";
+    $sql .= " AND entity IN (0, " . ((int) $conf->entity) . ")";
+    $sql .= " ORDER BY lang, transkey";
+
+    $result = array();
+    $resql = $db->query($sql);
+    if ($resql) {
+        while ($obj = $db->fetch_object($resql)) {
+            $result[] = array(
+                'lang' => $obj->lang,
+                'transkey' => $obj->transkey,
+                'transvalue' => $obj->transvalue,
+            );
+        }
+    }
+    return $result;
+}
+
+/**
  * @brief Gets status badge HTML
  * @param $status Status code
  * @return string Badge HTML
@@ -226,7 +528,7 @@ function ksefGetVerificationURL($ksef_number, $invoice_hash = null, $environment
             $nip = $parts[0] ?? '';
         }
         if (empty($nip)) {
-            $nip = ksefCleanNIP($mysoc->idprof1 ?? '');
+            $nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
         }
     }
 

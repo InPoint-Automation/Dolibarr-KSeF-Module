@@ -198,7 +198,7 @@ class FA3Builder
         $parent->appendChild($podmiot1);
 
         // Check if buyer is not PL
-        $buyerCountry = !empty($customer->country_code) ? strtoupper($customer->country_code) : 'PL';
+        $buyerCountry = ksefInferCountryCode($customer);
         $isForeignBuyer = ($buyerCountry != 'PL');
 
         // PrefiksPodatnika - VAT prefix if buyer is foreign AND seller has valid EU VAT ID in tva_intra
@@ -219,7 +219,7 @@ class FA3Builder
             $nip = ksefCleanNIP($conf->global->KSEF_COMPANY_NIP);
         }
         if (empty($nip)) {
-            $nip = ksefCleanNIP($mysoc->idprof1);
+            $nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
         }
         if (empty($nip)) {
             throw new Exception("Seller NIP is required - configure KSEF");
@@ -284,29 +284,24 @@ class FA3Builder
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
         $podmiot2->appendChild($daneIdent);
 
-        $countryCode = $customer->country_code ?: 'PL';
+        $countryCode = ksefInferCountryCode($customer);
         $isPolish = ($countryCode === 'PL');
         $isEU = $this->isEUCountry($countryCode);
 
-        $nip = ksefCleanNIP($customer->idprof1);
-        if (empty($nip)) {
-            $nip = ksefCleanNIP($customer->tva_intra);
-        }
+        $nipRaw = ksefGetIdentifierField($customer, 'NIP');
+        $nip = ksefCleanNIP($nipRaw);
 
         if ($isPolish && !empty($nip)) {
             $daneIdent->appendChild($xml->createElement('NIP', $nip));
         } elseif ($isEU && !empty($customer->tva_intra)) {
-            $vatNumber = ksefCleanNIP($customer->tva_intra);
-            if (strlen($vatNumber) > 2 && preg_match('/^[A-Z]{2}/', $vatNumber)) {
-                $vatNumber = substr($vatNumber, 2);
-            }
+            $vatNumber = ksefStripVATPrefix($customer->tva_intra);
             $daneIdent->appendChild($xml->createElement('KodUE', $countryCode));
             if (!empty($vatNumber)) {
                 $daneIdent->appendChild($xml->createElement('NrVatUE', $vatNumber));
             }
-        } elseif (!$isPolish && !empty($customer->idprof1)) {
+        } elseif (!$isPolish && !empty($nipRaw)) {
             $daneIdent->appendChild($xml->createElement('KodKraju', $countryCode));
-            $daneIdent->appendChild($xml->createElement('NrID', $this->xmlSafe($customer->idprof1)));
+            $daneIdent->appendChild($xml->createElement('NrID', $this->xmlSafe(ksefStripVATPrefix($nipRaw))));
         } else {
             $daneIdent->appendChild($xml->createElement('BrakID', '1'));
         }
@@ -723,11 +718,20 @@ class FA3Builder
      */
     private function buildStopka($xml, $parent)
     {
-        global $conf;
+        global $conf, $mysoc;
 
         $krs = !empty($conf->global->KSEF_COMPANY_KRS) ? trim($conf->global->KSEF_COMPANY_KRS) : '';
         $regon = !empty($conf->global->KSEF_COMPANY_REGON) ? trim($conf->global->KSEF_COMPANY_REGON) : '';
         $bdo = !empty($conf->global->KSEF_COMPANY_BDO) ? trim($conf->global->KSEF_COMPANY_BDO) : '';
+        if (empty($krs)) {
+            $krs = trim(ksefGetIdentifierField($mysoc, 'KRS'));
+        }
+        if (empty($regon)) {
+            $regon = trim(ksefGetIdentifierField($mysoc, 'REGON'));
+        }
+        if (empty($bdo)) {
+            $bdo = trim(ksefGetIdentifierField($mysoc, 'BDO'));
+        }
 
         // Only create Stopka if at least one registry number is set
         if (empty($krs) && empty($regon) && empty($bdo)) {

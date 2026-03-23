@@ -106,6 +106,18 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.2
+>- Fix issue #9. v1.3.0 improved invoices handling "0" values by checking for null, but fields were still initialized to 0. Now initialized null.
+>- Add migration to re-parse incoming xml for v1.3.2
+>- Configurable field mappings for NIP, KRS, REGON, BDO instead of hardcoded (issue #10)
+>- Can write translation overrides directly from settings page with configured mappings
+>- Warn when multiple identifiers are mapped to the same source field
+>- Auto-create suppliers with KRS/REGON/BDO from parsed incoming invoice XML
+>- Updated "How To Use" page with translation overrides
+>- Setup page is getting long so wrapped all the settings that are applied by save button together in an outline box
+>- Add inference for buyer country from VAT prefix when third party country isn't set
+>- Fix Cron jobs have old classname (issue #11)
+
 >### Version v1.3.1
 >- Reject malformed/incorrect invoices without blocking correct invoices
 >- Batch processing improved so one malformed invoice no longer breaks entire batch

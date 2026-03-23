@@ -75,46 +75,71 @@ $action = GETPOST('action', 'aZ09');
 $backtopage = GETPOST('backtopage', 'alpha');
 $error = 0;
 
-// Auto-pull NIP - first from professional ID and 2nd from VAT ID
+// Auto-pull identifiers from company object using configured field mappings
+global $mysoc;
+
 if (empty($conf->global->KSEF_COMPANY_NIP)) {
-    global $mysoc;
-    $auto_nip = '';
-
-    if (!empty($mysoc->idprof1)) {
-        $auto_nip = ksefCleanNIP($mysoc->idprof1);
-    } elseif (!empty($mysoc->tva_intra)) {
-        $auto_nip = ksefCleanNIP($mysoc->tva_intra);
-    }
-
+    $auto_nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
     if (!empty($auto_nip)) {
         dolibarr_set_const($db, 'KSEF_COMPANY_NIP', $auto_nip, 'chaine', 0, '', $conf->entity);
     }
 }
 
-// Auto-pull KRS from Professional ID 2
 if (empty($conf->global->KSEF_COMPANY_KRS)) {
-    global $mysoc;
-    if (!empty($mysoc->idprof2)) {
-        dolibarr_set_const($db, 'KSEF_COMPANY_KRS', trim($mysoc->idprof2), 'chaine', 0, '', $conf->entity);
+    $auto_krs = trim(ksefGetIdentifierField($mysoc, 'KRS'));
+    if (!empty($auto_krs)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_KRS', $auto_krs, 'chaine', 0, '', $conf->entity);
     }
 }
 
-// Auto-pull REGON from Professional ID 3
 if (empty($conf->global->KSEF_COMPANY_REGON)) {
-    global $mysoc;
-    if (!empty($mysoc->idprof3)) {
-        dolibarr_set_const($db, 'KSEF_COMPANY_REGON', trim($mysoc->idprof3), 'chaine', 0, '', $conf->entity);
+    $auto_regon = trim(ksefGetIdentifierField($mysoc, 'REGON'));
+    if (!empty($auto_regon)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_REGON', $auto_regon, 'chaine', 0, '', $conf->entity);
     }
 }
 
-// Auto-pull BDO from Professional ID 4
 if (empty($conf->global->KSEF_COMPANY_BDO)) {
-    global $mysoc;
-    if (!empty($mysoc->idprof4)) {
-        dolibarr_set_const($db, 'KSEF_COMPANY_BDO', trim($mysoc->idprof4), 'chaine', 0, '', $conf->entity);
+    $auto_bdo = trim(ksefGetIdentifierField($mysoc, 'BDO'));
+    if (!empty($auto_bdo)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_BDO', $auto_bdo, 'chaine', 0, '', $conf->entity);
     }
 }
 
+
+if ($action == 'apply_trans_overrides' || $action == 'remove_trans_overrides') {
+    $langs_selected = array();
+    if (GETPOST('trans_lang_en_US', 'alpha')) {
+        $langs_selected[] = 'en_US';
+    }
+    if (GETPOST('trans_lang_pl_PL', 'alpha')) {
+        $langs_selected[] = 'pl_PL';
+    }
+
+    if (empty($langs_selected)) {
+        setEventMessages($langs->trans("KSEF_TransOverridesNoLang"), null, 'errors');
+    } else {
+        if ($action == 'apply_trans_overrides') {
+            $result = ksefApplyTranslationOverrides($db, $langs_selected);
+            if ($result > 0) {
+                setEventMessages($langs->trans("KSEF_TransOverridesApplied", implode(', ', $langs_selected)), null, 'mesgs');
+            } else {
+                setEventMessages($langs->trans("KSEF_TransOverridesError"), null, 'errors');
+            }
+        } else {
+            $result = ksefRemoveTranslationOverrides($db, $langs_selected);
+            if ($result > 0) {
+                setEventMessages($langs->trans("KSEF_TransOverridesRemoved", implode(', ', $langs_selected)), null, 'mesgs');
+            } else {
+                setEventMessages($langs->trans("KSEF_TransOverridesError"), null, 'errors');
+            }
+        }
+    }
+
+    // Redirect so $langs reloads
+    header("Location: " . $_SERVER["PHP_SELF"]);
+    exit;
+}
 
 if ($action == 'update') {
     // NIP
@@ -133,6 +158,46 @@ if ($action == 'update') {
     // BDO
     $bdo = GETPOST("KSEF_COMPANY_BDO", 'alphanohtml');
     dolibarr_set_const($db, 'KSEF_COMPANY_BDO', trim($bdo), 'chaine', 0, '', $conf->entity);
+
+    // Field Mappings
+    $validFields = array('', 'idprof1', 'idprof2', 'idprof3', 'idprof4', 'idprof5', 'idprof6', 'tva_intra');
+    $fieldMappings = array();
+    foreach (array('NIP', 'KRS', 'REGON', 'BDO') as $ident) {
+        $fieldVal = GETPOST('KSEF_FIELD_' . $ident, 'alpha');
+        if (in_array($fieldVal, $validFields)) {
+            dolibarr_set_const($db, 'KSEF_FIELD_' . $ident, $fieldVal, 'chaine', 0, '', $conf->entity);
+            if (!empty($fieldVal)) {
+                $fieldMappings[$ident] = $fieldVal;
+            }
+        }
+    }
+
+    // Warn if multiple identifiers use the same source field
+    $fieldUsage = array();
+    foreach ($fieldMappings as $ident => $fieldVal) {
+        $fieldUsage[$fieldVal][] = $ident;
+    }
+    foreach ($fieldUsage as $fieldVal => $idents) {
+        if (count($idents) > 1) {
+            setEventMessages($langs->trans("KSEF_WARNING_DUPLICATE_FIELD", implode(', ', $idents), $fieldVal), null, 'warnings');
+        }
+    }
+
+    // Re-pull identifier values
+    foreach (array('NIP' => 'KSEF_COMPANY_NIP', 'KRS' => 'KSEF_COMPANY_KRS', 'REGON' => 'KSEF_COMPANY_REGON', 'BDO' => 'KSEF_COMPANY_BDO') as $ident => $constName) {
+        $currentVal = GETPOST($constName, 'alphanohtml');
+        if (empty(trim($currentVal)) && isset($fieldMappings[$ident])) {
+            $autoVal = ksefGetIdentifierField($mysoc, $ident);
+            if ($ident === 'NIP') {
+                $autoVal = ksefCleanNIP($autoVal);
+            } else {
+                $autoVal = trim($autoVal);
+            }
+            if (!empty($autoVal)) {
+                dolibarr_set_const($db, $constName, $autoVal, 'chaine', 0, '', $conf->entity);
+            }
+        }
+    }
 
     // Environment
     $env = GETPOST('KSEF_ENVIRONMENT', 'alpha');
@@ -527,6 +592,26 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
     !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
     !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
 
+// Check for duplicate
+$configuredFields = array();
+foreach (array('NIP', 'KRS', 'REGON', 'BDO') as $ident) {
+    $fv = ksefGetFieldName($ident);
+    if (!empty($fv)) {
+        $configuredFields[$fv][] = $ident;
+    }
+}
+foreach ($configuredFields as $fv => $idents) {
+    if (count($idents) > 1) {
+        $warnings[] = $langs->trans("KSEF_WARNING_DUPLICATE_FIELD", implode(', ', $idents), $fv);
+    }
+}
+
+// Check if translation are applied
+$currentOverridesCheck = ksefGetCurrentTranslationOverrides($db);
+if (empty($currentOverridesCheck)) {
+    $warnings[] = $langs->trans("KSEF_WARNING_NO_TRANS_OVERRIDES");
+}
+
 $no_auth_configured = (!$has_token && !$has_auth_cert);
 if ($no_auth_configured) {
     $warnings[] = '<strong style="color: #dc3545;">' . $langs->trans("KSEF_WARNING_NO_AUTH") . '</strong> - ' . $langs->trans("KSEF_WARNING_CONFIGURE_TOKEN_OR_CERT");
@@ -551,34 +636,66 @@ print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
 print '<input type="hidden" name="action" value="update">';
 
+print '<div style="border: 1px solid #bbb; border-radius: 6px; padding: 15px; margin-bottom: 10px;">';
+
 print '<table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_BASIC_CONFIG") . '</td></tr>';
+
+// Field mapping options
+$fieldOptionsNip = ksefGetFieldOptions(false);
+$fieldOptionsOptional = ksefGetFieldOptions(true);
 
 // Company NIP
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_NIP"), $langs->trans("KSEF_COMPANY_NIP_Help")) . '</td>';
-print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_NIP" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_NIP ?? '') . '" placeholder="1234567890"></td>';
+print '<td>';
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_NIP" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_NIP ?? '') . '" placeholder="1234567890"> ';
+print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_NIP', $fieldOptionsNip, $conf->global->KSEF_FIELD_NIP ?? 'idprof1', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+$nipField = $conf->global->KSEF_FIELD_NIP ?? 'idprof1';
+if ($nipField === 'tva_intra') {
+    print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_NIP_FROM_VATID_NOTE") . ')</span>';
+}
+print '</td>';
+print '</tr>';
+
+// VAT ID
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans("KSEF_FIELD_VATID"), $langs->trans("KSEF_FIELD_VATID_Help")) . '</td>';
+print '<td><span class="opacitymedium">' . $langs->trans("VATIntra") . ' (tva_intra) — ' . $langs->trans("KSEF_FIELD_VATID_ALWAYS") . '</span></td>';
 print '</tr>';
 
 // KRS
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_KRS"), $langs->trans("KSEF_COMPANY_KRS_Help")) . '</td>';
-print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_KRS" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_KRS ?? '') . '" placeholder="0000000000">';
-print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span></td>';
+print '<td>';
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_KRS" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_KRS ?? '') . '" placeholder="0000000000">';
+print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_KRS', $fieldOptionsOptional, $conf->global->KSEF_FIELD_KRS ?? 'idprof2', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '</td>';
 print '</tr>';
 
 // REGON
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_REGON"), $langs->trans("KSEF_COMPANY_REGON_Help")) . '</td>';
-print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_REGON" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_REGON ?? '') . '" placeholder="000000000">';
-print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span></td>';
+print '<td>';
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_REGON" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_REGON ?? '') . '" placeholder="000000000">';
+print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_REGON', $fieldOptionsOptional, $conf->global->KSEF_FIELD_REGON ?? 'idprof3', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '</td>';
 print '</tr>';
 
 // BDO
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_BDO"), $langs->trans("KSEF_COMPANY_BDO_Help")) . '</td>';
-print '<td><input type="text" class="flat minwidth300" name="KSEF_COMPANY_BDO" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_BDO ?? '') . '" placeholder="000000000">';
-print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span></td>';
+print '<td>';
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_BDO" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_BDO ?? '') . '" placeholder="000000000">';
+print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_BDO', $fieldOptionsOptional, $conf->global->KSEF_FIELD_BDO ?? 'idprof4', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '</td>';
 print '</tr>';
 
 // Environment
@@ -880,7 +997,9 @@ print '<br><span class="opacitymedium">' . $langs->trans("KSEF_TOKEN_OBTAIN_INFO
 print '</td></tr>';
 print '</table>';
 
-print '<br><div class="center">';
+print '</div>';
+
+print '<div class="center" style="margin-top: 10px;">';
 print '<input type="submit" class="button button-save" value="' . $langs->trans("Save") . '">';
 print '</div>';
 print '</form>';
@@ -1066,6 +1185,79 @@ print '</td></tr>';
 
 print '</table>';
 print '</form>';
+
+// Translation Overrides
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="4">' . $langs->trans("KSEF_TranslationOverrides") . '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td colspan="4">';
+print '<span class="opacitymedium">' . $langs->trans("KSEF_TransOverridesDesc") . '</span>';
+print '</td>';
+print '</tr>';
+
+// status table
+$previewOverrides = ksefGetManagedTranslationOverrides();
+$currentOverrides = ksefGetCurrentTranslationOverrides($db);
+
+// current overrides
+$currentByLangKey = array();
+foreach ($currentOverrides as $ov) {
+    $currentByLangKey[$ov['lang']][$ov['transkey']] = $ov['transvalue'];
+}
+
+$fieldGroups = array();
+foreach ($previewOverrides as $tk => $tv) {
+    if (preg_match('/Short/', $tk)) {
+        continue; // skip Short variants, they share the same value
+    }
+    $fieldGroups[$tk] = $tv;
+}
+
+if (!empty($fieldGroups)) {
+    print '<tr class="liste_titre">';
+    print '<td>' . $langs->trans("KSEF_TransOverridesField") . '</td>';
+    print '<td>' . $langs->trans("KSEF_TransOverridesLabel") . '</td>';
+    print '<td class="center">en_US</td>';
+    print '<td class="center">pl_PL</td>';
+    print '</tr>';
+
+    foreach ($fieldGroups as $field => $label) {
+        print '<tr class="oddeven">';
+        print '<td>' . dol_escape_htmltag($field) . '</td>';
+        print '<td><strong>' . dol_escape_htmltag($label) . '</strong></td>';
+
+        foreach (array('en_US', 'pl_PL') as $lang) {
+            $applied = isset($currentByLangKey[$lang][$field]) && $currentByLangKey[$lang][$field] === $label;
+            if ($applied) {
+                print '<td class="center"><span class="badge badge-status4 badge-status">✓</span></td>';
+            } else {
+                print '<td class="center"><span class="badge badge-status8 badge-status">–</span></td>';
+            }
+        }
+        print '</tr>';
+    }
+} else {
+    print '<tr class="oddeven"><td colspan="4"><span class="opacitymedium">' . $langs->trans("None") . '</span></td></tr>';
+}
+
+print '<tr class="oddeven">';
+print '<td colspan="4">';
+print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '" style="display: inline;">';
+print '<input type="hidden" name="token" value="' . newToken() . '">';
+print '<input type="hidden" name="action" value="apply_trans_overrides">';
+print '<label style="margin-right: 15px;"><input type="checkbox" name="trans_lang_en_US" value="1" checked> en_US</label>';
+print '<label style="margin-right: 15px;"><input type="checkbox" name="trans_lang_pl_PL" value="1" checked> pl_PL</label>';
+print '<input type="submit" class="button small" value="' . $langs->trans("KSEF_ApplyTransOverrides") . '">';
+print '</form>';
+print '<span style="margin-left: 20px;">';
+print '<a href="' . $_SERVER["PHP_SELF"] . '?action=remove_trans_overrides&trans_lang_en_US=1&trans_lang_pl_PL=1&token=' . newToken() . '" class="opacitymedium" style="font-size: 0.85em;" onclick="return confirm(\'' . dol_escape_js($langs->trans("KSEF_ConfirmRemoveTransOverrides")) . '\');">';
+print '<i class="fas fa-eraser"></i> ' . $langs->trans("KSEF_RemoveTransOverrides");
+print '</a></span>';
+print '</td>';
+print '</tr>';
+
+print '</table>';
 
 print dol_get_fiche_end();
 

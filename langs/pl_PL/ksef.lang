@@ -51,7 +51,7 @@ KSEF_Configuration=Konfiguracja KSeF
 KSEF_ENV_DEMO=Demo
 KSEF_ENV_PRODUCTION=Produkcja
 KSEF_ENV_TEST=Test
-KSEF_Environment=Środowisko
+KSEF_ENVIRONMENT=Środowisko
 KSEF_ENVIRONMENT_Help=Wybierz TEST do testowania, PRODUKCJA dla rzeczywistych faktur
 
 # ============================================
@@ -82,7 +82,7 @@ KSEF_PURGE_ON_DISABLE_Help=Po włączeniu tej opcji wszystkie dane konfiguracyjn
 # NIP & Company Data
 # ============================================
 KSEF_COMPANY_NIP=NIP firmy
-KSEF_COMPANY_NIP_Help=Wypełniane automatycznie z ID zawodowego 1, a następnie z numeru VAT jeśli jest pusty
+KSEF_COMPANY_NIP_Help=Wypełniane automatycznie ze skonfigurowanego pola źródłowego. Jeśli pole jest puste, pobierany z numeru VAT.
 KSEF_AutoPopulatedFromCompany=Wypełniane automatycznie
 KSEF_WARNING_NO_NIP=Uwaga: Brak NIP firmy
 KSEF_EnterNIPAndToken=Wprowadź swój NIP i wklej token
@@ -94,12 +94,18 @@ KSEF_EXCLUDED_CUSTOMERS_INFO=Lista ID kontrahentów oddzielonych przecinkami
 KSEF_SelectCustomer=Wybierz kontrahenta
 KSEF_PleaseSelectCustomer=Proszę wybrać kontrahenta
 KSEF_COMPANY_KRS=KRS firmy
-KSEF_COMPANY_KRS_Help=Automatycznie pobierane z Identyfikatora zawodowego 2 (KRS). Numer Krajowego Rejestru Sądowego.
+KSEF_COMPANY_KRS_Help=Automatycznie pobierane ze skonfigurowanego pola źródłowego. Numer Krajowego Rejestru Sądowego.
 KSEF_COMPANY_REGON=REGON firmy
-KSEF_COMPANY_REGON_Help=Automatycznie pobierane z Identyfikatora zawodowego 3 (REGON). Numer identyfikacyjny REGON.
+KSEF_COMPANY_REGON_Help=Automatycznie pobierane ze skonfigurowanego pola źródłowego. Numer identyfikacyjny REGON.
 KSEF_COMPANY_BDO=BDO firmy
-KSEF_COMPANY_BDO_Help=Automatycznie pobierane z Identyfikatora zawodowego 4 (BDO). Numer rejestrowy BDO.
+KSEF_COMPANY_BDO_Help=Automatycznie pobierane ze skonfigurowanego pola źródłowego. Numer rejestrowy BDO.
 KSEF_Optional=Opcjonalne
+KSEF_FIELD_SOURCE=Pole źródłowe
+KSEF_FIELD_NONE=Nieużywane
+KSEF_FIELD_VATID=Numer VAT UE
+KSEF_FIELD_VATID_Help=Numer identyfikacyjny VAT UE jest zawsze pobierany z pola VAT (tva_intra). Nie można tego zmienić.
+KSEF_FIELD_VATID_ALWAYS=zawsze używa tego pola
+KSEF_NIP_FROM_VATID_NOTE=NIP zostanie wyodrębniony przez usunięcie prefiksu kraju
 KSEF_PRODUCTION_WARNING=Środowisko produkcyjne - wysyłaj tylko oficjalne faktury. Wysłanych faktur nie można cofnąć.
 
 # ============================================
@@ -274,6 +280,20 @@ KSEF_OptionalFieldsDesc=W ustawieniach można włączyć opcjonalne pola FA(3) t
 
 KSEF_CompanyIdentifiers=Identyfikatory firmy
 KSEF_CompanyIdentifiersDesc=NIP jest wymagany. KRS, REGON i BDO są opcjonalne i uzupełnią się automatycznie z ustawień firmy, jeśli zostały tam skonfigurowane.
+KSEF_TranslationOverrides=Nadpisania tłumaczeń
+KSEF_ApplyTransOverrides=Zastosuj nadpisania tłumaczeń
+KSEF_RemoveTransOverrides=Usuń nadpisania tłumaczeń
+KSEF_TransOverridesApplied=Nadpisania tłumaczeń zastosowane pomyślnie dla: %s
+KSEF_TransOverridesRemoved=Nadpisania tłumaczeń usunięte pomyślnie dla: %s
+KSEF_TransOverridesError=Błąd podczas aktualizacji nadpisań tłumaczeń
+KSEF_TransOverridesNoLang=Proszę wybrać co najmniej jeden język
+KSEF_TransOverridesDesc=Synchronizuj etykiety pól Dolibarr (ProfId, VATIntra) z mapowaniami identyfikatorów skonfigurowanymi powyżej. Zapisuje do tabeli nadpisań tłumaczeń używanej w Strona główna > Ustawienia > Tłumaczenia.
+KSEF_TransOverridesCurrent=Aktualne nadpisania tłumaczeń
+KSEF_TransOverridesPreview=Nadpisania na podstawie aktualnych mapowań
+KSEF_TransOverridesNone=Brak aktualnych nadpisań tłumaczeń
+KSEF_TransOverridesField=Pole
+KSEF_TransOverridesLabel=Etykieta
+KSEF_ConfirmRemoveTransOverrides=Czy na pewno chcesz usunąć wszystkie nadpisania tłumaczeń?
 
 # Sending Invoices Section
 KSEF_SendingInvoices=Wysyłanie faktur
@@ -1018,3 +1038,9 @@ KSEF_ViewErrors=Pokaż błędy
 KSEF_HideErrors=Ukryj błędy
 KSEF_ErrorKsefNumber=Numer KSeF
 KSEF_ErrorMessage=Błąd
+KSEF_WARNING_NO_TRANS_OVERRIDES=Nadpisania tłumaczeń nie zostały zastosowane. Pola takie jak REGON/BDO nie pojawią się na karcie kontrahenta. Przewiń do sekcji "Nadpisania tłumaczeń" i kliknij "Zastosuj nadpisania tłumaczeń".
+KSEF_WARNING_DUPLICATE_FIELD=Identyfikatory %s są zmapowane do tego samego pola źródłowego (%s). Każdy identyfikator powinien używać unikalnego pola.
+KSEF_CountryRequirement=Kraj kontrahenta
+KSEF_CountryRequirementDesc=Każdy kontrahent (klient/dostawca) powinien mieć poprawnie ustawiony kraj. Moduł używa kraju do określenia sposobu identyfikacji nabywcy w XML KSeF: polscy nabywcy używają NIP, nabywcy z UE używają numeru VAT UE, a nabywcy spoza UE używają zagranicznego numeru identyfikacji podatkowej. Jeśli kraj nie jest ustawiony, moduł spróbuje go wywnioskować z prefiksu numeru VAT (np. "DE" z "DE123456789"), w przeciwnym razie domyślnie przyjmie Polskę.
+KSEF_TranslationOverridesHowTo=Nadpisania tłumaczeń (etykiety pól)
+KSEF_TranslationOverridesHowToDesc=Domyślnie Dolibarr nie wyświetla wszystkich pól profesjonalnych ID (idprof3-6) dla polskich firm. Moduł może nadpisać etykiety pól, aby NIP, KRS, REGON i BDO wyświetlały się prawidłowo na karcie kontrahenta. Przejdź do ustawień modułu, przewiń do sekcji "Nadpisania tłumaczeń" i kliknij "Zastosuj nadpisania tłumaczeń" dla wybranych języków. Wystarczy to zrobić raz (lub ponownie po zmianie mapowań pól).

@@ -128,7 +128,7 @@ if ($resql) {
     print '<tr class="liste_titre">';
     print '<th>' . $langs->trans("Date") . '</th>';
     print '<th>' . $langs->trans("Status") . '</th>';
-    print '<th>' . $langs->trans("KSEF_Environment") . '</th>';
+    print '<th>' . $langs->trans("KSEF_ENVIRONMENT") . '</th>';
     print '<th>' . $langs->trans("KSEF_Number") . '</th>';
     print '<th class="center">#</th>';
     print '<th>' . $langs->trans("Error") . '</th>';

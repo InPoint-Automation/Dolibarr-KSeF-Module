@@ -1185,17 +1185,20 @@ class KsefIncoming extends CommonObject
     private function buildThirdPartyMatchWhere($nip, $vatId, $alias = 's')
     {
         $vatDigits = !empty($vatId) ? preg_replace('/[^0-9]/', '', $vatId) : '';
+        $nipField = ksefGetFieldName('NIP');
 
         $conditions = array();
         if (!empty($nip)) {
             $escapedNip = $this->db->escape($nip);
-            $conditions[] = "REPLACE(REPLACE({$alias}.siren, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
-            $conditions[] = "REPLACE(REPLACE({$alias}.siret, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
-            $conditions[] = "REPLACE(REPLACE({$alias}.ape, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
-            $conditions[] = "REPLACE(REPLACE({$alias}.idprof4, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
-            $conditions[] = "REPLACE(REPLACE({$alias}.idprof5, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
-            $conditions[] = "REPLACE(REPLACE({$alias}.idprof6, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
-            $conditions[] = "REPLACE(REPLACE({$alias}.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
+            if (!empty($nipField)) {
+                $conditions[] = "REPLACE(REPLACE({$alias}." . $this->db->escape($nipField) . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
+            }
+            $otherFields = array('siren', 'siret', 'ape', 'idprof4', 'idprof5', 'idprof6', 'tva_intra');
+            foreach ($otherFields as $field) {
+                if ($field !== $nipField) {
+                    $conditions[] = "REPLACE(REPLACE({$alias}." . $field . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
+                }
+            }
         }
         if (!empty($vatDigits) && $vatDigits !== $nip) {
             $escapedVat = $this->db->escape($vatDigits);
@@ -1215,6 +1218,7 @@ class KsefIncoming extends CommonObject
     private function buildThirdPartyMatchSQL($nip, $vatId)
     {
         $vatDigits = !empty($vatId) ? preg_replace('/[^0-9]/', '', $vatId) : '';
+        $nipField = ksefGetFieldName('NIP');
 
         $sql = "SELECT s.rowid FROM " . MAIN_DB_PREFIX . "societe s";
         $sql .= " WHERE s.fournisseur = 1";
@@ -1224,17 +1228,27 @@ class KsefIncoming extends CommonObject
         $orderCases = array();
         if (!empty($nip)) {
             $escapedNip = $this->db->escape($nip);
-            $orderCases[] = "CASE WHEN REPLACE(REPLACE(s.siren, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 0";
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.siret, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.ape, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.idprof4, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.idprof5, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.idprof6, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 2";
+            if (!empty($nipField)) {
+                $orderCases[] = "CASE WHEN REPLACE(REPLACE(s." . $this->db->escape($nipField) . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 0";
+            } else {
+                $orderCases[] = "CASE WHEN 1=0 THEN 0";
+            }
+            $otherFields = array('siren', 'siret', 'ape', 'idprof4', 'idprof5', 'idprof6');
+            foreach ($otherFields as $field) {
+                if ($field !== $nipField) {
+                    $orderCases[] = "WHEN REPLACE(REPLACE(s." . $field . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
+                }
+            }
+            if ($nipField !== 'tva_intra') {
+                $orderCases[] = "WHEN REPLACE(REPLACE(s.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 2";
+            }
         }
         if (!empty($vatDigits)) {
             $escapedVat = $this->db->escape($vatDigits);
             $orderCases[] = "WHEN REPLACE(REPLACE(s.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedVat . "%' THEN " . (empty($nip) ? '0' : '2');
+        }
+        if (empty($orderCases)) {
+            $orderCases[] = "CASE WHEN 1=0 THEN 0";
         }
         $orderCases[] = "ELSE 9 END";
 
@@ -1940,12 +1954,37 @@ class KsefIncoming extends CommonObject
         $societe->code_fournisseur = '-1';
 
         if (!empty($this->seller_nip) && $this->seller_country == 'PL') {
-            $societe->idprof1 = $this->seller_nip;
+            $nipField = ksefGetFieldName('NIP');
+            if (!empty($nipField) && $nipField !== 'tva_intra') {
+                $societe->$nipField = $this->seller_nip;
+            }
         }
         if (!empty($this->seller_vat_id)) {
             $societe->tva_intra = $this->seller_vat_id;
         } elseif (!empty($this->seller_nip) && $this->seller_country != 'PL') {
             $societe->tva_intra = ($this->seller_country ?: '') . $this->seller_nip;
+        }
+        $nipField = ksefGetFieldName('NIP');
+        if ($nipField === 'tva_intra' && empty($societe->tva_intra) && !empty($this->seller_nip) && $this->seller_country == 'PL') {
+            $societe->tva_intra = $this->seller_nip;
+        }
+
+        // Set KRS/REGON/BDO from parsed XML
+        if (!empty($this->fa3_xml)) {
+            dol_include_once('/ksef/class/fa3_parser.class.php');
+            $parser = new FA3Parser($this->db);
+            $parsed = $parser->parse($this->fa3_xml);
+            if (!empty($parsed) && !empty($parsed['registries'])) {
+                $reg = $parsed['registries'];
+                foreach (array('KRS' => 'krs', 'REGON' => 'regon', 'BDO' => 'bdo') as $ident => $key) {
+                    if (!empty($reg[$key])) {
+                        $field = ksefGetFieldName($ident);
+                        if (!empty($field)) {
+                            $societe->$field = trim($reg[$key]);
+                        }
+                    }
+                }
+            }
         }
 
         if (!empty($this->seller_address)) {

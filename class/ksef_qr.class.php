@@ -212,7 +212,13 @@ class KsefQR
         }
 
         // seller NIP
-        $nip = ksefCleanNIP($mysoc->idprof1);
+        $nip = '';
+        if (!empty($conf->global->KSEF_COMPANY_NIP)) {
+            $nip = ksefCleanNIP($conf->global->KSEF_COMPANY_NIP);
+        }
+        if (empty($nip)) {
+            $nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
+        }
         if (empty($nip)) {
             dol_syslog("KsefQR::addQRToPDF - No seller NIP configured", LOG_WARNING);
             return false;

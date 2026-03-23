@@ -659,7 +659,12 @@ if (!empty($object->seller_name)) {
     $createSupplierUrl .= '&name=' . urlencode($object->seller_name);
 }
 if (!empty($object->seller_nip) && $object->seller_country == 'PL') {
-    $createSupplierUrl .= '&idprof1=' . urlencode($object->seller_nip);
+    $nipField = ksefGetFieldName('NIP');
+    if (!empty($nipField) && $nipField !== 'tva_intra') {
+        $createSupplierUrl .= '&' . $nipField . '=' . urlencode($object->seller_nip);
+    } elseif ($nipField === 'tva_intra') {
+        $createSupplierUrl .= '&tva_intra=' . urlencode($object->seller_nip);
+    }
 }
 if (!empty($object->seller_vat_id)) {
     $createSupplierUrl .= '&tva_intra=' . urlencode($object->seller_vat_id);

@@ -326,6 +326,12 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
                 <h4><?php echo $langs->trans("KSEF_CompanyIdentifiers"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_CompanyIdentifiersDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_CountryRequirement"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_CountryRequirementDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_TranslationOverridesHowTo"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_TranslationOverridesHowToDesc"); ?></p>
             </td>
         </tr>
     </table>

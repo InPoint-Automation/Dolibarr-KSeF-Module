@@ -1097,9 +1097,13 @@ class KsefApi extends DolibarrApi
             return 0;
         }
 
-        // Try idprof1
+        // Try configured NIP field
+        $nipField = ksefGetFieldName('NIP');
+        if (empty($nipField)) {
+            $nipField = 'idprof1';
+        }
         $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe"
-            . " WHERE REPLACE(REPLACE(REPLACE(idprof1, '-', ''), ' ', ''), 'PL', '')"
+            . " WHERE REPLACE(REPLACE(REPLACE(" . $this->db->escape($nipField) . ", '-', ''), ' ', ''), 'PL', '')"
             . " = '" . $this->db->escape($cleanNip) . "'"
             . " AND entity IN (" . getEntity('societe') . ")"
             . " LIMIT 1";

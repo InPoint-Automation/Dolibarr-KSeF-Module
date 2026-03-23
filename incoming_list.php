@@ -806,7 +806,7 @@ print '<table class="noborder nohover centpercent">';
 print '<tr class="liste_titre"><th colspan="2">' . $langs->trans("KSEF_SyncFromKSeF") . '</th></tr>';
 
 // Environment
-print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("KSEF_Environment") . '</td>';
+print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("KSEF_ENVIRONMENT") . '</td>';
 print '<td>' . ksefGetEnvironmentBadge($environment) . '</td></tr>';
 
 // Sync state info

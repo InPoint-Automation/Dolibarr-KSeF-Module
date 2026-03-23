@@ -51,7 +51,7 @@ KSEF_Configuration=KSeF configuration
 KSEF_ENV_DEMO=Demo
 KSEF_ENV_PRODUCTION=Production
 KSEF_ENV_TEST=Test
-KSEF_Environment=Environment
+KSEF_ENVIRONMENT=Environment
 KSEF_ENVIRONMENT_Help=Select TEST for testing, PRODUCTION for live invoices
 
 # ============================================
@@ -82,7 +82,7 @@ KSEF_PURGE_ON_DISABLE_Help=When enabled, all configuration (NIP, tokens, certifi
 # NIP & Company Data
 # ============================================
 KSEF_COMPANY_NIP=Company NIP
-KSEF_COMPANY_NIP_Help=Auto-populated preferentially from Professional ID 1 and then from VAT ID if it's blank
+KSEF_COMPANY_NIP_Help=Auto-populated from the configured source field. If the source field is empty, falls back to VAT ID.
 KSEF_AutoPopulatedFromCompany=Auto-populated
 KSEF_WARNING_NO_NIP=Warning: Company NIP is missing
 KSEF_EnterNIPAndToken=Enter your NIP (tax ID) and paste your token
@@ -94,12 +94,18 @@ KSEF_EXCLUDED_CUSTOMERS_INFO=Comma-separated list of customer IDs
 KSEF_SelectCustomer=Select Customer
 KSEF_PleaseSelectCustomer=Please select a customer
 KSEF_COMPANY_KRS=Company KRS
-KSEF_COMPANY_KRS_Help=Auto-populated from Professional ID 2 (KRS). National Court Register number.
+KSEF_COMPANY_KRS_Help=Auto-populated from the configured source field. National Court Register number.
 KSEF_COMPANY_REGON=Company REGON
-KSEF_COMPANY_REGON_Help=Auto-populated from Professional ID 3 (REGON). Statistical identification number.
+KSEF_COMPANY_REGON_Help=Auto-populated from the configured source field. Statistical identification number.
 KSEF_COMPANY_BDO=Company BDO
-KSEF_COMPANY_BDO_Help=Auto-populated from Professional ID 4 (BDO). Waste Database register number.
+KSEF_COMPANY_BDO_Help=Auto-populated from the configured source field. Waste Database register number.
 KSEF_Optional=Optional
+KSEF_FIELD_SOURCE=Source field
+KSEF_FIELD_NONE=Not used
+KSEF_FIELD_VATID=EU VAT ID
+KSEF_FIELD_VATID_Help=EU VAT identification number is always read from the VAT ID field (tva_intra). This cannot be changed.
+KSEF_FIELD_VATID_ALWAYS=always uses this field
+KSEF_NIP_FROM_VATID_NOTE=NIP will be extracted by stripping the country prefix
 KSEF_PRODUCTION_WARNING=Production environment - only submit official invoices. Submissions cannot be reversed.
 
 # ============================================
@@ -274,6 +280,20 @@ KSEF_OptionalFieldsDesc=The setup page has toggles for optional FA(3) fields lik
 
 KSEF_CompanyIdentifiers=Company Identifiers
 KSEF_CompanyIdentifiersDesc=NIP is required. KRS, REGON, and BDO are optional and will auto-populate from your company settings if configured there.
+KSEF_TranslationOverrides=Translation Overrides
+KSEF_ApplyTransOverrides=Apply Translation Overrides
+KSEF_RemoveTransOverrides=Remove Translation Overrides
+KSEF_TransOverridesApplied=Translation overrides applied successfully for: %s
+KSEF_TransOverridesRemoved=Translation overrides removed successfully for: %s
+KSEF_TransOverridesError=Error updating translation overrides
+KSEF_TransOverridesNoLang=Please select at least one language
+KSEF_TransOverridesDesc=Sync Dolibarr field labels (ProfId, VATIntra) to match the identifier mappings configured above. This writes to the translation override table used by Home > Setup > Translation.
+KSEF_TransOverridesCurrent=Current translation overrides
+KSEF_TransOverridesPreview=Overrides based on current mappings
+KSEF_TransOverridesNone=No translation overrides currently applied
+KSEF_TransOverridesField=Field
+KSEF_TransOverridesLabel=Label
+KSEF_ConfirmRemoveTransOverrides=Are you sure you want to remove all translation overrides?
 
 # Sending Invoices Section
 KSEF_SendingInvoices=Sending Invoices
@@ -1018,3 +1038,9 @@ KSEF_ViewErrors=View errors
 KSEF_HideErrors=Hide errors
 KSEF_ErrorKsefNumber=KSeF Number
 KSEF_ErrorMessage=Error
+KSEF_WARNING_NO_TRANS_OVERRIDES=Translation overrides have not been applied. Fields like REGON/BDO will not appear on the third party card. Scroll down to "Translation Overrides" and click "Apply Translation Overrides".
+KSEF_WARNING_DUPLICATE_FIELD=Identifiers %s are both mapped to the same source field (%s). Each identifier should use a unique field.
+KSEF_CountryRequirement=Third Party Country
+KSEF_CountryRequirementDesc=Each third party (customer/supplier) should have their country set correctly. The module uses the country to determine how to identify the buyer in the KSeF XML: Polish buyers use NIP, EU buyers use the EU VAT number, and non-EU buyers use their foreign tax ID. If no country is set, the module will attempt to infer it from the VAT ID prefix (e.g. "DE" from "DE123456789"), otherwise it defaults to Poland.
+KSEF_TranslationOverridesHowTo=Translation Overrides (Field Labels)
+KSEF_TranslationOverridesHowToDesc=By default, Dolibarr does not display all professional ID fields (idprof3-6) for Polish companies. This module can override the field labels so that NIP, KRS, REGON, and BDO appear correctly on the Third Party card. Go to the module setup page, scroll to "Translation Overrides", and click "Apply Translation Overrides" for your languages. This only needs to be done once (or again after changing field mappings).
