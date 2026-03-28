@@ -22,6 +22,7 @@
  */
 
 require_once __DIR__ . '/../lib/vendor/autoload.php';
+dol_include_once('/ksef/lib/ksef.lib.php');
 
 use phpseclib3\Crypt\RSA;
 use phpseclib3\Crypt\PublicKeyLoader;

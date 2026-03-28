@@ -721,6 +721,28 @@ if ($object->payment_due_date) {
     print '<td>' . dol_print_date($object->payment_due_date, 'day') . '</td></tr>';
 }
 
+// Payment status from KSeF XML
+if (!empty($object->payment_status) && $object->payment_status !== 'unpaid') {
+    $notSpecified = '<span class="opacitymedium">' . $langs->trans("KSEF_NotSpecifiedInXml") . '</span>';
+
+    print '<tr><td>' . $langs->trans("KSEF_PaymentStatus") . '</td><td>';
+    if ($object->payment_status === 'paid') {
+        print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
+    } elseif ($object->payment_status === 'partial') {
+        print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
+    }
+    print '</td></tr>';
+
+    print '<tr><td>' . $langs->trans("KSEF_PaymentDate") . '</td><td>';
+    print $object->payment_date ? dol_print_date($object->payment_date, 'day') : $notSpecified;
+    print '</td></tr>';
+
+    print '<tr><td>' . $langs->trans("KSEF_PaymentMethod") . '</td><td>';
+    $methodLabel = ksefGetPaymentMethodLabel($object->payment_method);
+    print $methodLabel ? dol_escape_htmltag($methodLabel) : $notSpecified;
+    print '</td></tr>';
+}
+
 print '</table>';
 
 

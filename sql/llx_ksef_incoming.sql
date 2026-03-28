@@ -54,6 +54,8 @@ CREATE TABLE llx_ksef_incoming
     payment_due_date            INTEGER,
     payment_method              VARCHAR(10),
     bank_account                VARCHAR(50),
+    payment_status              VARCHAR(20),
+    payment_date                INTEGER,
 
 -- Correction Reference
     corrected_ksef_number       VARCHAR(50),

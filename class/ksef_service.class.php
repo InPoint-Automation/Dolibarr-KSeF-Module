@@ -190,6 +190,8 @@ class KsefService extends CommonObject
 
                 dol_syslog("KSEF::submitInvoice SUCCESS in {$elapsed}s - KSEF: " . $api_result['ksef_number'], LOG_INFO);
 
+                ksefAutoGeneratePdf($this->db, $submission, $invoice_id);
+
                 return array(
                     'status' => 'ACCEPTED',
                     'ksef_number' => $api_result['ksef_number'],
@@ -359,6 +361,8 @@ class KsefService extends CommonObject
                 dol_now(),
                 true
             );
+
+            ksefAutoGeneratePdf($this->db, $submission, $invoice_id);
 
             return array(
                 'status' => 'OFFLINE',
@@ -556,6 +560,8 @@ class KsefService extends CommonObject
                 $submission->error_message = null;
                 $submission->error_code = null;
                 $submission->update($user, 1);
+
+                ksefAutoGeneratePdf($this->db, $submission, (int)$submission->fk_facture);
 
                 return array(
                     'status' => 'ACCEPTED',
@@ -1435,6 +1441,11 @@ class KsefService extends CommonObject
 
                     $sub->date_last_check = dol_now();
                     $sub->update($user, 1);
+
+                    if ($sub->status == KsefSubmission::STATUS_ACCEPTED) {
+                        ksefAutoGeneratePdf($this->db, $sub, (int)$sub->fk_facture);
+                    }
+
                     $processed++;
 
                 } catch (Exception $e) {

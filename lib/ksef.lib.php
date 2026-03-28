@@ -219,6 +219,40 @@ function ksefGetFieldName($identifier)
 }
 
 /**
+ * PHP property name to database column name
+ * @param string $fieldName PHP property
+ * @return string DB column name
+ */
+function ksefFieldToColumn($fieldName)
+{
+    $map = array(
+        'idprof1' => 'siren',
+        'idprof2' => 'siret',
+        'idprof3' => 'ape',
+    );
+    return isset($map[$fieldName]) ? $map[$fieldName] : $fieldName;
+}
+
+/**
+ * label for KSeF FormaPlatnosci code
+ * @param string|null $code KSeF payment method code (1-7)
+ * @return string|null Polish label, or null
+ */
+function ksefGetPaymentMethodLabel($code)
+{
+    $labels = array(
+        '1' => 'Gotówka',    // Cash
+        '2' => 'Karta',      // Card
+        '3' => 'Bon',        // Voucher
+        '4' => 'Czek',       // Cheque
+        '5' => 'Kredyt',     // Credit
+        '6' => 'Przelew',    // Bank Transfer
+        '7' => 'Mobilna',    // Mobile
+    );
+    return isset($labels[$code]) ? $labels[$code] : null;
+}
+
+/**
  * @brief Get the value of a configured identifier field
  * @param object $thirdparty Societe or mysoc object
  * @param string $identifier One of: 'NIP', 'KRS', 'REGON', 'BDO'
@@ -1046,6 +1080,59 @@ function ksefIsOfflineCertificateConfigured()
     $result['configured'] = empty($result['missing']);
 
     return $result;
+}
+
+/**
+ * @brief Generates and saves KSeF style PDF visualization
+ * @param DoliDB          $db          Database handle
+ * @param KsefSubmission  $submission  Submission with fa3_xml populated
+ * @param int             $invoice_id  Invoice (facture) rowid
+ * @return bool True on success, false on failure (non-fatal — logged only)
+ */
+function ksefAutoGeneratePdf($db, $submission, $invoice_id)
+{
+    global $conf;
+
+    try {
+        require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture.class.php';
+        dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
+        dol_include_once('/ksef/class/actions_ksef.class.php');
+
+        $invoice = new Facture($db);
+        if ($invoice->fetch($invoice_id) <= 0) {
+            dol_syslog("ksefAutoGeneratePdf - could not fetch invoice $invoice_id", LOG_WARNING);
+            return false;
+        }
+
+        $actions = new ActionsKSEF($db);
+        $invoiceData = $actions->createPdfDataFromSubmission($submission, $invoice);
+
+        $pdfGenerator = new KsefInvoicePdf($db);
+        $pdfContent = $pdfGenerator->generate($invoiceData);
+
+        if ($pdfContent === false) {
+            dol_syslog("ksefAutoGeneratePdf - generate failed: " . $pdfGenerator->error, LOG_WARNING);
+            return false;
+        }
+
+        $outputDir = $conf->facture->dir_output . '/' . $invoice->ref;
+        if (!is_dir($outputDir)) {
+            dol_mkdir($outputDir);
+        }
+
+        $filepath = $outputDir . '/' . $invoice->ref . '_ksef.pdf';
+        if (file_put_contents($filepath, $pdfContent) === false) {
+            dol_syslog("ksefAutoGeneratePdf - failed to write $filepath", LOG_WARNING);
+            return false;
+        }
+
+        dol_syslog("ksefAutoGeneratePdf - saved $filepath", LOG_INFO);
+        return true;
+
+    } catch (Exception $e) {
+        dol_syslog("ksefAutoGeneratePdf ERROR: " . $e->getMessage(), LOG_WARNING);
+        return false;
+    }
 }
 
 /**

@@ -91,12 +91,14 @@ class ActionsKSEF
             strpos($submission->ksef_number, 'ERROR') === false;
 
         $is_accepted = $has_submission && $submission->status == 'ACCEPTED' && $has_real_ksef_number;
+        $is_offline = $has_submission && $submission->status == 'OFFLINE' && !empty($submission->fa3_xml);
+        $can_generate_pdf = $is_accepted || $is_offline;
 
         $out .= '<tr class="oddeven"><td colspan="5" style="padding: 4px 8px;">';
         $out .= '<div style="display: flex; align-items: center; gap: 8px;">';
         $out .= '<span style="font-size: 0.9em;">' . $langs->trans('KSEF_GenerateKSeFPDF') . '</span>';
 
-        if ($is_accepted) {
+        if ($can_generate_pdf) {
             $out .= '<input type="button" class="button buttongen reposition nomargintop nomarginbottom" ';
             $out .= 'style="background: #a94442; border-color: #8c2e2e; color: #fff; border-radius: 0;" ';
             $out .= 'value="' . $langs->trans('Generate') . '" ';
@@ -107,8 +109,6 @@ class ActionsKSEF
                 $tooltip = $langs->trans('KSEF_PDFRequiresSubmission');
             } elseif ($submission->status == 'PENDING') {
                 $tooltip = $langs->trans('KSEF_PDFRequiresAccepted');
-            } elseif ($submission->status == 'OFFLINE') {
-                $tooltip = $langs->trans('KSEF_PDFRequiresOnline');
             } elseif (in_array($submission->status, array('FAILED', 'REJECTED', 'TIMEOUT'))) {
                 $tooltip = $langs->trans('KSEF_PDFRequiresAccepted');
             } else {
@@ -219,6 +219,34 @@ class ActionsKSEF
         dol_include_once('/ksef/class/ksef_submission.class.php');
         global $langs, $conf, $user, $db;
 
+        // Validate & Add Payment
+        if ($parameters['currentcontext'] == 'invoicesuppliercard' && !empty($object) && !empty($object->id)) {
+            if (!empty($conf->ksef) && !empty($conf->ksef->enabled)) {
+                $ksefNumber = $object->array_options['options_ksef_number'] ?? '';
+                if (!empty($ksefNumber) && $object->statut == 0 && !empty($user->rights->fournisseur->facture->creer)) {
+                    dol_include_once('/ksef/class/ksef_incoming.class.php');
+                    $incoming = new KsefIncoming($db);
+                    if ($incoming->fetchBySupplierInvoice($object->id) > 0) {
+                        $hasFullPaymentData = ($incoming->payment_status === 'paid'
+                            && !empty($incoming->payment_date)
+                            && !empty($incoming->payment_method));
+                        if ($hasFullPaymentData) {
+                            $langs->load("ksef@ksef");
+                            $methodLabel = ksefGetPaymentMethodLabel($incoming->payment_method);
+                            $tooltip = dol_escape_htmltag(price($incoming->total_gross, 0, $langs, 0, -1, -1, $incoming->currency)
+                                . ' — ' . dol_print_date($incoming->payment_date, 'day')
+                                . ' — ' . $methodLabel);
+                            print '<a class="butAction classfortooltip" style="background-color: #28a745; color: white; font-weight: bold;"'
+                                . ' title="' . $tooltip . '"'
+                                . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_payment&token=' . newToken() . '">'
+                                . $langs->trans('KSEF_ValidateAndPay') . '</a>';
+                        }
+                    }
+                }
+            }
+            return 0;
+        }
+
         if ($parameters['currentcontext'] != 'invoicecard' || empty($object) || empty($object->id) || $object->element != 'facture') {
             return 0;
         }
@@ -293,6 +321,17 @@ class ActionsKSEF
 
         if ($object->statut == 1) {
             if ($is_accepted && $has_ksef_number) {
+                // invoice already submitted to KSeF
+                $modifyTooltip = dol_escape_htmltag($langs->trans('KSEF_CannotModifySubmitted'));
+                print '<script type="text/javascript">
+                jQuery(document).ready(function() {
+                    jQuery("a.butAction").filter(function() {
+                        return jQuery(this).attr("href") && jQuery(this).attr("href").indexOf("action=modif") !== -1;
+                    }).each(function() {
+                        jQuery(this).replaceWith(\'<span class="butActionRefused classfortooltip" title="' . $modifyTooltip . '">\' + jQuery(this).text() + \'</span>\');
+                    });
+                });
+                </script>';
                 return 0;
             }
 
@@ -400,6 +439,64 @@ class ActionsKSEF
         }
 
 
+        // Handle supplier invoice actions
+        if ($currentcontext == 'invoicesuppliercard' && $action == 'ksef_confirm_payment') {
+            if (empty($user->rights->fournisseur->facture->creer)) {
+                setEventMessages('Permission denied', null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            $langs->load("ksef@ksef");
+            dol_include_once('/ksef/class/ksef_incoming.class.php');
+
+            $incoming = new KsefIncoming($db);
+            if ($incoming->fetchBySupplierInvoice($object->id) <= 0
+                || $incoming->payment_status !== 'paid'
+                || empty($incoming->payment_date)
+                || empty($incoming->payment_method)
+            ) {
+                setEventMessages($langs->trans('KSEF_PaymentConfirmError'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            // Validate if still draft
+            if ($object->statut == 0) {
+                $valResult = $object->validate($user);
+                if ($valResult <= 0) {
+                    setEventMessages($object->error, $object->errors, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+            }
+
+            // Create payment
+            require_once DOL_DOCUMENT_ROOT . '/fourn/class/paiementfourn.class.php';
+            // Re-fetch invoice to get validated totals
+            $object->fetch($object->id);
+            $paiement = new PaiementFourn($db);
+            $paiement->datepaye = $incoming->payment_date ? $incoming->payment_date : dol_now();
+            $paiement->amounts = array($object->id => $object->total_ttc);
+            if (!empty($object->multicurrency_total_ttc) && $object->multicurrency_code !== $conf->currency) {
+                $paiement->multicurrency_amounts = array($object->id => $object->multicurrency_total_ttc);
+                $paiement->multicurrency_code = array($object->id => $object->multicurrency_code);
+                $paiement->multicurrency_tx = array($object->id => $object->multicurrency_tx);
+            }
+            $paiement->paiementid = $incoming->mapKsefPaymentMethod($incoming->payment_method);
+            $paiement->num_payment = 'KSeF';
+
+            $paiement_id = $paiement->create($user, 1);
+            if ($paiement_id > 0) {
+                setEventMessages($langs->trans('KSEF_PaymentConfirmed'), null, 'mesgs');
+            } else {
+                setEventMessages($langs->trans('KSEF_PaymentConfirmError') . ': ' . $paiement->error, null, 'errors');
+            }
+
+            header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+            exit;
+        }
+
         if (!in_array('invoicecard', array($parameters['currentcontext']))) {
             return 0;
         }
@@ -443,41 +540,21 @@ class ActionsKSEF
                 strpos($submission->ksef_number, 'PENDING') === false &&
                 strpos($submission->ksef_number, 'ERROR') === false;
 
-            if ($submission->status != 'ACCEPTED' || !$has_real_ksef_number) {
+            $is_accepted = ($submission->status == 'ACCEPTED' && $has_real_ksef_number);
+            $is_offline = ($submission->status == 'OFFLINE' && !empty($submission->fa3_xml));
+
+            if (!$is_accepted && !$is_offline) {
                 setEventMessages($langs->trans('KSEF_PDFRequiresAccepted'), null, 'errors');
                 header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
                 exit;
             }
 
-            try {
-                dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
-
-                $invoiceData = $this->createPdfDataFromSubmission($submission, $object);
-
-                $pdfGenerator = new KsefInvoicePdf($db);
-                $pdfContent = $pdfGenerator->generate($invoiceData);
-
-                if ($pdfContent === false) {
-                    throw new Exception($pdfGenerator->error ?: 'PDF generation failed');
-                }
-
-                $outputDir = $conf->facture->dir_output . '/' . $object->ref;
-                if (!is_dir($outputDir)) {
-                    dol_mkdir($outputDir);
-                }
-
+            $result = ksefAutoGeneratePdf($db, $submission, $object->id);
+            if ($result) {
                 $filename = $object->ref . '_ksef.pdf';
-                $filepath = $outputDir . '/' . $filename;
-
-                if (file_put_contents($filepath, $pdfContent) === false) {
-                    throw new Exception('Failed to save PDF file');
-                }
-
                 setEventMessages($langs->trans('KSEF_PDFGeneratedSuccess', $filename), null, 'mesgs');
-
-            } catch (Exception $e) {
-                dol_syslog("ActionsKSEF::doActions ksef_generate_pdf error: " . $e->getMessage(), LOG_ERR);
-                setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . $e->getMessage(), null, 'errors');
+            } else {
+                setEventMessages($langs->trans('KSEF_PDFGenerationError'), null, 'errors');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1399,13 +1476,45 @@ jQuery(document).ready(function() {
                     print '<br><small style="color: #666;">' . $langs->trans("KSEF_SubmittedOn") . ': ' . dol_print_date($ksefSubmissionDate, 'dayhour') . '</small>';
                 }
 
-                // Lock date fields once KSeF number is assigned
-                print '<style>a[href*="attribute=ksef_sale_date"], a[href*="attribute=ksef_kurs_data"] { display: none !important; }</style>';
+                // Lock exchange rate date
+                print '<style>a[href*="attribute=ksef_kurs_data"] { display: none !important; }</style>';
             } else {
                 print '<span class="badge badge-status0 badge-status">' . $langs->trans("KSEF_NotSubmitted") . '</span>';
             }
 
             print '</td></tr>';
+
+            // Display KSeF payment info
+            if (!empty($ksefNumber) && $incomingCorr->id > 0 && !empty($incomingCorr->payment_status) && $incomingCorr->payment_status !== 'unpaid') {
+                $notSpecified = '<span class="opacitymedium">' . $langs->trans("KSEF_NotSpecifiedInXml") . '</span>';
+
+                // Status
+                print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_PaymentStatus") . '</td><td colspan="3">';
+                if ($incomingCorr->payment_status === 'paid') {
+                    print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
+                } elseif ($incomingCorr->payment_status === 'partial') {
+                    print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
+                }
+                print '</td></tr>';
+
+                // date
+                print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_PaymentDate") . '</td><td colspan="3">';
+                print $incomingCorr->payment_date ? dol_print_date($incomingCorr->payment_date, 'day') : $notSpecified;
+                print '</td></tr>';
+
+                // method — only show if Dolibarr's own payment method field is empty (otherwise it's duplicate)
+                if (empty($object->mode_reglement_id)) {
+                    print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_PaymentMethod") . '</td><td colspan="3">';
+                    $methodLabel = ksefGetPaymentMethodLabel($incomingCorr->payment_method);
+                    print $methodLabel ? dol_escape_htmltag($methodLabel) : $notSpecified;
+                    print '</td></tr>';
+                }
+
+                // Amount
+                print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_PaymentAmount") . '</td><td colspan="3">';
+                print price($incomingCorr->total_gross, 0, $langs, 0, -1, -1, $incomingCorr->currency);
+                print '</td></tr>';
+            }
 
             // Reposition correction rows near the top of the info table (after supplier/date rows)
             print '<script type="text/javascript">
@@ -1623,7 +1732,7 @@ jQuery(document).ready(function() {
      * @called_by doActions() for ksef_generate_pdf action
      * @calls FA3Parser::parse()
      */
-    private function createPdfDataFromSubmission($submission, $invoice)
+    public function createPdfDataFromSubmission($submission, $invoice)
     {
         $data = new stdClass();
         $data->rowid = $submission->rowid;
@@ -1637,6 +1746,9 @@ jQuery(document).ready(function() {
         $data->total_net = $invoice->total_ht;
         $data->total_vat = $invoice->total_tva;
         $data->currency = $invoice->multicurrency_code ?: 'PLN';
+        $data->offline_mode = $submission->offline_mode;
+        $data->offline_deadline = $submission->offline_deadline;
+        $data->invoice_hash = $submission->invoice_hash;
 
         if (!empty($submission->fa3_xml)) {
             dol_include_once('/ksef/class/fa3_parser.class.php');
@@ -1660,13 +1772,13 @@ jQuery(document).ready(function() {
                 if (!empty($parsed['invoice']['currency'])) {
                     $data->currency = $parsed['invoice']['currency'];
                 }
-                if ($parsed['invoice']['total_gross'] > 0) {
+                if (($parsed['invoice']['total_gross'] ?? 0) != 0) {
                     $data->total_gross = $parsed['invoice']['total_gross'];
                 }
-                if ($parsed['invoice']['total_net'] > 0) {
+                if (($parsed['invoice']['total_net'] ?? 0) != 0) {
                     $data->total_net = $parsed['invoice']['total_net'];
                 }
-                if ($parsed['invoice']['total_vat'] > 0) {
+                if (($parsed['invoice']['total_vat'] ?? 0) != 0) {
                     $data->total_vat = $parsed['invoice']['total_vat'];
                 }
 

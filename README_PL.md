@@ -104,6 +104,21 @@ możliwość nauki na podstawie ich modułu, ten projekt zajęłby znacznie wię
 Ten moduł został opracowany przez InPoint Automation Sp. z o.o.
 
 ## Changelog (In English)
+>### Version v1.3.3
+>- Payment status, date, and method from KSeF XML displayed on incoming invoice card, import preview, and supplier invoice card
+>- Validate & Add Payment button on draft supplier invoices when full payment data (including payment method) available from KSeF xml invoice.
+>- Map KSeF FormaPlatnosci codes to Dolibarr payment types, pre-fill on import
+>- Date of Sale from KSeF XML written to supplier invoice extrafield during import
+>- Fix missing ksef.lib.php include in KsefClient
+>- Removed supplier not found translation extra "NIP" text in translation
+>- Added missing Polish translation for Date of Sale extrafield
+>- Fix cron job classesname not updated by 1.3.2 migration (issue #11) and re-runs xml parsing to grab the date of sale data for incoming invoices
+>- KSeF-style PDF visualization now works for offline invoices with dual QR codes (OFFLINE + CERTYFIKAT)
+>- parser now fully parses and handles advance payment invoices as deposit invoices
+>- Add offline invoice capability to the KSeF-style PDF visualization
+>- For outgoing invoices the KSeF-style PDF visualization auto-runs and stores the PDF after creating offline invoice or successful submission
+
+
 >### Version v1.3.2
 >- Fix issue #9. v1.3.0 improved invoices handling "0" values by checking for null, but fields were still initialized to 0. Now initialized null.
 >- Add migration to re-parse incoming xml for v1.3.2

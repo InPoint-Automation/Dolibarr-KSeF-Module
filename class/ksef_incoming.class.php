@@ -52,6 +52,8 @@ class KsefIncoming extends CommonObject
     public $payment_due_date;
     public $payment_method;
     public $bank_account;
+    public $payment_status;
+    public $payment_date;
     public $corrected_ksef_number;
     public $corrected_invoice_number;
     public $corrected_invoice_date;
@@ -145,6 +147,8 @@ class KsefIncoming extends CommonObject
         $sql .= "payment_due_date,";
         $sql .= "payment_method,";
         $sql .= "bank_account,";
+        $sql .= "payment_status,";
+        $sql .= "payment_date,";
         $sql .= "corrected_ksef_number,";
         $sql .= "corrected_invoice_number,";
         $sql .= "corrected_invoice_date,";
@@ -179,6 +183,8 @@ class KsefIncoming extends CommonObject
         $sql .= " " . ($this->payment_due_date ? (int)$this->payment_due_date : "NULL") . ",";
         $sql .= " " . ($this->payment_method ? "'" . $this->db->escape($this->payment_method) . "'" : "NULL") . ",";
         $sql .= " " . ($this->bank_account ? "'" . $this->db->escape($this->bank_account) . "'" : "NULL") . ",";
+        $sql .= " " . ($this->payment_status ? "'" . $this->db->escape($this->payment_status) . "'" : "NULL") . ",";
+        $sql .= " " . ($this->payment_date ? (int)$this->payment_date : "NULL") . ",";
         $sql .= " " . ($this->corrected_ksef_number ? "'" . $this->db->escape($this->corrected_ksef_number) . "'" : "NULL") . ",";
         $sql .= " " . ($this->corrected_invoice_number ? "'" . $this->db->escape($this->corrected_invoice_number) . "'" : "NULL") . ",";
         $sql .= " " . ($this->corrected_invoice_date ? (int)$this->corrected_invoice_date : "NULL") . ",";
@@ -280,6 +286,8 @@ class KsefIncoming extends CommonObject
                 $this->payment_due_date = $obj->payment_due_date;
                 $this->payment_method = $obj->payment_method;
                 $this->bank_account = $obj->bank_account;
+                $this->payment_status = $obj->payment_status ?? null;
+                $this->payment_date = $obj->payment_date ?? null;
                 $this->corrected_ksef_number = $obj->corrected_ksef_number;
                 $this->corrected_invoice_number = $obj->corrected_invoice_number;
                 $this->corrected_invoice_date = $obj->corrected_invoice_date;
@@ -559,6 +567,8 @@ class KsefIncoming extends CommonObject
         $this->payment_due_date = self::safeStrtotime($parsedData['payment']['due_date'] ?? '');
         $this->payment_method = $parsedData['payment']['method'] ?? null;
         $this->bank_account = $parsedData['payment']['bank_account'] ?? null;
+        $this->payment_status = $parsedData['payment']['status'] ?? null;
+        $this->payment_date = self::safeStrtotime($parsedData['payment']['payment_date'] ?? '');
         if (!empty($parsedData['correction'])) {
             $firstCorrected = $parsedData['correction']['corrected_invoices'][0] ?? array();
             $this->corrected_ksef_number = $firstCorrected['ksef_number'] ?? null;
@@ -1186,16 +1196,17 @@ class KsefIncoming extends CommonObject
     {
         $vatDigits = !empty($vatId) ? preg_replace('/[^0-9]/', '', $vatId) : '';
         $nipField = ksefGetFieldName('NIP');
+        $nipColumn = ksefFieldToColumn($nipField);
 
         $conditions = array();
         if (!empty($nip)) {
             $escapedNip = $this->db->escape($nip);
-            if (!empty($nipField)) {
-                $conditions[] = "REPLACE(REPLACE({$alias}." . $this->db->escape($nipField) . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
+            if (!empty($nipColumn)) {
+                $conditions[] = "REPLACE(REPLACE({$alias}." . $this->db->escape($nipColumn) . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
             }
             $otherFields = array('siren', 'siret', 'ape', 'idprof4', 'idprof5', 'idprof6', 'tva_intra');
             foreach ($otherFields as $field) {
-                if ($field !== $nipField) {
+                if ($field !== $nipColumn) {
                     $conditions[] = "REPLACE(REPLACE({$alias}." . $field . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%'";
                 }
             }
@@ -1219,6 +1230,7 @@ class KsefIncoming extends CommonObject
     {
         $vatDigits = !empty($vatId) ? preg_replace('/[^0-9]/', '', $vatId) : '';
         $nipField = ksefGetFieldName('NIP');
+        $nipColumn = ksefFieldToColumn($nipField);
 
         $sql = "SELECT s.rowid FROM " . MAIN_DB_PREFIX . "societe s";
         $sql .= " WHERE s.fournisseur = 1";
@@ -1228,14 +1240,14 @@ class KsefIncoming extends CommonObject
         $orderCases = array();
         if (!empty($nip)) {
             $escapedNip = $this->db->escape($nip);
-            if (!empty($nipField)) {
-                $orderCases[] = "CASE WHEN REPLACE(REPLACE(s." . $this->db->escape($nipField) . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 0";
+            if (!empty($nipColumn)) {
+                $orderCases[] = "CASE WHEN REPLACE(REPLACE(s." . $this->db->escape($nipColumn) . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 0";
             } else {
                 $orderCases[] = "CASE WHEN 1=0 THEN 0";
             }
             $otherFields = array('siren', 'siret', 'ape', 'idprof4', 'idprof5', 'idprof6');
             foreach ($otherFields as $field) {
-                if ($field !== $nipField) {
+                if ($field !== $nipColumn) {
                     $orderCases[] = "WHEN REPLACE(REPLACE(s." . $field . ", '-', ''), ' ', '') LIKE '%" . $escapedNip . "%' THEN 1";
                 }
             }
@@ -1245,7 +1257,11 @@ class KsefIncoming extends CommonObject
         }
         if (!empty($vatDigits)) {
             $escapedVat = $this->db->escape($vatDigits);
-            $orderCases[] = "WHEN REPLACE(REPLACE(s.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedVat . "%' THEN " . (empty($nip) ? '0' : '2');
+            if (empty($orderCases)) {
+                $orderCases[] = "CASE WHEN REPLACE(REPLACE(s.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedVat . "%' THEN " . (empty($nip) ? '0' : '2');
+            } else {
+                $orderCases[] = "WHEN REPLACE(REPLACE(s.tva_intra, '-', ''), ' ', '') LIKE '%" . $escapedVat . "%' THEN " . (empty($nip) ? '0' : '2');
+            }
         }
         if (empty($orderCases)) {
             $orderCases[] = "CASE WHEN 1=0 THEN 0";
@@ -1608,6 +1624,9 @@ class KsefIncoming extends CommonObject
                     $facture->note_public .= "\n" . $langs->trans('KSEF_UpwardCorrectionCreditNoteRef', $creditNote->ref, $this->ksef_number);
                 }
             }
+        } elseif ($this->invoice_type === 'ZAL') {
+            $facture->type = FactureFournisseur::TYPE_DEPOSIT;
+            $facture->cond_reglement_id = 1;
         } else {
             $facture->type = FactureFournisseur::TYPE_STANDARD;
         }
@@ -1619,6 +1638,11 @@ class KsefIncoming extends CommonObject
             if ($exchangeRate > 0) {
                 $facture->multicurrency_tx = $exchangeRate;
             }
+        }
+
+        // payment method from XML
+        if (!empty($this->payment_method)) {
+            $facture->mode_reglement_id = $this->mapKsefPaymentMethod($this->payment_method);
         }
 
         $factureId = $facture->create($user);
@@ -1662,6 +1686,14 @@ class KsefIncoming extends CommonObject
                             }
                             if (!is_null($diffLine['unit_price_gross'] ?? null) && !is_null($before['unit_price_gross'] ?? null)) {
                                 $diffLine['unit_price_gross'] = round($diffLine['unit_price_gross'] - $before['unit_price_gross'], 4);
+                            }
+                            $diffNet = (float)($diffLine['net_amount'] ?? 0);
+                            $diffQty = (float)($diffLine['quantity'] ?? 0);
+                            if ($diffLine['unit_price_net'] == 0 && $diffNet != 0 && $diffQty != 0) {
+                                $diffLine['unit_price_net'] = round($diffNet / $diffQty, 4);
+                            }
+                            if (($diffLine['unit_price_gross'] ?? 0) == 0 && ($diffLine['gross_amount'] ?? 0) != 0 && $diffQty != 0) {
+                                $diffLine['unit_price_gross'] = round($diffLine['gross_amount'] / $diffQty, 4);
                             }
                         }
                     }
@@ -1850,6 +1882,7 @@ class KsefIncoming extends CommonObject
         $facture->array_options['options_ksef_number'] = $this->ksef_number;
         $facture->array_options['options_ksef_status'] = 'ACCEPTED';
         $facture->array_options['options_ksef_submission_date'] = $this->fa3_creation_date;
+        $facture->array_options['options_ksef_sale_date'] = $this->sale_date;
         $facture->insertExtraFields();
 
         // Attach generated KSeF PDF visualization to the supplier invoice
@@ -2084,5 +2117,35 @@ class KsefIncoming extends CommonObject
         }
 
         return $pdfContent;
+    }
+
+    /**
+     * Map KSeF FormaPlatnosci code to Dolibarr c_paiement ID
+     * @param string|null $ksefMethod KSeF payment method code (1-7)
+     * @return int Dolibarr c_paiement ID, or 0 if no suitable mapping
+     */
+    public function mapKsefPaymentMethod($ksefMethod)
+    {
+        $map = array(
+            '1' => 'LIQ',  // Gotówka -> Cash
+            '2' => 'CB',   // Karta -> Credit card
+            '3' => 'LIQ',  // Bon -> Cash
+            '4' => 'CHQ',  // Czek -> Cheque
+            '5' => 'VIR',  // Kredyt -> Bank Transfer
+            '6' => 'VIR',  // Przelew -> Bank Transfer
+            '7' => 'CB',   // Mobilna -> Credit card
+        );
+
+        $code = isset($map[$ksefMethod]) ? $map[$ksefMethod] : 'VIR';
+
+        $sql = "SELECT id FROM " . MAIN_DB_PREFIX . "c_paiement"
+            . " WHERE code = '" . $this->db->escape($code) . "'"
+            . " AND active = 1 LIMIT 1";
+        $resql = $this->db->query($sql);
+        if ($resql && $this->db->num_rows($resql) > 0) {
+            $obj = $this->db->fetch_object($resql);
+            return (int)$obj->id;
+        }
+        return 0;
     }
 }

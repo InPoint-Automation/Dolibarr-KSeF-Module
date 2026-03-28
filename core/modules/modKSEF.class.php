@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.2';
+        $this->version = '1.3.3';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -682,6 +682,81 @@ class modKSEF extends DolibarrModules
                         $db->free($resql);
                     }
                     dol_syslog("modKSEF::migration 1.3.2 - Re-parsed data for $migrated incoming invoices (fix unit prices)", LOG_INFO);
+                },
+            ),
+            '1.3.3' => array(
+                // Add payment_status
+                function () use ($db, $conf) {
+                    $sql_check = "SHOW COLUMNS FROM " . MAIN_DB_PREFIX . "ksef_incoming LIKE 'payment_status'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $db->query("ALTER TABLE " . MAIN_DB_PREFIX . "ksef_incoming ADD COLUMN payment_status VARCHAR(20) AFTER bank_account");
+                        dol_syslog("modKSEF::migration 1.3.3 - Added payment_status column", LOG_INFO);
+                    }
+                },
+                // Add payment_date
+                function () use ($db, $conf) {
+                    $sql_check = "SHOW COLUMNS FROM " . MAIN_DB_PREFIX . "ksef_incoming LIKE 'payment_date'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $db->query("ALTER TABLE " . MAIN_DB_PREFIX . "ksef_incoming ADD COLUMN payment_date INTEGER AFTER payment_status");
+                        dol_syslog("modKSEF::migration 1.3.3 - Added payment_date column", LOG_INFO);
+                    }
+                },
+                // payment_status/payment_date/sale_date reparse
+                function () use ($db, $conf) {
+                    $migrated = 0;
+                    $sql = "SELECT rowid, fa3_xml FROM " . MAIN_DB_PREFIX . "ksef_incoming"
+                        . " WHERE fa3_xml IS NOT NULL AND fa3_xml != ''"
+                        . " AND (payment_status IS NULL OR sale_date IS NULL)"
+                        . " AND entity = " . (int) $conf->entity;
+                    $resql = $db->query($sql);
+                    if ($resql) {
+                        dol_include_once('/ksef/class/fa3_parser.class.php');
+                        $parser = new FA3Parser($db);
+                        while ($obj = $db->fetch_object($resql)) {
+                            $parsed = $parser->parse($obj->fa3_xml);
+                            if (!$parsed) continue;
+
+                            $updates = array();
+
+                            if (!empty($parsed['payment'])) {
+                                $status = $parsed['payment']['status'] ?? null;
+                                $payDate = !empty($parsed['payment']['payment_date']) ? strtotime($parsed['payment']['payment_date']) : null;
+                                if ($status) {
+                                    $updates[] = "payment_status = '" . $db->escape($status) . "'";
+                                    if ($payDate && $payDate > 0) {
+                                        $updates[] = "payment_date = " . (int) $payDate;
+                                    }
+                                }
+                            }
+
+                            if (!empty($parsed['invoice']['sale_date'])) {
+                                $saleDate = strtotime($parsed['invoice']['sale_date']);
+                                if ($saleDate && $saleDate > 0) {
+                                    $updates[] = "sale_date = " . (int) $saleDate;
+                                }
+                            }
+
+                            if (!empty($updates)) {
+                                $db->query("UPDATE " . MAIN_DB_PREFIX . "ksef_incoming SET " . implode(", ", $updates) . " WHERE rowid = " . (int) $obj->rowid);
+                                $migrated++;
+                            }
+                        }
+                        $db->free($resql);
+                    }
+                    dol_syslog("modKSEF::migration 1.3.3 - Backfilled payment/sale_date for $migrated incoming invoices", LOG_INFO);
+                },
+                // Fix cron job classesname again
+                function () use ($db, $conf) {
+                    $sql = "UPDATE " . MAIN_DB_PREFIX . "cronjob"
+                        . " SET classesname = '/ksef/class/ksef_service.class.php',"
+                        . " objectname = 'KsefService'"
+                        . " WHERE classesname LIKE '%ksef%'"
+                        . " AND methodename LIKE 'cron%'"
+                        . " AND entity IN (0, " . ((int) $conf->entity) . ")";
+                    $db->query($sql);
+                    dol_syslog("modKSEF::migration 1.3.3 - Fixed cron job classesname and objectname", LOG_INFO);
                 },
             ),
         );

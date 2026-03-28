@@ -375,6 +375,28 @@ if (empty($reshook)) {
         print '<td>' . dol_escape_htmltag($object->bank_account) . '</td></tr>';
     }
 
+    // Payment Status
+    if (!empty($object->payment_status) && $object->payment_status !== 'unpaid') {
+        $notSpecified = '<span class="opacitymedium">' . $langs->trans("KSEF_NotSpecifiedInXml") . '</span>';
+
+        print '<tr><td>' . $langs->trans("KSEF_PaymentStatus") . '</td><td>';
+        if ($object->payment_status === 'paid') {
+            print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
+        } elseif ($object->payment_status === 'partial') {
+            print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
+        }
+        print '</td></tr>';
+
+        print '<tr><td>' . $langs->trans("KSEF_PaymentDate") . '</td><td>';
+        print $object->payment_date ? dol_print_date($object->payment_date, 'day') : $notSpecified;
+        print '</td></tr>';
+
+        print '<tr><td>' . $langs->trans("KSEF_PaymentMethod") . '</td><td>';
+        $methodLabel = ksefGetPaymentMethodLabel($object->payment_method);
+        print $methodLabel ? dol_escape_htmltag($methodLabel) : $notSpecified;
+        print '</td></tr>';
+    }
+
     // Seller info
     print '<tr><td>' . $langs->trans("KSEF_Seller") . '</td><td>';
     print '<strong>' . dol_escape_htmltag($object->seller_name) . '</strong>';

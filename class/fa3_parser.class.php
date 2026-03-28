@@ -81,6 +81,14 @@ class FA3Parser
             $invoice = $this->parseFa($xpath);
             $lineData = $this->parseFaWiersz($xpath);
 
+            // ZAL invoices use ZamowienieWiersz
+            if (empty($lineData['lines']) && empty($lineData['lines_before'])) {
+                $zamData = $this->parseZamowienieWiersz($xpath);
+                if (!empty($zamData['lines']) || !empty($zamData['lines_before'])) {
+                    $lineData = $zamData;
+                }
+            }
+
             $result = array(
                 'header' => $this->parseNaglowek($xpath),
                 'seller' => $this->parsePodmiot1($xpath),
@@ -496,6 +504,139 @@ class FA3Parser
                         }
                         break;
                 }
+            }
+
+            // Calculate unit prices
+            if ($this->isNullOrBlank($line['unit_price_net']) && !$this->isNullOrBlank($line['net_amount']) && !$this->isNullOrBlank($line['quantity']) && $line['quantity'] != 0) {
+                $line['unit_price_net'] = round($line['net_amount'] / $line['quantity'], 4);
+            }
+            if ($this->isNullOrBlank($line['unit_price_gross']) && !$this->isNullOrBlank($line['gross_amount']) && !$this->isNullOrBlank($line['quantity']) && $line['quantity'] != 0) {
+                $line['unit_price_gross'] = round($line['gross_amount'] / $line['quantity'], 4);
+            }
+
+            // calculate net from gross
+            $vatRate = is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
+            $vatMultiplier = 1 + $vatRate / 100;
+            if ($this->isNullOrBlank($line['net_amount']) && !$this->isNullOrBlank($line['gross_amount']) && $vatMultiplier > 0) {
+                $line['net_amount'] = round($line['gross_amount'] / $vatMultiplier, 2);
+            }
+            if ($this->isNullOrBlank($line['unit_price_net']) && !$this->isNullOrBlank($line['unit_price_gross']) && $vatMultiplier > 0) {
+                $line['unit_price_net'] = round($line['unit_price_gross'] / $vatMultiplier, 4);
+            }
+            // Cross-calculate gross from net when gross is absent
+            if ($this->isNullOrBlank($line['gross_amount']) && !$this->isNullOrBlank($line['net_amount'])) {
+                $line['gross_amount'] = round($line['net_amount'] * $vatMultiplier, 2);
+            }
+            if ($this->isNullOrBlank($line['unit_price_gross']) && !$this->isNullOrBlank($line['unit_price_net'])) {
+                $line['unit_price_gross'] = round($line['unit_price_net'] * $vatMultiplier, 4);
+            }
+
+            if ($hasStanPrzed && $isBefore) {
+                $linesBefore[] = $line;
+            } else {
+                $lines[] = $line;
+            }
+        }
+
+        return array('lines' => $lines, 'lines_before' => $linesBefore);
+    }
+
+    /**
+     * @brief Parse advance payment order lines
+     * @param $xpath DOMXPath object
+     * @return array Array with 'lines' and 'lines_before'
+     * @called_by parse()
+     */
+    private function parseZamowienieWiersz($xpath)
+    {
+        $lines = array();
+        $linesBefore = array();
+
+        $zamWierszNodes = $xpath->query('//fa:Fa/fa:Zamowienie/fa:ZamowienieWiersz');
+        $hasStanPrzed = false;
+
+        foreach ($zamWierszNodes as $node) {
+            foreach ($node->childNodes as $child) {
+                if ($child->nodeType === XML_ELEMENT_NODE && $child->localName === 'StanPrzedZ') {
+                    $hasStanPrzed = true;
+                    break 2;
+                }
+            }
+        }
+
+        foreach ($zamWierszNodes as $node) {
+            $line = array(
+                'line_num' => 0,
+                'uuid' => null,
+                'indeks' => null,
+                'gtin' => null,
+                'cn' => null,
+                'description' => '',
+                'quantity' => 0.0,
+                'unit' => null,
+                'unit_price_net' => null,
+                'unit_price_gross' => null,
+                'discount' => null,
+                'net_amount' => null,
+                'gross_amount' => null,
+                'vat_rate' => null,
+                'kurs_waluty' => null,
+            );
+
+            $isBefore = false;
+            $vatAmount = null;
+
+            foreach ($node->childNodes as $child) {
+                if ($child->nodeType !== XML_ELEMENT_NODE) continue;
+
+                switch ($child->localName) {
+                    case 'NrWierszaZam':
+                        $line['line_num'] = (int)$child->textContent;
+                        break;
+                    case 'UU_IDZ':
+                        $line['uuid'] = trim($child->textContent);
+                        break;
+                    case 'IndeksZ':
+                        $line['indeks'] = trim($child->textContent);
+                        break;
+                    case 'GTINZ':
+                        $line['gtin'] = trim($child->textContent);
+                        break;
+                    case 'P_7Z':
+                        $line['description'] = $child->textContent;
+                        break;
+                    case 'P_8BZ':
+                        $line['quantity'] = (float)$child->textContent;
+                        break;
+                    case 'P_8AZ':
+                        $line['unit'] = trim($child->textContent);
+                        break;
+                    case 'P_9AZ':
+                        $line['unit_price_net'] = (float)$child->textContent;
+                        break;
+                    case 'P_11NettoZ':
+                        $line['net_amount'] = (float)$child->textContent;
+                        break;
+                    case 'P_11VatZ':
+                        $vatAmount = (float)$child->textContent;
+                        break;
+                    case 'P_12Z':
+                        $line['vat_rate'] = trim($child->textContent);
+                        break;
+                    case 'CNZ':
+                        $line['cn'] = trim($child->textContent);
+                        break;
+                    case 'StanPrzedZ':
+                        if ($child->textContent === '1') {
+                            $isBefore = true;
+                        }
+                        break;
+                }
+            }
+
+            // Calculate gross from net + VAT amount
+            if (!$this->isNullOrBlank($line['net_amount']) && !$this->isNullOrBlank($vatAmount)) {
+                $line['gross_amount'] = round($line['net_amount'] + $vatAmount, 2);
             }
 
             // Calculate unit prices

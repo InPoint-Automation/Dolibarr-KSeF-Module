@@ -34,6 +34,6 @@ php build/scope-dependencies.php
 
 # Build zip
 echo "-> Creating release archive..."
-php build/buildzip.php
+php build/buildzip.php "$@"
 
 echo "Build complete."

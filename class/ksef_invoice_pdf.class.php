@@ -284,7 +284,11 @@ class KsefInvoicePdf
         $pdf->Cell($this->contentWidth, 4, $this->getInvoiceTypeLabel($incoming->invoice_type), 0, 1, 'R');
         $y += 4;
 
-        if (!empty($incoming->ksef_number)) {
+        if (!empty($incoming->ksef_number) &&
+            strpos($incoming->ksef_number, 'OFFLINE') === false &&
+            strpos($incoming->ksef_number, 'PENDING') === false &&
+            strpos($incoming->ksef_number, 'ERROR') === false
+        ) {
             $pdf->SetXY($this->marginLeft, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
             $label = 'Numer KSEF:';
@@ -1567,11 +1571,21 @@ class KsefInvoicePdf
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
-     * @calls getVerificationUrl(), checkPageBreak(), drawLine()
+     * @calls renderQrCodeOffline(), getVerificationUrl(), checkPageBreak(), drawLine()
      */
     private function renderQrCode($incoming, $y)
     {
         $pdf = $this->pdf;
+
+        $isOffline = !empty($incoming->offline_mode) && (
+            empty($incoming->ksef_number) ||
+            strpos($incoming->ksef_number, 'OFFLINE') !== false
+        );
+
+        if ($isOffline) {
+            return $this->renderQrCodeOffline($incoming, $y);
+        }
+
         $verificationUrl = $this->getVerificationUrl($incoming);
         if (empty($verificationUrl) && empty($incoming->ksef_number)) return $y;
 
@@ -1617,6 +1631,122 @@ class KsefInvoicePdf
             $pdf->SetXY($textX, $y + 6);
             $pdf->MultiCell($textWidth, 4, $verificationUrl, 0, 'L');
             $pdf->SetTextColorArray($this->colorText);
+        }
+
+        return $y + $qrSize + 10;
+    }
+
+
+    /**
+     * @brief Render offline QR code section
+     * @param $incoming Invoice data object
+     * @param $y Current Y position
+     * @return float New Y position
+     * @called_by renderQrCode()
+     * @calls checkPageBreak(), drawLine(), ksefGetVerificationURL(), ksefLoadOfflineCertificate(), ksefSignData()
+     */
+    private function renderQrCodeOffline($incoming, $y)
+    {
+        global $conf, $mysoc;
+
+        dol_include_once('/ksef/lib/ksef.lib.php');
+
+        $pdf = $this->pdf;
+
+        $y = $this->checkPageBreak($y, 60);
+        $y = $this->drawLine($y);
+
+        // Section title
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 5, 'Sprawdź, czy Twoja faktura znajduje się w KSeF!', 0, 1, 'L');
+        $y += 6;
+
+        $qrSize = 35;
+        $spacing = 6;
+
+        // Determine seller NIP
+        $nip = '';
+        if (!empty($conf->global->KSEF_COMPANY_NIP)) {
+            $nip = ksefCleanNIP($conf->global->KSEF_COMPANY_NIP);
+        }
+        if (empty($nip) && !empty($incoming->seller_nip)) {
+            $nip = ksefCleanNIP($incoming->seller_nip);
+        }
+        if (empty($nip) && is_object($mysoc)) {
+            $nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
+        }
+
+        $invoiceHash = $incoming->invoice_hash ?? '';
+        $environment = $incoming->environment ?? 'TEST';
+        $invoiceDate = $incoming->invoice_date ?? dol_now();
+
+        // KOD I (verification URL)
+        $qr1X = $this->marginLeft;
+        $qr1Url = '';
+        if (!empty($nip) && !empty($invoiceHash)) {
+            try {
+                $qr1Url = ksefGetVerificationURL(null, $invoiceHash, $environment, $nip, $invoiceDate);
+            } catch (Exception $e) {
+                dol_syslog("KsefInvoicePdf::renderQrCodeOffline QR I error: " . $e->getMessage(), LOG_WARNING);
+            }
+        }
+
+        if (!empty($qr1Url)) {
+            $pdf->write2DBarcode($qr1Url, 'QRCODE,H', $qr1X, $y, $qrSize, $qrSize);
+        }
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+        $pdf->SetTextColorArray($this->colorText);
+        $pdf->SetXY($qr1X, $y + $qrSize + 1);
+        $pdf->Cell($qrSize, 3, 'OFFLINE', 0, 0, 'C');
+
+        // KOD II (certificate verification)
+        $qr2X = $qr1X + $qrSize + $spacing;
+        $qr2Url = '';
+        if (!empty($nip) && !empty($invoiceHash)) {
+            $credentials = ksefLoadOfflineCertificate();
+            if ($credentials) {
+                $hashBase64URL = ksefBase64ToBase64URL($invoiceHash);
+                $signature = ksefSignData($invoiceHash, $credentials['private_key_pem'], true);
+                if ($signature) {
+                    $base_url = ksefGetQrBaseUrl($environment);
+                    $certSerial = $credentials['serial'];
+                    $qr2Url = "{$base_url}/certificate/nip/{$nip}/{$nip}/{$certSerial}/{$hashBase64URL}/{$signature}";
+                }
+            }
+        }
+
+        if (!empty($qr2Url)) {
+            $pdf->write2DBarcode($qr2Url, 'QRCODE,H', $qr2X, $y, $qrSize, $qrSize);
+        } else {
+            // Placeholder box
+            $pdf->SetDrawColorArray(array(200, 200, 200));
+            $pdf->SetFillColorArray(array(248, 248, 248));
+            $pdf->Rect($qr2X, $y, $qrSize, $qrSize, 'DF');
+            $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+            $pdf->SetTextColor(150, 150, 150);
+            $pdf->SetXY($qr2X, $y + ($qrSize / 2) - 2);
+            $pdf->Cell($qrSize, 3, 'Brak certyfikatu', 0, 1, 'C');
+            $pdf->SetDrawColorArray($this->colorLine);
+        }
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+        $pdf->SetTextColorArray($this->colorText);
+        $pdf->SetXY($qr2X, $y + $qrSize + 1);
+        $pdf->Cell($qrSize, 3, 'CERTYFIKAT', 0, 0, 'C');
+        $textX = $qr2X + $qrSize + 5;
+        $textWidth = $this->contentWidth - ($textX - $this->marginLeft);
+        if ($textWidth > 20) {
+            $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+            $pdf->SetXY($textX, $y);
+            $pdf->Cell($textWidth, 4, 'Nie możesz zeskanować kodu z obrazka? Kliknij w link weryfikacyjny i przejdź do weryfikacji faktury!', 0, 1, 'L');
+
+            if (!empty($qr1Url)) {
+                $pdf->SetFont($this->fontFamily, '', 5);
+                $pdf->SetTextColorArray($this->colorLink);
+                $pdf->SetXY($textX, $pdf->GetY() + 1);
+                $pdf->MultiCell($textWidth, 3, $qr1Url, 0, 'L');
+                $pdf->SetTextColorArray($this->colorText);
+            }
         }
 
         return $y + $qrSize + 10;

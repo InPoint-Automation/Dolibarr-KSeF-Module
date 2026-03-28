@@ -23,6 +23,8 @@
  * Adapted from FacturX build system
  */
 
+$includeTests = in_array('-test', $argv);
+
 // Configuration
 $list = [
     'admin',
@@ -40,13 +42,17 @@ $list = [
     '*.php',
 ];
 
+if ($includeTests) {
+    $list[] = 'test';
+    $list[] = 'test_xml';
+}
+
 $exclude_list = [
     '/^\.git$/',
     '/^\.idea$/',
     '/^\.vscode$/',
     '/^\.DS_Store$/',
     '/^build$/',
-    '/^test$/',
     '/.*\.map$/',
     '/^vendor\/.*\/tests?$/',
     '/^vendor\/.*\/\.git.*$/',
