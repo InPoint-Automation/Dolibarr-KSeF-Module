@@ -549,12 +549,17 @@ class ActionsKSEF
                 exit;
             }
 
-            $result = ksefAutoGeneratePdf($db, $submission, $object->id);
+            $errorMsg = '';
+            $result = ksefAutoGeneratePdf($db, $submission, $object->id, $errorMsg);
             if ($result) {
-                $filename = $object->ref . '_ksef.pdf';
+                $filename = dol_sanitizeFileName($object->ref) . '_ksef.pdf';
                 setEventMessages($langs->trans('KSEF_PDFGeneratedSuccess', $filename), null, 'mesgs');
             } else {
-                setEventMessages($langs->trans('KSEF_PDFGenerationError'), null, 'errors');
+                $userMsg = $langs->trans('KSEF_PDFGenerationError');
+                if (!empty($errorMsg)) {
+                    $userMsg .= ': ' . dol_escape_htmltag($errorMsg);
+                }
+                setEventMessages($userMsg, null, 'errors');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1749,6 +1754,14 @@ jQuery(document).ready(function() {
         $data->offline_mode = $submission->offline_mode;
         $data->offline_deadline = $submission->offline_deadline;
         $data->invoice_hash = $submission->invoice_hash;
+        $data->seller_nip = null;
+        $data->seller_name = null;
+        $data->seller_address = null;
+        $data->seller_country = 'PL';
+        $data->buyer_nip = null;
+        $data->buyer_name = null;
+        $data->sale_date = null;
+        $data->payment_method = null;
 
         if (!empty($submission->fa3_xml)) {
             dol_include_once('/ksef/class/fa3_parser.class.php');

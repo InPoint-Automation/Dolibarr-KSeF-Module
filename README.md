@@ -106,6 +106,10 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.4
+>- Potential fix for KSeF-style PDF generation failure (issue #14)
+>- Better error messages when PDF generation fails
+
 >### Version v1.3.3
 >- Payment status, date, and method from KSeF XML displayed on incoming invoice card, import preview, and supplier invoice card
 >- Update phpseclib version

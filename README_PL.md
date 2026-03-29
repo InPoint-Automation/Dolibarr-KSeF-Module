@@ -104,6 +104,10 @@ możliwość nauki na podstawie ich modułu, ten projekt zajęłby znacznie wię
 Ten moduł został opracowany przez InPoint Automation Sp. z o.o.
 
 ## Changelog (In English)
+>### Version v1.3.4
+>- Potential fix for KSeF-style PDF generation failure (issue #14)
+>- Better error messages when PDF generation fails
+
 >### Version v1.3.3
 >- Payment status, date, and method from KSeF XML displayed on incoming invoice card, import preview, and supplier invoice card
 >- Validate & Add Payment button on draft supplier invoices when full payment data (including payment method) available from KSeF xml invoice.

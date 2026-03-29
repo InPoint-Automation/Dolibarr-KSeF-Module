@@ -1087,9 +1087,10 @@ function ksefIsOfflineCertificateConfigured()
  * @param DoliDB          $db          Database handle
  * @param KsefSubmission  $submission  Submission with fa3_xml populated
  * @param int             $invoice_id  Invoice (facture) rowid
+ * @param string          &$errorMsg   error message
  * @return bool True on success, false on failure (non-fatal — logged only)
  */
-function ksefAutoGeneratePdf($db, $submission, $invoice_id)
+function ksefAutoGeneratePdf($db, $submission, $invoice_id, &$errorMsg = '')
 {
     global $conf;
 
@@ -1100,7 +1101,8 @@ function ksefAutoGeneratePdf($db, $submission, $invoice_id)
 
         $invoice = new Facture($db);
         if ($invoice->fetch($invoice_id) <= 0) {
-            dol_syslog("ksefAutoGeneratePdf - could not fetch invoice $invoice_id", LOG_WARNING);
+            $errorMsg = "Could not fetch invoice $invoice_id";
+            dol_syslog("ksefAutoGeneratePdf - " . $errorMsg, LOG_WARNING);
             return false;
         }
 
@@ -1111,26 +1113,38 @@ function ksefAutoGeneratePdf($db, $submission, $invoice_id)
         $pdfContent = $pdfGenerator->generate($invoiceData);
 
         if ($pdfContent === false) {
-            dol_syslog("ksefAutoGeneratePdf - generate failed: " . $pdfGenerator->error, LOG_WARNING);
+            $errorMsg = $pdfGenerator->error ?: 'PDF generation failed';
+            dol_syslog("ksefAutoGeneratePdf - generate failed: " . $errorMsg, LOG_WARNING);
             return false;
         }
 
-        $outputDir = $conf->facture->dir_output . '/' . $invoice->ref;
+        $sanitizedRef = dol_sanitizeFileName($invoice->ref);
+        $outputDir = $conf->invoice->multidir_output[$invoice->entity ?? $conf->entity] . '/' . $sanitizedRef;
         if (!is_dir($outputDir)) {
-            dol_mkdir($outputDir);
+            $mkdirResult = dol_mkdir($outputDir);
+            if ($mkdirResult < 0) {
+                $errorMsg = "Could not create directory: $outputDir";
+                dol_syslog("ksefAutoGeneratePdf - dol_mkdir failed for $outputDir (result=$mkdirResult)", LOG_ERR);
+                return false;
+            }
         }
 
-        $filepath = $outputDir . '/' . $invoice->ref . '_ksef.pdf';
-        if (file_put_contents($filepath, $pdfContent) === false) {
-            dol_syslog("ksefAutoGeneratePdf - failed to write $filepath", LOG_WARNING);
+        $filepath = $outputDir . '/' . $sanitizedRef . '_ksef.pdf';
+        $bytesWritten = file_put_contents($filepath, $pdfContent);
+        if ($bytesWritten === false) {
+            $lastError = error_get_last();
+            $detail = $lastError ? $lastError['message'] : 'unknown';
+            $errorMsg = "Could not write file: $filepath - $detail";
+            dol_syslog("ksefAutoGeneratePdf - file_put_contents failed: " . $errorMsg, LOG_ERR);
             return false;
         }
 
-        dol_syslog("ksefAutoGeneratePdf - saved $filepath", LOG_INFO);
+        dol_syslog("ksefAutoGeneratePdf - saved $filepath ($bytesWritten bytes)", LOG_INFO);
         return true;
 
     } catch (Exception $e) {
-        dol_syslog("ksefAutoGeneratePdf ERROR: " . $e->getMessage(), LOG_WARNING);
+        $errorMsg = $e->getMessage();
+        dol_syslog("ksefAutoGeneratePdf ERROR: " . $errorMsg, LOG_ERR);
         return false;
     }
 }

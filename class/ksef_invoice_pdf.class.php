@@ -109,7 +109,8 @@ class KsefInvoicePdf
 
         try {
             $parser = new FA3Parser($this->db);
-            $this->parsed = $parser->parse($incoming->fa3_xml);
+            $fa3Xml = isset($incoming->fa3_xml) ? $incoming->fa3_xml : null;
+            $this->parsed = !empty($fa3Xml) ? $parser->parse($fa3Xml) : false;
             if (!$this->parsed) {
                 $this->parsed = $this->getEmptyParsed();
             }
@@ -191,7 +192,12 @@ class KsefInvoicePdf
             if (!empty($outputPath)) {
                 $dir = dirname($outputPath);
                 if (!is_dir($dir)) {
-                    mkdir($dir, 0755, true);
+                    $mkResult = dol_mkdir($dir);
+                    if ($mkResult < 0) {
+                        $this->error = "Cannot create directory: $dir";
+                        dol_syslog("KsefInvoicePdf::generate - dol_mkdir failed for $dir", LOG_ERR);
+                        return false;
+                    }
                 }
                 $this->pdf->Output($outputPath, 'F');
                 return true;
@@ -1603,7 +1609,11 @@ class KsefInvoicePdf
 
         // QR code
         if (!empty($verificationUrl)) {
-            $pdf->write2DBarcode($verificationUrl, 'QRCODE,M', $this->marginLeft, $y, $qrSize, $qrSize);
+            try {
+                $pdf->write2DBarcode($verificationUrl, 'QRCODE,M', $this->marginLeft, $y, $qrSize, $qrSize);
+            } catch (Exception $e) {
+                dol_syslog("KsefInvoicePdf::renderQrCode QR error: " . $e->getMessage(), LOG_WARNING);
+            }
         }
 
         if (!empty($incoming->ksef_number)) {
@@ -1693,7 +1703,11 @@ class KsefInvoicePdf
         }
 
         if (!empty($qr1Url)) {
-            $pdf->write2DBarcode($qr1Url, 'QRCODE,H', $qr1X, $y, $qrSize, $qrSize);
+            try {
+                $pdf->write2DBarcode($qr1Url, 'QRCODE,H', $qr1X, $y, $qrSize, $qrSize);
+            } catch (Exception $e) {
+                dol_syslog("KsefInvoicePdf::renderQrCodeOffline QR OFFLINE error: " . $e->getMessage(), LOG_WARNING);
+            }
         }
         $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
         $pdf->SetTextColorArray($this->colorText);
@@ -1716,9 +1730,16 @@ class KsefInvoicePdf
             }
         }
 
+        $qr2Rendered = false;
         if (!empty($qr2Url)) {
-            $pdf->write2DBarcode($qr2Url, 'QRCODE,H', $qr2X, $y, $qrSize, $qrSize);
-        } else {
+            try {
+                $pdf->write2DBarcode($qr2Url, 'QRCODE,H', $qr2X, $y, $qrSize, $qrSize);
+                $qr2Rendered = true;
+            } catch (Exception $e) {
+                dol_syslog("KsefInvoicePdf::renderQrCodeOffline QR CERTYFIKAT error: " . $e->getMessage(), LOG_WARNING);
+            }
+        }
+        if (!$qr2Rendered) {
             // Placeholder box
             $pdf->SetDrawColorArray(array(200, 200, 200));
             $pdf->SetFillColorArray(array(248, 248, 248));
