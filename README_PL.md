@@ -22,6 +22,11 @@ Ten moduł integruje Dolibarr (https://www.dolibarr.org/) z KSeF (Krajowy System
 - Pobieranie i przetwarzanie faktur przychodzących z KSeF
 - Generowanie wizualizacji faktur w stylu KSeF
 
+## Dokumentacja
+Pełna dokumentacja modułu znajduje się w zakładce "Jak używać". Przygotowaliśmy jednak również bardziej szczegółową dokumentację ze zrzutami ekranów, dostępną na naszej stronie internetowej w języku angielskim i polskim. Jeśli napotkasz problemy lub uważasz, że czegoś brakuje, daj nam znać, chętnie to uzupełnimy!
+
+https://inpointautomation.com/pl/content/modul-ksef-dla-dolibarr/
+
 ## Wymagania
 
 ### Wymagania systemowe

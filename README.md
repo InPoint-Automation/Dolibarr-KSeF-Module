@@ -23,6 +23,11 @@ invoicing system.
 - Download and processing of incoming invoices from KSeF
 - Generation of KSeF-style invoice visualizations
 
+## Documentation
+There is complete in-module documentation in the “How To Use” tab. However, we also have finished a more detailed documentation with a bunch of screenshots which is available on our website as well in English and Polish. If you run into issues or think something is missing, please let us know and we’ll add it!
+
+https://inpointautomation.com/content/ksef-integration-module-for-dolibarr/
+
 ## Requirements
 
 ### System Requirements
