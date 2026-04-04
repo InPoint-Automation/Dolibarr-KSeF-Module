@@ -106,6 +106,15 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.5
+>- KSeF system monitoring via Latarnia/Lighthouse API and visibility on dashboard/setup/submission/incoming pages
+>- If the KSeF Latarnia indicates an outage, the system shows a warning banner for maintenance/failures and updates the offline deadline calculations based on outage type
+>- New cron job to poll the KSeF Lighthouse API, default 15min
+>- Reworked the KSeF status dashboard
+>- Added documentation about making sure bank information is included to How to Use tab (Issue #19)
+>- Resolve PDF include warnings (Issue #18)
+>- Fix missing KSeF number on the Dolibarr invoice (Issue #15)
+
 >### Version v1.3.4
 >- Potential fix for KSeF-style PDF generation failure (issue #14)
 >- Better error messages when PDF generation fails

@@ -77,6 +77,95 @@ function ksefGetQrBaseUrl($environment = null)
 }
 
 /**
+ * @brief Returns a color-coded badge for KSeF Latarnia system status
+ * @param string $status  Latarnia status code (AVAILABLE, MAINTENANCE, FAILURE, TOTAL_FAILURE, UNREACHABLE, UNKNOWN)
+ * @return string Badge HTML
+ * @called_by ksefindex.php, admin/setup.php
+ */
+function ksefGetLatarniaStatusBadge($status)
+{
+    global $langs;
+    $langs->load("ksef@ksef");
+
+    $badges = array(
+        'AVAILABLE'     => '<span class="badge badge-status4 badge-status">' . $langs->trans('KSEF_LATARNIA_AVAILABLE') . '</span>',
+        'MAINTENANCE'   => '<span class="badge badge-status1 badge-status" style="background-color: #fd7e14;">' . $langs->trans('KSEF_LATARNIA_MAINTENANCE') . '</span>',
+        'FAILURE'       => '<span class="badge badge-status8 badge-status">' . $langs->trans('KSEF_LATARNIA_FAILURE') . '</span>',
+        'TOTAL_FAILURE' => '<span class="badge badge-status8 badge-status" style="background-color: #721c24;">' . $langs->trans('KSEF_LATARNIA_TOTAL_FAILURE') . '</span>',
+        'UNREACHABLE'   => '<span class="badge badge-status0 badge-status"><i class="fas fa-exclamation-triangle"></i> ' . $langs->trans('KSEF_LATARNIA_UNREACHABLE') . '</span>',
+        'UNKNOWN'       => '<span class="badge badge-status0 badge-status">' . $langs->trans('KSEF_LATARNIA_UNKNOWN') . '</span>',
+    );
+
+    return isset($badges[$status]) ? $badges[$status] : '<span class="badge badge-status0">' . htmlspecialchars($status) . '</span>';
+}
+
+/**
+ * @brief Calculates offline deadline based on the type of KSeF outage
+ *
+ * Legal deadlines:
+ *   MAINTENANCE   — end of next business day after outage ends (Art. 106nh)
+ *   FAILURE       — 7 business days after outage ends (Art. 106nf)
+ *   TOTAL_FAILURE — no deadline, no obligation to re-send (Art. 106ng)
+ *
+ * @param int         $invoice_date  Invoice issue date (timestamp)
+ * @param string|null $outage_type   MAINTENANCE, FAILURE, TOTAL_FAILURE, or null for default
+ * @param int|null    $outage_end    Outage end timestamp (null if ongoing)
+ * @return int|null   Deadline timestamp, null for TOTAL_FAILURE or unknown end
+ * @called_by ksef_service.class.php
+ */
+function ksefCalculateOfflineDeadlineByOutageType($invoice_date, $outage_type = null, $outage_end = null)
+{
+    if (empty($outage_type)) {
+        return ksefCalculateOfflineDeadline($invoice_date);
+    }
+
+    if ($outage_type === 'TOTAL_FAILURE') {
+        return null;
+    }
+
+    if (empty($outage_end)) {
+        return null;
+    }
+
+    if (!is_numeric($outage_end)) {
+        $outage_end = strtotime($outage_end);
+    }
+
+    if ($outage_type === 'FAILURE') {
+        return ksefGetNthWeekday($outage_end, 7);
+    }
+
+    // MAINTENANCE — next business day after outage ends
+    return ksefGetNextWeekday($outage_end);
+}
+
+/**
+ * @brief Gets the Nth weekday after a given date (end of that day)
+ * @param int $date  Start date timestamp
+ * @param int $n     Number of weekdays to advance
+ * @return int Timestamp at 23:59:59 of the Nth weekday
+ * @called_by ksefCalculateOfflineDeadlineByOutageType()
+ */
+function ksefGetNthWeekday($date, $n)
+{
+    if (!is_numeric($date)) {
+        $date = strtotime($date);
+    }
+
+    $current = strtotime('00:00:00', $date);
+    $count = 0;
+
+    while ($count < $n) {
+        $current = strtotime('+1 day', $current);
+        if (ksefIsWeekDay($current)) {
+            $count++;
+        }
+    }
+
+    return strtotime('23:59:59', $current);
+}
+
+/**
  * @brief Prepares admin head tabs
  * @return array Tab array
  * @called_by setup.php, howtouse.php, about.php

@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.4';
+        $this->version = '1.3.5';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -157,6 +157,20 @@ class modKSEF extends DolibarrModules
                 'comment'        => 'Log warnings for offline invoices with deadlines in next 24h',
                 'frequency'      => 1,
                 'unitfrequency'  => 3600,
+                'status'         => 1,
+                'test'           => 'isModEnabled("ksef")',
+                'priority'       => 50,
+            ),
+            4 => array(
+                'label'          => 'KSEF - Check Latarnia (lighthouse) system status',
+                'jobtype'        => 'method',
+                'class'          => '/ksef/class/ksef_service.class.php',
+                'objectname'     => 'KsefService',
+                'method'         => 'cronCheckLatarniaStatus',
+                'parameters'     => '',
+                'comment'        => 'Poll KSeF Latarnia API for system availability status',
+                'frequency'      => 15,
+                'unitfrequency'  => 60,
                 'status'         => 1,
                 'test'           => 'isModEnabled("ksef")',
                 'priority'       => 50,
@@ -370,7 +384,7 @@ class modKSEF extends DolibarrModules
                 'param' => '',
                 'alwayseditable' => 1,
                 'perms' => '',
-                'list' => '0',
+                'list' => '1',
                 'help' => '',
                 'computed' => '',
                 'entity' => '',

@@ -49,6 +49,7 @@ require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
 dol_include_once('/ksef/class/ksef_incoming.class.php');
 dol_include_once('/ksef/class/ksef_sync_state.class.php');
 dol_include_once('/ksef/class/ksef_service.class.php');
+dol_include_once('/ksef/class/ksef_latarnia.class.php');
 dol_include_once('/ksef/lib/ksef.lib.php');
 
 $langs->loadLangs(array("ksef@ksef", "bills"));
@@ -804,6 +805,11 @@ print '<div class="fichethirdleft">';
 print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder nohover centpercent">';
 print '<tr class="liste_titre"><th colspan="2">' . $langs->trans("KSEF_SyncFromKSeF") . '</th></tr>';
+
+// KSeF System Status
+$latarnia_cached = KsefLatarnia::getCachedStatus();
+print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("KSEF_SystemStatus") . '</td>';
+print '<td>' . ksefGetLatarniaStatusBadge($latarnia_cached['status']) . '</td></tr>';
 
 // Environment
 print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("KSEF_ENVIRONMENT") . '</td>';

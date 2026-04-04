@@ -325,6 +325,13 @@ KSEF_STATUS_OFFLINE_Desc=KSeF był niedostępny, faktura zapisana lokalnie z ter
 KSEF_ForeignCurrencyInvoices=Faktury walutowe
 KSEF_ForeignCurrencyDesc=Dla faktur w EUR lub innych walutach obcych musisz pobrać kurs NBP przed wysłaniem i mieć włączony moduł wielowalutowy. Na karcie faktury pojawi się przycisk pobierający kurs z ostatniego dnia roboczego przed datą faktury. Wysyłka jest zablokowana do czasu pobrania kursu NBP. W ustawieniach możesz wybrać czy przy różnicy kursu zmieniać kwotę PLN czy walutową.
 
+KSEF_BankAccountOnInvoice=Numer rachunku bankowego na fakturze
+KSEF_BankAccountOnInvoiceDesc=Jeśli wysyłasz faktury z płatnością przelewem i chcesz, aby dane rachunku bankowego (IBAN) pojawiły się na fakturze, musisz przypisać rachunek bankowy do faktury. Dolibarr może uzupełniać go automatycznie.
+KSEF_BankAccount_Step1=Wejdź w Bank/Kasa i upewnij się, że rachunek ma uzupełniony numer IBAN (SWIFT/BIC i nazwa banku są opcjonalne, ale zalecane)
+KSEF_BankAccount_Step2=Na karcie kontrahenta ustaw domyślny rachunek bankowy — będzie automatycznie podpowiadany przy tworzeniu nowych faktur dla tego kontrahenta
+KSEF_BankAccount_Step3=Przy tworzeniu faktury z płatnością przelewem sprawdź, czy w polu Rachunek bankowy wybrany jest właściwy rachunek
+KSEF_BankAccount_Step4=Jeśli rachunek jest przypisany, a metoda płatności to przelew, IBAN zostanie automatycznie dołączony do XML-a KSeF
+
 KSEF_AfterAcceptance=Po akceptacji
 KSEF_AfterAcceptanceDesc=Po zaakceptowaniu możesz wygenerować PDF w stylu KSeF z karty faktury. Jeśli masz włączone kody QR w ustawieniach, numer KSeF pojawi się również na standardowych PDF-ach faktur.
 
@@ -1055,3 +1062,36 @@ KSEF_NotSpecifiedInXml=Nie określono w XML
 KSEF_ValidateAndPay=Zatwierdź i dodaj płatność
 KSEF_PaymentConfirmed=Faktura zatwierdzona i płatność potwierdzona na podstawie danych KSeF
 KSEF_PaymentConfirmError=Nie udało się potwierdzić płatności
+#
+# Latarnia - Status Systemu KSeF
+#
+KSEF_LATARNIA_AVAILABLE=Dostępny
+KSEF_LATARNIA_MAINTENANCE=Przerwa serwisowa
+KSEF_LATARNIA_FAILURE=Awaria
+KSEF_LATARNIA_TOTAL_FAILURE=Awaria całkowita
+KSEF_LATARNIA_UNREACHABLE=Nieosiągalny
+KSEF_LATARNIA_UNKNOWN=Nieznany
+KSEF_SystemStatus=Status Systemu KSeF
+KSEF_LastChecked=Ostatnie sprawdzenie
+KSEF_CheckNow=Sprawdź Teraz
+KSEF_CheckLatarnia=Sprawdź Latarnię KSeF
+KSEF_NeverChecked=Nigdy nie sprawdzano
+KSEF_LatarniaUnreachableWarning=Nie udało się połączyć z serwisem statusu KSeF (Latarnia). Dostępność KSeF jest nieznana.
+KSEF_MaintenancePlanned=Planowana przerwa serwisowa: %s
+KSEF_MaintenanceOngoing=Trwa przerwa serwisowa od %s
+KSEF_SystemDownFailure=KSeF doświadcza awarii od %s
+KSEF_SystemDownTotalFailure=KSeF doświadcza całkowitej awarii od %s
+KSEF_SystemDownWarning=System KSeF jest obecnie niedostępny. Faktury mogą być wystawiane w trybie offline.
+KSEF_LatarniaCheckSuccess=Status systemu KSeF: %s
+KSEF_LatarniaCheckError=Nie udało się sprawdzić statusu systemu KSeF: %s
+KSEF_DeadlineFailure7Days=7 dni roboczych od zakończenia awarii
+KSEF_DeadlineTotalFailureNone=Brak terminu (awaria całkowita - brak obowiązku ponownego wysłania)
+KSEF_DeadlinePendingOutageEnd=Termin zostanie obliczony po zakończeniu awarii
+KSEF_LatarniaMessages=Komunikaty
+KSEF_Start=Początek
+KSEF_End=Koniec
+KSEF_Published=Opublikowano
+KSEF_LATARNIA_TYPE_FAILURE_START=Rozpoczęcie awarii
+KSEF_LATARNIA_TYPE_FAILURE_END=Zakończenie awarii
+KSEF_LATARNIA_TYPE_MAINTENANCE_ANNOUNCEMENT=Ogłoszenie przerwy serwisowej
+KSEF_NothingToReport=Brak problemów

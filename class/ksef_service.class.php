@@ -113,6 +113,11 @@ class KsefService extends CommonObject
                 }
             }
 
+            // Refresh Latarnia status before submission in case of no cron job
+            dol_include_once('/ksef/class/ksef_latarnia.class.php');
+            $latarnia = new KsefLatarnia($this->db);
+            $latarnia->refreshIfStale();
+
             $build_options = array();
             if ($fa3_creation_date) {
                 $build_options['original_creation_date'] = $fa3_creation_date;
@@ -750,6 +755,11 @@ class KsefService extends CommonObject
     {
         dol_include_once('/ksef/class/ksef_sync_state.class.php');
         dol_include_once('/ksef/class/ksef_client.class.php');
+
+        // Refresh Latarnia status before sync
+        dol_include_once('/ksef/class/ksef_latarnia.class.php');
+        $latarnia = new KsefLatarnia($this->db);
+        $latarnia->refreshIfStale();
 
         $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
 
@@ -1700,6 +1710,41 @@ class KsefService extends CommonObject
         } catch (Exception $e) {
             $this->error = $e->getMessage();
             $this->output = 'Fatal error: ' . $e->getMessage();
+            return -1;
+        }
+    }
+
+    /**
+     * Cron job: Check KSeF Latarnia status
+     * @return int 0 on success, -1 on error
+     */
+    public function cronCheckLatarniaStatus()
+    {
+        dol_syslog("KSEF::cronCheckLatarniaStatus START", LOG_INFO);
+        $this->output = '';
+
+        try {
+            dol_include_once('/ksef/class/ksef_latarnia.class.php');
+
+            $latarnia = new KsefLatarnia($this->db);
+            $result = $latarnia->checkAndCache();
+
+            if ($result !== false) {
+                $status = $result['status'];
+                $msgCount = count($result['messages']);
+                $this->output = "KSeF Latarnia status: $status ($msgCount messages)";
+                dol_syslog("KSEF::cronCheckLatarniaStatus Result: $status ($msgCount messages)", LOG_INFO);
+                return 0;
+            }
+
+            $this->output = 'Latarnia unreachable: ' . $latarnia->error;
+            dol_syslog("KSEF::cronCheckLatarniaStatus WARNING: " . $latarnia->error, LOG_WARNING);
+            return 0;
+
+        } catch (Exception $e) {
+            $this->error = $e->getMessage();
+            $this->output = 'Fatal error: ' . $e->getMessage();
+            dol_syslog("KSEF::cronCheckLatarniaStatus ERROR: " . $e->getMessage(), LOG_ERR);
             return -1;
         }
     }

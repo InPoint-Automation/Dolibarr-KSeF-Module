@@ -282,6 +282,38 @@ class ActionsKSEF
             strpos($submission->ksef_number, 'PENDING') === false &&
             strpos($submission->ksef_number, 'ERROR') === false;
 
+        // Latarnia warning
+        dol_include_once('/ksef/class/ksef_latarnia.class.php');
+        $latarnia_cached = KsefLatarnia::getCachedStatus();
+        if (in_array($latarnia_cached['status'], array('MAINTENANCE', 'FAILURE', 'TOTAL_FAILURE'))) {
+            $latarnia_msg = '';
+            if (!empty($latarnia_cached['messages'])) {
+                $lmsg = $latarnia_cached['messages'][0];
+                $lmsg_start = !empty($lmsg['start']) ? dol_print_date(strtotime($lmsg['start']), 'dayhour') : '';
+                if ($latarnia_cached['status'] === 'MAINTENANCE') {
+                    $latarnia_msg = $langs->trans('KSEF_MaintenanceOngoing', $lmsg_start);
+                } elseif ($latarnia_cached['status'] === 'TOTAL_FAILURE') {
+                    $latarnia_msg = $langs->trans('KSEF_SystemDownTotalFailure', $lmsg_start);
+                } else {
+                    $latarnia_msg = $langs->trans('KSEF_SystemDownFailure', $lmsg_start);
+                }
+            }
+            print '<div class="warning" style="margin-bottom: 10px; padding: 8px 12px; border-radius: 4px;">';
+            print '<i class="fas fa-signal" style="margin-right: 5px;"></i> ';
+            print '<strong>' . $langs->trans('KSEF_SystemStatus') . ':</strong> ';
+            print ksefGetLatarniaStatusBadge($latarnia_cached['status']);
+            if (!empty($latarnia_msg)) {
+                print ' — ' . $latarnia_msg;
+            }
+            print '<br><small>' . $langs->trans('KSEF_SystemDownWarning') . '</small>';
+            print '</div>';
+        } elseif ($latarnia_cached['status'] === 'UNREACHABLE') {
+            print '<div class="info" style="margin-bottom: 10px; padding: 8px 12px; border-radius: 4px; background: #d1ecf1; border: 1px solid #bee5eb;">';
+            print '<i class="fas fa-question-circle" style="margin-right: 5px; color: #0c5460;"></i> ';
+            print $langs->trans('KSEF_LatarniaUnreachableWarning');
+            print '</div>';
+        }
+
         static $spinner_added = false;
         if (!$spinner_added) {
             print '<style>
@@ -1636,15 +1668,16 @@ jQuery(document).ready(function() {
             if ($zip->open($zipname, ZipArchive::CREATE | ZipArchive::OVERWRITE)) {
                 foreach ($parameters['toselect'] as $objectid) {
                     if ($obj->fetch($objectid) > 0) {
-                        $pdffile = $conf->facture->dir_output . '/' . $obj->ref . "/" . $obj->ref . ".pdf";
-                        if (file_exists($pdffile)) $zip->addFile($pdffile, $obj->ref . ".pdf");
+                        $sanitizedRef = dol_sanitizeFileName($obj->ref);
+                        $pdffile = $conf->facture->dir_output . '/' . $sanitizedRef . "/" . $sanitizedRef . ".pdf";
+                        if (file_exists($pdffile)) $zip->addFile($pdffile, $sanitizedRef . ".pdf");
 
-                        $xmlfile = $conf->facture->dir_output . '/' . $obj->ref . "/" . $obj->ref . "_fa3.xml";
-                        if (file_exists($xmlfile)) $zip->addFile($xmlfile, $obj->ref . "_fa3.xml");
+                        $xmlfile = $conf->facture->dir_output . '/' . $sanitizedRef . "/" . $sanitizedRef . "_fa3.xml";
+                        if (file_exists($xmlfile)) $zip->addFile($xmlfile, $sanitizedRef . "_fa3.xml");
 
                         $submission = new KsefSubmission($db);
                         if ($submission->fetchByInvoice($objectid) > 0 && !empty($submission->upo_xml)) {
-                            $zip->addFromString($obj->ref . "_upo.xml", $submission->upo_xml);
+                            $zip->addFromString($sanitizedRef . "_upo.xml", $submission->upo_xml);
                         }
                     }
                 }

@@ -38,6 +38,7 @@ global $conf, $langs, $user, $db;
 require_once DOL_DOCUMENT_ROOT . '/core/class/html.formfile.class.php';
 dol_include_once('/ksef/class/ksef_submission.class.php');
 dol_include_once('/ksef/class/ksef_incoming.class.php');
+dol_include_once('/ksef/class/ksef_latarnia.class.php');
 dol_include_once('/ksef/lib/ksef.lib.php');
 
 $langs->loadLangs(array("ksef@ksef", "bills"));
@@ -47,6 +48,22 @@ $socid = GETPOST('socid', 'int');
 if (isset($user->socid) && $user->socid > 0) {
     $action = '';
     $socid = $user->socid;
+}
+
+// Check Latarnia status on demand
+if ($action == 'checklatarnia') {
+    if (!verifCond('isModEnabled("ksef")')) {
+        accessforbidden();
+    }
+    $latarnia = new KsefLatarnia($db);
+    $result = $latarnia->checkAndCache();
+    if ($result !== false) {
+        setEventMessages($langs->trans('KSEF_LatarniaCheckSuccess', $langs->trans('KSEF_LATARNIA_' . $result['status'])), null, 'mesgs');
+    } else {
+        setEventMessages($langs->trans('KSEF_LatarniaCheckError', $latarnia->error), null, 'errors');
+    }
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
 }
 
 $max = 5;
@@ -219,6 +236,78 @@ print '</div></div>';
 print '</div></div></div>';
 print '</div></div>';
 
+// KSeF System Status (Latarnia)
+$latarnia_cached = KsefLatarnia::getCachedStatus();
+$latarnia_status = $latarnia_cached['status'];
+$latarnia_timestamp = $latarnia_cached['timestamp'];
+$latarnia_messages = $latarnia_cached['messages'];
+
+print '<div class="box-flex-item"><div class="box-flex-item-with-margin">';
+print '<div class="info-box">';
+print '<span class="info-box-icon bg-infobox-action"><i class="fas fa-signal"></i></span>';
+print '<div class="info-box-content">';
+print '<div class="info-box-title" title="' . dol_escape_htmltag($langs->trans("KSEF_SystemStatus")) . '">' . $langs->trans("KSEF_SystemStatus") . '</div>';
+print '<div class="info-box-lines">';
+
+// Status badge
+print '<div class="info-box-line spanoverflow nowrap">';
+print '<div class="marginrightonly inline-block valignmiddle info-box-line-text">' . $langs->trans("Status") . '</div>';
+print '<div class="inline-block nowraponall">' . ksefGetLatarniaStatusBadge($latarnia_status) . '</div>';
+print '</div>';
+
+// Last checked + Check Now
+print '<div class="info-box-line spanoverflow nowrap">';
+print '<div class="marginrightonly inline-block valignmiddle info-box-line-text">';
+if ($latarnia_timestamp > 0) {
+    print dol_print_date($latarnia_timestamp, 'dayhour');
+} else {
+    print $langs->trans("KSEF_NeverChecked");
+}
+print '</div>';
+print '<div class="inline-block nowraponall">';
+print '<a href="' . $_SERVER['PHP_SELF'] . '?action=checklatarnia&token=' . newToken() . '" class="classfortooltip" title="' . dol_escape_htmltag($langs->trans("KSEF_CheckNow")) . '">';
+print '<i class="fas fa-sync-alt paddingleft" style="font-size: 0.85em;"></i>';
+print '</a>';
+print '</div>';
+print '</div>';
+
+print '</div></div></div>';
+print '</div></div>';
+
+// Needs Attention card
+$attention_items = array();
+if ($cnt_offline_urgent > 0) {
+    $attention_items[] = '<a href="' . dol_buildpath('/ksef/status.php', 1) . '?search_status=PENDING"><span class="badge badge-status8 marginrightonly">' . $cnt_offline_urgent . '</span>' . $langs->trans("KSEF_OfflineDeadlineSoon") . '</a>';
+}
+if ($cnt_failed > 0) {
+    $attention_items[] = '<a href="' . dol_buildpath('/ksef/status.php', 1) . '?search_status=FAILED"><span class="badge badge-status8 marginrightonly">' . $cnt_failed . '</span>' . $langs->trans("KSEF_FailedCanRetry") . '</a>';
+}
+if ($cnt_pending > 0) {
+    $attention_items[] = '<a href="' . dol_buildpath('/ksef/status.php', 1) . '?search_status=PENDING"><span class="badge badge-status1 marginrightonly">' . $cnt_pending . '</span>' . $langs->trans("KSEF_AwaitingConfirmation") . '</a>';
+}
+if ($cnt_incoming_new > 0) {
+    $attention_items[] = '<a href="' . dol_buildpath('/ksef/incoming_list.php', 1) . '?search_import_status=NEW"><span class="badge badge-status1 marginrightonly">' . $cnt_incoming_new . '</span>' . $langs->trans("KSEF_NewToReview") . '</a>';
+}
+if ($cnt_incoming_error > 0) {
+    $attention_items[] = '<a href="' . dol_buildpath('/ksef/incoming_list.php', 1) . '?search_import_status=ERROR"><span class="badge badge-status8 marginrightonly">' . $cnt_incoming_error . '</span>' . $langs->trans("KSEF_ImportErrors") . '</a>';
+}
+
+print '<div class="box-flex-item"><div class="box-flex-item-with-margin">';
+print '<div class="info-box">';
+print '<span class="info-box-icon bg-infobox-contrat"><i class="fas fa-exclamation-circle"></i></span>';
+print '<div class="info-box-content">';
+print '<div class="info-box-title" title="' . dol_escape_htmltag($langs->trans("KSEF_NeedsAttention")) . '">' . $langs->trans("KSEF_NeedsAttention") . '</div>';
+print '<div class="info-box-lines">';
+if (!empty($attention_items)) {
+    foreach ($attention_items as $item) {
+        print '<div class="info-box-line spanoverflow nowrap">' . $item . '</div>';
+    }
+} else {
+    print '<div class="info-box-line"><span class="badge badge-status4">' . $langs->trans("KSEF_NothingToReport") . '</span></div>';
+}
+print '</div></div></div>';
+print '</div></div>';
+
 print '<div class="box-flex-item filler"></div>';
 print '<div class="box-flex-item filler"></div>';
 
@@ -237,41 +326,6 @@ print '<div class="twocolumns">';
 
 // Outgoing Invoices
 print '<div class="firstcolumn fichehalfleft boxhalfleft" id="boxhalfleft">';
-
-if ($cnt_offline_urgent > 0 || $cnt_failed > 0 || $cnt_pending > 0) {
-    print '<div class="box divboxtable">';
-    print '<table class="noborder boxtable centpercent">';
-    print '<tr class="liste_titre box_titre"><th>';
-    print '<div class="tdoverflowmax400 maxwidth250onsmartphone float">';
-    print '<span class="fas fa-exclamation-circle pictofixedwidth warning"></span>' . $langs->trans("KSEF_NeedsAttention");
-    print '</div></th></tr>';
-
-    if ($cnt_offline_urgent > 0) {
-        print '<tr class="oddeven"><td class="nowraponall">';
-        print '<a href="' . dol_buildpath('/ksef/status.php', 1) . '?search_status=PENDING">';
-        print '<span class="badge badge-status8 marginrightonly">' . $cnt_offline_urgent . '</span>';
-        print $langs->trans("KSEF_OfflineDeadlineSoon");
-        print '</a></td></tr>';
-    }
-
-    if ($cnt_failed > 0) {
-        print '<tr class="oddeven"><td class="nowraponall">';
-        print '<a href="' . dol_buildpath('/ksef/status.php', 1) . '?search_status=FAILED">';
-        print '<span class="badge badge-status8 marginrightonly">' . $cnt_failed . '</span>';
-        print $langs->trans("KSEF_FailedCanRetry");
-        print '</a></td></tr>';
-    }
-
-    if ($cnt_pending > 0) {
-        print '<tr class="oddeven"><td class="nowraponall">';
-        print '<a href="' . dol_buildpath('/ksef/status.php', 1) . '?search_status=PENDING">';
-        print '<span class="badge badge-status1 marginrightonly">' . $cnt_pending . '</span>';
-        print $langs->trans("KSEF_AwaitingConfirmation");
-        print '</a></td></tr>';
-    }
-
-    print '</table></div>';
-}
 
 print '<div class="box divboxtable">';
 print '<table class="noborder boxtable centpercent">';
@@ -372,33 +426,6 @@ print '</div>'; // end fichehalfleft
 
 // Incoming
 print '<div class="secondcolumn fichehalfright boxhalfright" id="boxhalfright">';
-
-if ($cnt_incoming_new > 0 || $cnt_incoming_error > 0) {
-    print '<div class="box divboxtable">';
-    print '<table class="noborder boxtable centpercent">';
-    print '<tr class="liste_titre box_titre"><th>';
-    print '<div class="tdoverflowmax400 maxwidth250onsmartphone float">';
-    print '<span class="fas fa-exclamation-circle pictofixedwidth warning"></span>' . $langs->trans("KSEF_NeedsAttention");
-    print '</div></th></tr>';
-
-    if ($cnt_incoming_new > 0) {
-        print '<tr class="oddeven"><td class="nowraponall">';
-        print '<a href="' . dol_buildpath('/ksef/incoming_list.php', 1) . '?search_import_status=NEW">';
-        print '<span class="badge badge-status1 marginrightonly">' . $cnt_incoming_new . '</span>';
-        print $langs->trans("KSEF_NewToReview");
-        print '</a></td></tr>';
-    }
-
-    if ($cnt_incoming_error > 0) {
-        print '<tr class="oddeven"><td class="nowraponall">';
-        print '<a href="' . dol_buildpath('/ksef/incoming_list.php', 1) . '?search_import_status=ERROR">';
-        print '<span class="badge badge-status8 marginrightonly">' . $cnt_incoming_error . '</span>';
-        print $langs->trans("KSEF_ImportErrors");
-        print '</a></td></tr>';
-    }
-
-    print '</table></div>';
-}
 
 print '<div class="box divboxtable">';
 print '<table class="noborder boxtable centpercent">';
@@ -529,6 +556,38 @@ print '</div>';
 print '</div>';
 print '</div>';
 
+
+// Latarnia messages (full-width box)
+if (!empty($latarnia_messages)) {
+    print '<div class="clearboth"></div>';
+    print '<div class="div-table-responsive-no-min" style="margin-top: 10px;">';
+    print '<table class="noborder centpercent">';
+    print '<tr class="liste_titre">';
+    print '<th>' . $langs->trans("KSEF_SystemStatus") . ' — ' . $langs->trans("KSEF_LatarniaMessages") . '</th>';
+    print '<th>' . $langs->trans("Type") . '</th>';
+    print '<th class="center">' . $langs->trans("KSEF_Start") . '</th>';
+    print '<th class="center">' . $langs->trans("KSEF_End") . '</th>';
+    print '<th class="center">' . $langs->trans("KSEF_Published") . '</th>';
+    print '</tr>';
+    foreach ($latarnia_messages as $lmsg) {
+        print '<tr class="oddeven">';
+        print '<td style="white-space: normal;">' . dol_escape_htmltag($lmsg['title'] ?? '') . '<br><small class="opacitymedium">' . dol_escape_htmltag($lmsg['text'] ?? '') . '</small></td>';
+        $cat = $lmsg['category'] ?? '';
+        $category_badge = ksefGetLatarniaStatusBadge($cat);
+        $type_raw = $lmsg['type'] ?? '';
+        $type_label = $langs->trans('KSEF_LATARNIA_TYPE_' . $type_raw);
+        if ($type_label === 'KSEF_LATARNIA_TYPE_' . $type_raw) {
+            $type_label = $type_raw; // fallback to raw if no translation
+        }
+        print '<td class="nowraponall">' . $category_badge . '<br><small class="opacitymedium">' . dol_escape_htmltag($type_label) . '</small></td>';
+        print '<td class="center">' . (!empty($lmsg['start']) ? dol_print_date(strtotime($lmsg['start']), 'dayhour') : '') . '</td>';
+        print '<td class="center">' . (!empty($lmsg['end']) ? dol_print_date(strtotime($lmsg['end']), 'dayhour') : '<span class="opacitymedium">—</span>') . '</td>';
+        print '<td class="center">' . (!empty($lmsg['published']) ? dol_print_date(strtotime($lmsg['published']), 'dayhour') : '') . '</td>';
+        print '</tr>';
+    }
+    print '</table>';
+    print '</div>';
+}
 
 if (!$config_ok) {
     print '<div class="clearboth"></div><br>';

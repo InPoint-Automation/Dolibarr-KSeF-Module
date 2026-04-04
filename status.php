@@ -48,6 +48,7 @@ require_once DOL_DOCUMENT_ROOT . '/core/lib/date.lib.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/company.lib.php';
 dol_include_once('/ksef/class/ksef_submission.class.php');
 dol_include_once('/ksef/class/ksef_service.class.php');
+dol_include_once('/ksef/class/ksef_latarnia.class.php');
 dol_include_once('/ksef/lib/ksef.lib.php');
 dol_include_once('/ksef/class/ksef_client.class.php');
 
@@ -381,6 +382,20 @@ print '<input type="hidden" name="page" value="' . $page . '">';
 print '<input type="hidden" name="contextpage" value="' . $contextpage . '">';
 
 print_barre_liste($langs->trans("KSEF_Status"), $page, $_SERVER["PHP_SELF"], $param, $sortfield, $sortorder, $massactionbutton, $num, $nbtotalofrecords, 'object_ksef@ksef', 0, '', '', $limit, 0, 0, 1);
+
+// Latarnia system status
+$latarnia_cached = KsefLatarnia::getCachedStatus();
+print '<div style="margin-bottom: 10px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa;">';
+print '<strong><i class="fas fa-signal"></i> ' . $langs->trans("KSEF_SystemStatus") . ':</strong> ';
+print ksefGetLatarniaStatusBadge($latarnia_cached['status']);
+if ($latarnia_cached['timestamp'] > 0) {
+    print ' <span style="color: #666; font-size: 0.85em;">(' . $langs->trans("KSEF_LastChecked") . ': ' . dol_print_date($latarnia_cached['timestamp'], 'dayhour') . ')</span>';
+}
+if ($latarnia_cached['status'] !== 'AVAILABLE' && $latarnia_cached['status'] !== 'UNKNOWN' && !empty($latarnia_cached['messages'])) {
+    $lmsg = $latarnia_cached['messages'][0];
+    print '<br><span style="font-size: 0.9em; margin-left: 20px;">' . dol_escape_htmltag($lmsg['title'] ?? '') . '</span>';
+}
+print '</div>';
 
 $topicmail = '';
 $modelmail = '';

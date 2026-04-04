@@ -325,6 +325,13 @@ KSEF_STATUS_OFFLINE_Desc=KSeF was unavailable, invoice saved locally with a dead
 KSEF_ForeignCurrencyInvoices=Foreign Currency Invoices
 KSEF_ForeignCurrencyDesc=For invoices in EUR or other non-PLN currencies, you need to fetch the NBP exchange rate before submitting and must have the multicurrency module enabled. When this is true, there is a button on the invoice card that pulls the rate from the last working day before the invoice date. Submission is blocked until the NBP exchange rate is pulled. You can choose whether to change the PLN price or the foreign currency price when exchange rate differs from the previous in settings, similar to multicurrency.
 
+KSEF_BankAccountOnInvoice=Bank Account on Invoices
+KSEF_BankAccountOnInvoiceDesc=If you send invoices with bank transfer as the payment method and want your bank account details (IBAN) to appear on the invoice, you need to assign a bank account to the invoice. Dolibarr can auto-fill this for you.
+KSEF_BankAccount_Step1=Go to Bank/Cash and make sure your bank account has the IBAN filled in (SWIFT/BIC and bank name are optional but recommended)
+KSEF_BankAccount_Step2=Go to the customer's Third Party card and set a default bank account — this will auto-fill on new invoices for that customer
+KSEF_BankAccount_Step3=When creating an invoice with wire transfer payment, verify the Bank Account dropdown shows the correct account
+KSEF_BankAccount_Step4=If the bank account is set and payment method is wire transfer, the IBAN will be included in the KSeF XML automatically
+
 KSEF_AfterAcceptance=After Acceptance
 KSEF_AfterAcceptanceDesc=Once accepted, you can generate a KSeF-style PDF visualization from the invoice card. If you have QR codes enabled in settings, the KSeF number also gets added to your regular invoice PDFs.
 
@@ -1055,3 +1062,36 @@ KSEF_NotSpecifiedInXml=Not specified in XML
 KSEF_ValidateAndPay=Validate & Add Payment
 KSEF_PaymentConfirmed=Invoice validated and payment confirmed based on KSeF data
 KSEF_PaymentConfirmError=Could not confirm payment
+#
+# Latarnia (Lighthouse) - KSeF System Status
+#
+KSEF_LATARNIA_AVAILABLE=Available
+KSEF_LATARNIA_MAINTENANCE=Maintenance
+KSEF_LATARNIA_FAILURE=Failure
+KSEF_LATARNIA_TOTAL_FAILURE=Total Failure
+KSEF_LATARNIA_UNREACHABLE=Unreachable
+KSEF_LATARNIA_UNKNOWN=Unknown
+KSEF_SystemStatus=KSeF System Status
+KSEF_LastChecked=Last checked
+KSEF_CheckNow=Check Now
+KSEF_CheckLatarnia=Check KSeF Lighthouse
+KSEF_NeverChecked=Never checked
+KSEF_LatarniaUnreachableWarning=Could not reach the KSeF status service (Latarnia). KSeF availability is unknown.
+KSEF_MaintenancePlanned=Planned maintenance: %s
+KSEF_MaintenanceOngoing=Maintenance in progress since %s
+KSEF_SystemDownFailure=KSeF is experiencing a failure since %s
+KSEF_SystemDownTotalFailure=KSeF is experiencing a total failure since %s
+KSEF_SystemDownWarning=KSeF system is currently unavailable. Invoices can be issued in offline mode.
+KSEF_LatarniaCheckSuccess=KSeF system status: %s
+KSEF_LatarniaCheckError=Could not check KSeF system status: %s
+KSEF_DeadlineFailure7Days=7 business days after outage ends
+KSEF_DeadlineTotalFailureNone=No deadline (total failure - no obligation to re-send)
+KSEF_DeadlinePendingOutageEnd=Deadline will be calculated when outage ends
+KSEF_LatarniaMessages=Messages
+KSEF_Start=Start
+KSEF_End=End
+KSEF_Published=Published
+KSEF_LATARNIA_TYPE_FAILURE_START=Failure started
+KSEF_LATARNIA_TYPE_FAILURE_END=Failure ended
+KSEF_LATARNIA_TYPE_MAINTENANCE_ANNOUNCEMENT=Maintenance announced
+KSEF_NothingToReport=Nothing to report

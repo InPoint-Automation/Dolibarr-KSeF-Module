@@ -368,6 +368,15 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                 <h4><?php echo $langs->trans("KSEF_ForeignCurrencyInvoices"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_ForeignCurrencyDesc"); ?></p>
 
+                <h4><?php echo $langs->trans("KSEF_BankAccountOnInvoice"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_BankAccountOnInvoiceDesc"); ?></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_BankAccount_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_BankAccount_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_BankAccount_Step3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_BankAccount_Step4"); ?></li>
+                </ol>
+
                 <h4><?php echo $langs->trans("KSEF_AfterAcceptance"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_AfterAcceptanceDesc"); ?></p>
 

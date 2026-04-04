@@ -104,7 +104,7 @@ class KsefInvoicePdf
             return false;
         }
 
-        require_once TCPDF_PATH . 'tcpdf.php';
+        pdf_getInstance();
         dol_include_once('/ksef/class/fa3_parser.class.php');
 
         try {

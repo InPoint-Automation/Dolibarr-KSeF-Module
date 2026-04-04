@@ -64,6 +64,7 @@ require_once DOL_DOCUMENT_ROOT . '/core/class/html.form.class.php';
 require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
 dol_include_once('/ksef/lib/ksef.lib.php');
 dol_include_once('/ksef/class/ksef_client.class.php');
+dol_include_once('/ksef/class/ksef_latarnia.class.php');
 
 $langs->loadLangs(array("admin", "ksef@ksef"));
 
@@ -501,6 +502,17 @@ if ($action == 'remove_excluded') {
     exit;
 }
 
+// Check lighthouse status
+if ($action == 'checklatarnia') {
+    $latarnia = new KsefLatarnia($db);
+    $result = $latarnia->checkAndCache();
+    if ($result !== false) {
+        setEventMessages($langs->trans('KSEF_LatarniaCheckSuccess', $langs->trans('KSEF_LATARNIA_' . $result['status'])), null, 'mesgs');
+    } else {
+        setEventMessages($langs->trans('KSEF_LatarniaCheckError', $latarnia->error), null, 'errors');
+    }
+}
+
 // Test connection
 if ($action == 'testconnection') {
     $environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
@@ -631,6 +643,22 @@ if (count($warnings) > 0) {
     }
     print '</div>';
 }
+
+// Lighthouse status
+$latarnia_cached = KsefLatarnia::getCachedStatus();
+print '<div style="margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; background: #f8f9fa;">';
+print '<strong><i class="fas fa-signal"></i> ' . $langs->trans("KSEF_SystemStatus") . ':</strong> ';
+print ksefGetLatarniaStatusBadge($latarnia_cached['status']);
+if ($latarnia_cached['timestamp'] > 0) {
+    print ' <span style="color: #666; font-size: 0.85em;">(' . $langs->trans("KSEF_LastChecked") . ': ' . dol_print_date($latarnia_cached['timestamp'], 'dayhour') . ')</span>';
+} else {
+    print ' <span style="color: #666; font-size: 0.85em;">(' . $langs->trans("KSEF_NeverChecked") . ')</span>';
+}
+if ($latarnia_cached['status'] !== 'AVAILABLE' && $latarnia_cached['status'] !== 'UNKNOWN' && !empty($latarnia_cached['messages'])) {
+    $lmsg = $latarnia_cached['messages'][0];
+    print '<br><span style="font-size: 0.9em; margin-left: 20px;">' . dol_escape_htmltag($lmsg['title'] ?? '') . '</span>';
+}
+print '</div>';
 
 print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
@@ -1263,6 +1291,8 @@ print dol_get_fiche_end();
 
 if (!empty($conf->global->KSEF_COMPANY_NIP)) {
     print '<br><div class="tabsAction">';
+
+    print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=checklatarnia&token=' . newToken() . '">' . $langs->trans("KSEF_CheckLatarnia") . '</a>';
 
     print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=testconnection&token=' . newToken() . '">' . $langs->trans("KSEF_TEST_CONNECTION") . '</a>';
 
