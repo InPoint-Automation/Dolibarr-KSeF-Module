@@ -444,6 +444,28 @@ class ActionsKSEF
         global $conf, $user, $langs, $db;
 
         $currentcontext = $parameters['currentcontext'] ?? '';
+
+        // Handle per-invoice override
+        if ($currentcontext === 'invoicenote' && $action === 'ksef_set_note_override') {
+            if (is_object($object) && !empty($object->id) && $object->element === 'facture') {
+                $val = GETPOST('ksef_override_value', 'alpha');
+                if (!in_array($val, array('', 'simple', 'keyvalue', 'disabled'), true)) {
+                    $val = '';
+                }
+                if (!isset($object->array_options) || empty($object->array_options)) {
+                    if (method_exists($object, 'fetch_optionals')) $object->fetch_optionals();
+                }
+                $object->array_options['options_ksef_dodatkowy_opis_mode'] = $val;
+                $res = $object->insertExtraFields();
+                if ($res >= 0) {
+                    setEventMessages($langs->trans('KSEF_DODATKOWY_OPIS_OVERRIDE_SAVED'), null, 'mesgs');
+                } else {
+                    setEventMessages($object->error ?: 'Error saving override', $object->errors, 'errors');
+                }
+                $action = '';
+            }
+        }
+
         if ($currentcontext == 'thirdpartycard') {
             if (empty($conf->ksef) || empty($conf->ksef->enabled)) {
                 return 0;
@@ -1261,6 +1283,250 @@ class ActionsKSEF
     }
 
     /**
+     * @brief DodatkowyOpis modes for a given invoice
+     * @param object $object Invoice
+     * @return array Indexed by: noteMode, efCount, effectiveNoteMode, effectiveEfCount, noteConfigured, efConfigured, dodOverride, featureActive
+     */
+    private function ksefComputeDodatkowyOpisContext($object)
+    {
+        dol_include_once('/ksef/class/fa3_builder.class.php');
+        $noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled');
+        $efConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+        $efCount = !empty($efConf) ? count(array_filter(array_map('trim', explode(',', $efConf)))) : 0;
+        $dodOverride = FA3Builder::getDodatkowyOpisOverride($object);
+
+        $effectiveNoteMode = $noteMode;
+        $effectiveEfCount = $efCount;
+        $effectiveNoteConfigured = ($noteMode !== 'disabled');
+        $effectiveEfConfigured = ($efCount > 0);
+
+        if ($dodOverride === 'disabled') {
+            $effectiveNoteMode = 'disabled';
+            $effectiveEfCount = 0;
+            $effectiveNoteConfigured = false;
+            $effectiveEfConfigured = false;
+        } elseif ($dodOverride === 'simple' || $dodOverride === 'keyvalue') {
+            $effectiveNoteMode = $dodOverride;
+            $effectiveNoteConfigured = true;
+        }
+
+        return array(
+            'noteMode' => $noteMode,
+            'efCount' => $efCount,
+            'effectiveNoteMode' => $effectiveNoteMode,
+            'effectiveEfCount' => $effectiveEfCount,
+            'noteConfigured' => $effectiveNoteConfigured,
+            'efConfigured' => $effectiveEfConfigured,
+            'dodOverride' => $dodOverride,
+            'featureActive' => ($noteMode !== 'disabled') || !empty($efConf) || in_array($dodOverride, array('simple', 'keyvalue', 'disabled')),
+        );
+    }
+
+    /**
+     * @brief Returns HTML for the notes preview
+     * @param object $object Invoice
+     * @param bool $collapsible Wrap in <details> for toggle UX
+     * @return string HTML
+     */
+    private function ksefRenderDodatkowyOpisPreviewInner($object, $collapsible = true)
+    {
+        global $conf, $db, $langs;
+        dol_include_once('/ksef/class/fa3_builder.class.php');
+
+        $ctx = $this->ksefComputeDodatkowyOpisContext($object);
+        $dodEntries = FA3Builder::parseDodatkowyOpisPreview($object, $conf, $db);
+
+        $noteEntries = array();
+        $efEntries = array();
+        foreach ($dodEntries as $entry) {
+            if (isset($entry['source']) && $entry['source'] === 'extrafield') {
+                $efEntries[] = $entry;
+            } else {
+                $noteEntries[] = $entry;
+            }
+        }
+
+        $overrideBadge = '';
+        if (!empty($ctx['dodOverride'])) {
+            $overrideLabel = '';
+            if ($ctx['dodOverride'] === 'simple') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_Simple');
+            elseif ($ctx['dodOverride'] === 'keyvalue') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_KeyValue');
+            elseif ($ctx['dodOverride'] === 'disabled') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_Disabled');
+            if ($overrideLabel !== '') {
+                $overrideBadge = ' <span class="badge badge-warning" style="margin-left:6px;">' . dol_escape_htmltag(sprintf($langs->transnoentities('KSEF_DODATKOWY_OPIS_PREVIEW_OVERRIDDEN'), $overrideLabel)) . '</span>';
+            }
+        }
+
+        if ($collapsible) {
+            $html = '<details' . (!empty($dodEntries) ? ' open' : '') . '>';
+            $html .= '<summary style="cursor:pointer;">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_ENTRIES") . $overrideBadge . '</summary>';
+        } else {
+            $html = '<div>';
+            if ($overrideBadge !== '') {
+                $html .= '<div style="margin-bottom:4px;">' . $overrideBadge . '</div>';
+            }
+        }
+
+        $sections = array(
+            array('title' => $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_FROM_NOTE"), 'entries' => $noteEntries, 'configured' => $ctx['noteConfigured']),
+            array('title' => $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_FROM_EXTRAFIELDS"), 'entries' => $efEntries, 'configured' => $ctx['efConfigured']),
+        );
+
+        foreach ($sections as $sec) {
+            if (!$sec['configured'] && empty($sec['entries'])) continue;
+            $html .= '<h5 style="margin:8px 0 4px 0; font-size:12px; text-transform:uppercase; color:#666;">' . $sec['title'] . '</h5>';
+            if (empty($sec['entries'])) {
+                $html .= '<div class="opacitymedium" style="margin-bottom:4px;">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_EMPTY_SECTION") . '</div>';
+                continue;
+            }
+            $html .= '<table class="noborder" style="margin-bottom:4px; width:100%; table-layout:fixed;">';
+            $html .= '<tr class="liste_titre"><td style="width:30%;">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_KEY") . '</td><td>' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_VALUE") . '</td></tr>';
+            foreach ($sec['entries'] as $entry) {
+                $dispKey = dol_escape_htmltag($entry['key']);
+                $dispVal = dol_escape_htmltag($entry['value']);
+                $html .= '<tr class="oddeven"><td style="word-break:break-word; vertical-align:top;">' . $dispKey . '</td><td style="word-break:break-word; white-space:pre-wrap;">' . $dispVal . '</td></tr>';
+            }
+            $html .= '</table>';
+        }
+
+        if (!$ctx['noteConfigured'] && !$ctx['efConfigured']) {
+            $html .= '<div class="opacitymedium">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_EMPTY_SECTION") . '</div>';
+        }
+
+        $html .= $collapsible ? '</details>' : '</div>';
+        return $html;
+    }
+
+    /**
+     * @brief Returns the script block for the live helper
+     * @param object $object Invoice
+     * @return string HTML
+     */
+    private function ksefRenderDodatkowyOpisHelperScript($object)
+    {
+        global $langs;
+        $ctx = $this->ksefComputeDodatkowyOpisContext($object);
+
+        $hintHtml = '';
+        if ($ctx['effectiveNoteMode'] === 'simple') {
+            $hintHtml = $langs->transnoentities("KSEF_DODATKOWY_OPIS_HINT_SIMPLE");
+        } elseif ($ctx['effectiveNoteMode'] === 'keyvalue') {
+            $hintHtml = $langs->transnoentities("KSEF_DODATKOWY_OPIS_HINT_KEYVALUE");
+        }
+        if ($ctx['effectiveEfCount'] > 0) {
+            $hintHtml .= '<br>' . sprintf($langs->transnoentities("KSEF_DODATKOWY_OPIS_HINT_EXTRAFIELDS"), $ctx['effectiveEfCount']);
+        }
+
+        $charsLabel = addslashes($langs->transnoentities("KSEF_DODATKOWY_OPIS_CHARS_LABEL"));
+        $noEntriesLabel = addslashes($langs->transnoentities("KSEF_DODATKOWY_OPIS_NOTE_NO_ENTRIES"));
+        $truncatedLabel = addslashes($langs->transnoentities("KSEF_DODATKOWY_OPIS_NOTE_TRUNCATED"));
+
+        return '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var noteMode = ' . json_encode($ctx['effectiveNoteMode']) . ';
+    if (noteMode === "disabled") return;
+
+    function findTextarea() {
+        return jQuery("textarea[name=\'note_public\']").first();
+    }
+    function insertHelper() {
+        var ta = findTextarea();
+        if (!ta.length || jQuery("#ksef_note_helper").length) return false;
+        var ckeWrapper = ta.parent().find(".cke_chrome, .cke").first();
+        var anchor = ckeWrapper.length ? ckeWrapper : ta;
+        anchor.after(
+            \'<div id="ksef_note_helper" style="font-size:11px; color:#666; margin-top:4px; padding:6px 8px; background:#f8f9fa; border-left:3px solid #6c757d;">\' +
+            \'<div style="margin-bottom:4px;">' . addslashes($hintHtml) . '</div>\' +
+            \'<div id="ksef_note_counter"></div>\' +
+            \'</div>\'
+        );
+        return true;
+    }
+    function getText() {
+        if (typeof CKEDITOR !== "undefined" && CKEDITOR.instances && CKEDITOR.instances.note_public) {
+            return CKEDITOR.instances.note_public.getData() || "";
+        }
+        var ta = findTextarea();
+        return ta.length ? (ta.val() || "") : "";
+    }
+    function escapeHtml(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function parseEntries(stripped) {
+        var entries = [];
+        if (noteMode === "simple") {
+            var totalLen = stripped.length;
+            if (totalLen === 0) return entries;
+            if (totalLen <= 256) {
+                entries.push({key: "Uwagi", value: stripped, len: totalLen});
+            } else {
+                var chunkNum = 0;
+                for (var offset = 0; offset < totalLen; offset += 256) {
+                    chunkNum++;
+                    var end = Math.min(offset + 256, totalLen);
+                    var label = chunkNum === 1 ? "Uwagi" : "Uwagi " + chunkNum;
+                    entries.push({key: label, value: stripped.substring(offset, end), len: end - offset});
+                }
+            }
+        } else if (noteMode === "keyvalue") {
+            stripped.split("\\n").forEach(function(line) {
+                line = line.trim();
+                if (!line) return;
+                var idx = line.indexOf(":");
+                if (idx <= 0) return;
+                var key = line.substring(0, idx).trim();
+                var value = line.substring(idx + 1).trim();
+                if (!key || !value) return;
+                entries.push({key: key, value: value, len: value.length});
+            });
+        }
+        return entries;
+    }
+    function updateCounter() {
+        var el = jQuery("#ksef_note_counter");
+        if (!el.length) return;
+        var text = getText();
+        var stripped = text.replace(/<br\s*\/?>/gi, "\\n").replace(/<\\/(p|div)>/gi, "\\n").replace(/<[^>]+>/g, "").trim();
+        var entries = parseEntries(stripped);
+        if (entries.length === 0) {
+            el.html(\'<span class="opacitymedium">' . $noEntriesLabel . '</span>\');
+            return;
+        }
+        var rowStyle = "display:flex; align-items:baseline; gap:8px; margin-bottom:2px;";
+        var valStyle = "flex:1; min-width:0; font-style:italic; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+        var badgeStyle = "flex:none; padding:1px 6px; border-radius:3px; font-family:monospace; font-size:11px; background:#e9ecef; color:#495057;";
+        var badgeWarnStyle = "flex:none; padding:1px 6px; border-radius:3px; font-family:monospace; font-size:11px; background:#fff3cd; color:#856404;";
+        var html = entries.map(function(e) {
+            var truncated = e.len > 256;
+            var displayLen = truncated ? 256 : e.len;
+            var badge = truncated ? badgeWarnStyle : badgeStyle;
+            var suffix = truncated ? \' <em>(' . $truncatedLabel . ')</em>\' : "";
+            return \'<div style="\' + rowStyle + \'">\' +
+                \'<b>\' + escapeHtml(e.key) + \'</b>\' +
+                \'<span style="\' + valStyle + \'">"\' + escapeHtml(e.value) + \'"</span>\' +
+                \'<span style="\' + badge + \'">\' + displayLen + \'/256</span>\' +
+                suffix +
+                \'</div>\';
+        }).join("");
+        el.html(html);
+    }
+
+    if (!insertHelper()) {
+        var retry = setInterval(function() {
+            if (insertHelper()) { clearInterval(retry); updateCounter(); }
+        }, 500);
+        setTimeout(function() { clearInterval(retry); }, 10000);
+    } else {
+        updateCounter();
+    }
+    var counterInterval = setInterval(updateCounter, 500);
+    jQuery(window).on("beforeunload", function() { clearInterval(counterInterval); });
+    jQuery(document).on("input change", "textarea[name=\'note_public\']", updateCounter);
+});
+</script>';
+    }
+
+    /**
      * @brief Adds KSeF status display to invoice form
      * @param $parameters Hook parameters
      * @param $object Invoice object
@@ -1286,6 +1552,17 @@ class ActionsKSEF
             dol_include_once('/ksef/class/ksef_client.class.php');
 
             print '<style>tr:has(.facture_extras_ksef_number), tr:has(.facture_extras_ksef_status), tr:has(.facture_extras_ksef_submission_date) { display: none !important; }</style>';
+
+            // Hide DodatkowyOpis mode override row unless feature is configured
+            $_dodActiveCheck_noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled');
+            $_dodActiveCheck_efConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+            if ((!isset($object->array_options) || empty($object->array_options)) && method_exists($object, 'fetch_optionals')) {
+                $object->fetch_optionals();
+            }
+            $_dodActiveCheck_override = isset($object->array_options['options_ksef_dodatkowy_opis_mode']) ? trim((string) $object->array_options['options_ksef_dodatkowy_opis_mode']) : '';
+            if ($_dodActiveCheck_noteMode === 'disabled' && empty($_dodActiveCheck_efConf) && $_dodActiveCheck_override === '') {
+                print '<style>tr:has(.facture_extras_ksef_dodatkowy_opis_mode) { display: none !important; }</style>';
+            }
 
             // Relocate ksef_sale_date below the invoice date field
             print '<script type="text/javascript">
@@ -1349,6 +1626,27 @@ jQuery(document).ready(function() {
                 if (!empty($submission->ksef_number)) {
                     print '<style>a[href*="attribute=ksef_sale_date"], a[href*="attribute=ksef_kurs_data"] { display: none !important; }</style>';
                 }
+            }
+
+            // DodatkowyOpis preview panel
+            $ctx = $this->ksefComputeDodatkowyOpisContext($object);
+            if ($ctx['featureActive']) {
+                // Preview panel
+                print '<tr id="ksef_dodatkowy_preview_row"><td class="titlefieldcreate">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW") . '</td><td colspan="3">';
+                print $this->ksefRenderDodatkowyOpisPreviewInner($object);
+                print '</td></tr>';
+                print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var modeRow = jQuery("tr").has(".facture_extras_ksef_dodatkowy_opis_mode");
+    if (!modeRow.length) return;
+    var previewRow = jQuery("#ksef_dodatkowy_preview_row");
+    if (previewRow.length) {
+        modeRow.detach().insertBefore(previewRow).show();
+    }
+});
+</script>';
+
+                print $this->ksefRenderDodatkowyOpisHelperScript($object);
             }
         }
 
@@ -1610,11 +1908,86 @@ jQuery(document).ready(function() {
     }
 
     /**
+     * @brief Renders the notes preview
+     * @return int Status code
+     * @called_by Dolibarr hook: printCommonFooter
+     */
+    public function printCommonFooter($parameters, &$object, &$action, $hookmanager)
+    {
+        global $langs, $db, $conf;
+
+        $currentcontext = $parameters['currentcontext'] ?? '';
+        if ($currentcontext !== 'invoicenote') return 0;
+
+        $id = GETPOSTINT('id');
+        if (empty($id)) {
+            $ref = GETPOST('ref', 'alpha');
+            if (empty($ref)) return 0;
+        }
+        require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture.class.php';
+        $invoice = new Facture($db);
+        $fetchRes = !empty($id) ? $invoice->fetch($id) : $invoice->fetch(0, $ref);
+        if ($fetchRes <= 0 || empty($invoice->id)) return 0;
+        $invoice->fetch_optionals();
+
+        dol_include_once('/ksef/class/fa3_builder.class.php');
+        $langs->load('ksef@ksef');
+
+        $ctx = $this->ksefComputeDodatkowyOpisContext($invoice);
+        if (!$ctx['featureActive']) return 0;
+
+        $currentOverride = $ctx['dodOverride'];
+
+        // Build the notes panel
+        print '<div id="ksef_notes_panel" style="margin:12px 0; padding:12px; border:1px solid #e0e0e0; border-radius:4px; background:#fafbfc;">';
+        print '<h4 style="margin:0 0 8px 0;">' . $langs->trans("KSEF_DODATKOWY_OPIS_SECTION") . '</h4>';
+
+        // Override dropdown
+        print '<form method="POST" action="' . dol_escape_htmltag($_SERVER["PHP_SELF"]) . '?id=' . (int) $invoice->id . '" style="margin-bottom:10px;">';
+        print '<input type="hidden" name="token" value="' . newToken() . '">';
+        print '<input type="hidden" name="action" value="ksef_set_note_override">';
+        print '<input type="hidden" name="id" value="' . (int) $invoice->id . '">';
+        print '<label for="ksef_note_override_sel" style="margin-right:6px;">' . $langs->trans("KSEF_ExtraFieldDodatkowyOpisMode") . ':</label>';
+        print '<select name="ksef_override_value" id="ksef_note_override_sel" class="flat">';
+        $modeOptions = array(
+            '' => 'KSEF_DodatkowyOpisMode_Default',
+            'simple' => 'KSEF_DodatkowyOpisMode_Simple',
+            'keyvalue' => 'KSEF_DodatkowyOpisMode_KeyValue',
+            'disabled' => 'KSEF_DodatkowyOpisMode_Disabled',
+        );
+        foreach ($modeOptions as $val => $labelKey) {
+            $sel = ($currentOverride === $val) ? ' selected' : '';
+            print '<option value="' . dol_escape_htmltag($val) . '"' . $sel . '>' . dol_escape_htmltag($langs->trans($labelKey)) . '</option>';
+        }
+        print '</select> ';
+        print '<button type="submit" class="button button-small">' . $langs->trans("Save") . '</button>';
+        print '</form>';
+
+        // Preview pane
+        print '<div style="margin-top:8px;"><strong>' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW") . '</strong></div>';
+        print $this->ksefRenderDodatkowyOpisPreviewInner($invoice, false);
+        print '</div>';
+        print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var panel = jQuery("#ksef_notes_panel");
+    if (!panel.length) return;
+    var anchor = jQuery("#dragDropAreaTabBar .tagtable").first();
+    if (!anchor.length) anchor = jQuery(".fiche .tagtable").first();
+    if (!anchor.length) anchor = jQuery("textarea[name=\'note_public\']").first().closest(".tagtable");
+    if (!anchor.length) anchor = jQuery(".tagtable").first();
+    if (anchor.length) {
+        panel.detach().insertAfter(anchor);
+    }
+});
+</script>';
+
+        print $this->ksefRenderDodatkowyOpisHelperScript($invoice);
+
+        return 0;
+    }
+
+    /**
      * @brief Adds submission count badge to KSeF tab
-     * @param $parameters Hook parameters
-     * @param $object Invoice object
-     * @param $action Current action
-     * @param $hookmanager Hook manager
      * @return int Status code
      * @called_by Dolibarr hook: completeTabsHead
      */

@@ -1301,10 +1301,13 @@ class KsefInvoicePdf
         $pdf->SetFont($this->fontFamily, '', $smallTableFont);
         $rowNum = 1;
         foreach ($items as $item) {
+            $rodzaj = $item['key'] ?? '';
             $tresc = $item['value'] ?? '';
 
-            $lineCount = substr_count($tresc, "\n") + 1;
-            $rowHeight = max(5, $lineCount * 4);
+            $rodzajLines = $rodzaj !== '' ? $pdf->getNumLines($rodzaj, $colW[1] - 2) : 1;
+            $trescLines = $tresc !== '' ? $pdf->getNumLines($tresc, $colW[2] - 2) : 1;
+            $maxLines = max($rodzajLines, $trescLines, 1);
+            $rowHeight = max(5, $maxLines * 4);
 
             $oldY = $y;
             $y = $this->checkPageBreak($y, $rowHeight + 2);
@@ -1333,18 +1336,16 @@ class KsefInvoicePdf
 
             // Rodzaj
             $pdf->SetXY($x, $y);
-            $pdf->Cell($colW[1], $rowHeight, $item['key'] ?? '', 1, 0, 'L');
+            $pdf->Cell($colW[1], $rowHeight, '', 1, 0, 'L');
+            $pdf->SetXY($x + 1, $y + 1);
+            $pdf->MultiCell($colW[1] - 2, 4, $rodzaj, 0, 'L', false, 0);
             $x += $colW[1];
 
             // Treść
             $pdf->SetXY($x, $y);
-            if ($lineCount > 1) {
-                $pdf->Cell($colW[2], $rowHeight, '', 1, 0, 'L');
-                $pdf->SetXY($x + 1, $y + 1);
-                $pdf->MultiCell($colW[2] - 2, 4, $tresc, 0, 'L', false, 0);
-            } else {
-                $pdf->Cell($colW[2], $rowHeight, $tresc, 1, 0, 'L');
-            }
+            $pdf->Cell($colW[2], $rowHeight, '', 1, 0, 'L');
+            $pdf->SetXY($x + 1, $y + 1);
+            $pdf->MultiCell($colW[2] - 2, 4, $tresc, 0, 'L', false, 0);
 
             $y += $rowHeight;
             $rowNum++;

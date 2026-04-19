@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.5';
+        $this->version = '1.3.6';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -65,6 +65,7 @@ class modKSEF extends DolibarrModules
             'hooks' => array(
                 'invoicecard',
                 'invoicelist',
+                'invoicenote',
                 'invoicesuppliercard',
                 'completeTabsHead',
                 'afterPDFTotalTable',
@@ -480,6 +481,32 @@ class modKSEF extends DolibarrModules
                 'totalizable' => 0,
                 'printable' => 0,
             ),
+            'ksef_dodatkowy_opis_mode' => array(
+                'label' => 'KSEF_ExtraFieldDodatkowyOpisMode',
+                'type' => 'select',
+                'pos' => 110,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => array('options' => array(
+                    ''         => 'KSEF_DodatkowyOpisMode_Default',
+                    'simple'   => 'KSEF_DodatkowyOpisMode_Simple',
+                    'keyvalue' => 'KSEF_DodatkowyOpisMode_KeyValue',
+                    'disabled' => 'KSEF_DodatkowyOpisMode_Disabled',
+                )),
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '0',
+                'help' => 'KSEF_ExtraFieldDodatkowyOpisModeHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
 
         );
 
@@ -489,6 +516,9 @@ class modKSEF extends DolibarrModules
             $existingFields = $extrafields->fetch_name_optionals_label($elementType);
 
             foreach ($extraFieldDefs as $fieldName => $def) {
+                if (isset($def['element_types']) && is_array($def['element_types']) && !in_array($elementType, $def['element_types'])) {
+                    continue;
+                }
                 if (!isset($existingFields[$fieldName])) {
                     $result = $extrafields->addExtraField(
                         $fieldName,
@@ -790,6 +820,9 @@ class modKSEF extends DolibarrModules
             }
             dolibarr_set_const($db, 'KSEF_MIGRATION_VERSION', $version, 'chaine', 0, '', $conf->entity);
         }
+
+        // Record the version this module was activated at
+        dolibarr_set_const($db, 'KSEF_LAST_INIT_VERSION', $this->version, 'chaine', 0, '', $conf->entity);
 
         return $this->_init($sql, $options);
     }

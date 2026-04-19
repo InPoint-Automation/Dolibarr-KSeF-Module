@@ -163,6 +163,64 @@ KSEF_FA3_SALE_DATE_SOURCE_Help=Określa, jak automatycznie wypełniane jest pole
 KSEF_FA3_SALE_DATE_SOURCE_INVOICE=Data wystawienia faktury
 KSEF_FA3_SALE_DATE_SOURCE_DELIVERY=Z powiązanych dokumentów (domyślnie)
 
+# Uwagi i pola niestandardowe faktury (DodatkowyOpis w XML KSeF)
+KSEF_DODATKOWY_OPIS_SECTION=Uwagi i pola niestandardowe faktury
+KSEF_DODATKOWY_OPIS_NOTE_MODE=Tryb pola Uwaga (publiczna)
+KSEF_DODATKOWY_OPIS_NOTE_MODE_Help=Kontroluje sposób dołączenia Uwagi (publicznej) faktury do XML KSeF.<br><b>Prosty</b> wysyła całą treść jako wpis z kluczem "Uwagi", dzieląc na fragmenty po 256 znaków jeśli to konieczne.<br><b>Klucz:Wartość</b> parsuje każdą linię przy pierwszym dwukropku. Tekst przed dwukropkiem to klucz, tekst po dwukropku to wartość.
+KSEF_DODATKOWY_OPIS_NOTE_MODE_DISABLED=Wyłączone
+KSEF_DODATKOWY_OPIS_NOTE_MODE_SIMPLE=Prosty (cała treść jako jeden wpis)
+KSEF_DODATKOWY_OPIS_NOTE_MODE_KEYVALUE=Klucz:Wartość (parsowanie linii)
+KSEF_DODATKOWY_OPIS_EXTRAFIELDS=Dołącz pola dodatkowe faktury
+KSEF_DODATKOWY_OPIS_EXTRAFIELDS_Help=Wybierz, które pola niestandardowe faktury mają być dołączone jako pary klucz-wartość do XML KSeF. Przetłumaczona etykieta pola jest używana jako klucz, a wartość pola jako wartość. Oba są obcinane do 256 znaków.
+KSEF_DODATKOWY_OPIS_NO_EXTRAFIELDS=Brak dostępnych pól dodatkowych (znaleziono tylko pola systemowe KSeF). Utwórz pola dodatkowe faktury w konfiguracji Dolibarr, aby korzystać z tej funkcji.
+KSEF_DODATKOWY_OPIS_PREVIEW=Podgląd uwag
+KSEF_DODATKOWY_OPIS_PREVIEW_ENTRIES=Rozwiń aby zobaczyć
+KSEF_DODATKOWY_OPIS_PREVIEW_KEY=Klucz
+KSEF_DODATKOWY_OPIS_PREVIEW_VALUE=Wartość
+KSEF_DODATKOWY_OPIS_HINT_SIMPLE=<b>Tryb prosty:</b> Uwaga (publiczna) zostanie wysłana jako pojedynczy wpis z kluczem "Uwagi". Jeśli tekst przekracza 256 znaków, zostanie podzielony na numerowane wpisy (Uwagi, Uwagi 2, Uwagi 3, ...).
+KSEF_DODATKOWY_OPIS_HINT_KEYVALUE=<b>Tryb Klucz:Wartość:</b> każda linia jest parsowana przy pierwszym dwukropku. Przykład: <code>Numer zamówienia: ZAM/2026/001</code><br>Linie bez dwukropka są ignorowane. Zarówno "Klucz:Wartość" jak i "Klucz: Wartość" (ze spacją) działają.
+KSEF_DODATKOWY_OPIS_HINT_EXTRAFIELDS=Dodatkowo %s pól dodatkowych skonfigurowanych w ustawieniach modułu również zostanie dołączone.
+KSEF_DODATKOWY_OPIS_CHARS_LABEL=znaków
+KSEF_DODATKOWY_OPIS_NOTE_NO_ENTRIES=Brak wpisów. Zacznij wpisywać, aby zobaczyć szczegóły.
+KSEF_DODATKOWY_OPIS_NOTE_TRUNCATED=obcięte
+KSEF_DODATKOWY_OPIS_PREVIEW_FROM_NOTE=Z pola Uwaga (publiczna)
+KSEF_DODATKOWY_OPIS_PREVIEW_FROM_EXTRAFIELDS=Z pól dodatkowych
+KSEF_DODATKOWY_OPIS_PREVIEW_EMPTY_SECTION=(brak wpisów)
+KSEF_DODATKOWY_OPIS_PREVIEW_OVERRIDDEN=nadpisano: %s
+KSEF_DODATKOWY_OPIS_CREATE_FIELD=Utwórz nowe pole niestandardowe
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL=Etykieta (pokazywana jako Klucz w XML KSeF)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE=Kod pola (nazwa wewnętrzna)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE=Typ
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_OPTIONS=Opcje (jedna na linię, format: kod|Etykieta lub tylko Etykieta)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUBMIT=Utwórz pole
+KSEF_DODATKOWY_OPIS_EDIT_FIELD=Edytuj pole
+KSEF_DODATKOWY_OPIS_EDIT_FIELD_SUBMIT=Zapisz zmiany
+KSEF_DODATKOWY_OPIS_DELETE_FIELD=Usuń
+KSEF_DODATKOWY_OPIS_DELETE_CONFIRM=Usunąć pole dodatkowe "%s"? Spowoduje to usunięcie pola i wszystkich wartości zapisanych na istniejących fakturach.
+KSEF_DODATKOWY_OPIS_TYPE_VARCHAR=Tekst (do 255 znaków)
+KSEF_DODATKOWY_OPIS_TYPE_TEXT=Długi tekst
+KSEF_DODATKOWY_OPIS_TYPE_INT=Liczba całkowita
+KSEF_DODATKOWY_OPIS_TYPE_DOUBLE=Liczba dziesiętna
+KSEF_DODATKOWY_OPIS_TYPE_DATE=Data
+KSEF_DODATKOWY_OPIS_TYPE_DATETIME=Data i czas
+KSEF_DODATKOWY_OPIS_TYPE_SELECT=Lista wyboru
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUCCESS=Pole niestandardowe "%s" utworzone i dołączone do listy uwag
+KSEF_DODATKOWY_OPIS_UPDATE_SUCCESS=Pole dodatkowe "%s" zaktualizowane
+KSEF_DODATKOWY_OPIS_DELETE_SUCCESS=Pole dodatkowe "%s" usunięte
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL=Etykieta jest wymagana
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_CODE=Kod pola musi zawierać tylko małe litery, cyfry i podkreślenia, i musi zaczynać się od litery.
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_TYPE=Nieprawidłowy typ pola
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_RESERVED=Kod pola nie może zaczynać się od "ksef_" (zarezerwowane dla pól systemowych modułu)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUPLICATE=Pole o tym kodzie już istnieje
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUP_LABEL=Pole niestandardowe o tej etykiecie już istnieje
+KSEF_DODATKOWY_OPIS_INTERNAL_CODE=Kod wewnętrzny
+KSEF_DODATKOWY_OPIS_OVERRIDE_SAVED=Zapisano nadpisanie trybu uwag
+KSEF_MODULE_NEEDS_REACTIVATION=Moduł zaktualizowany, ale nie aktywowany ponownie
+KSEF_MODULE_NEEDS_REACTIVATION_Desc=Moduł KSeF został zaktualizowany z wersji %s do wersji %s. Niektóre funkcje mogą nie działać, dopóki nie wyłączysz i ponownie włączysz moduł na liście modułów.
+KSEF_VERSION_UNKNOWN=nieznanej
+KSEF_GOTO_MODULES_LIST=Przejdź do listy modułów
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_NOT_FOUND=Pole dodatkowe nie znalezione
+
 # ============================================
 # Connection & Testing
 # ============================================
@@ -277,6 +335,17 @@ KSEF_AuthenticationDesc=Certyfikaty są lepszym wyborem, ale tokeny działają d
 
 KSEF_OptionalFields=Pola opcjonalne
 KSEF_OptionalFieldsDesc=W ustawieniach można włączyć opcjonalne pola FA(3) takie jak kody klientów, indeksy produktów, GTIN i jednostki miary. Włącz je jeśli masz te dane w Dolibarr i chcesz je uwzględniać w wysyłkach do KSeF.
+
+KSEF_HowTo_Config_Notes=Uwagi i pola niestandardowe faktury
+KSEF_HowTo_Config_NotesIntro=Dołącz dodatkową treść do XML KSeF z pola Uwaga (publiczna) faktury i pól niestandardowych faktury. Skonfiguruj oba w ustawieniach modułu w sekcji "Uwagi i pola niestandardowe faktury".
+KSEF_HowTo_Config_NotesModes=Dwa tryby dla Uwagi (publicznej). <b>Prosty</b> wysyła całą treść jako jeden wpis z kluczem "Uwagi", dzieląc na numerowane wpisy jeśli przekracza 256 znaków. <b>Klucz:Wartość</b> parsuje każdą linię przy pierwszym dwukropku jako osobny wpis. Linie bez dwukropka są pomijane. Przykład:
+KSEF_HowTo_Config_NotesKeyValueExample=Numer zamówienia: ZAM/2026/001<br>Uwagi specjalne: Ostrożnie, kruche
+KSEF_HowTo_Config_CustomFields=Utwórz pole niestandardowe przyciskiem "Utwórz nowe pole niestandardowe" w ustawieniach modułu lub wybierz istniejące pole dodatkowe faktury z listy. Ikony ołówka i kosza edytują lub usuwają pole. Obsługiwane typy: tekst, długi tekst, liczba całkowita, liczba dziesiętna, data, data i czas, lista wyboru.
+KSEF_HowTo_Config_Limits=Klucze i wartości są ograniczone do 256 znaków. Tryb prosty dzieli dłuższe notatki na numerowane wpisy. Wartości Klucz:Wartość i pól niestandardowych powyżej 256 znaków są obcinane.
+KSEF_HowTo_Sending_Notes=Uwagi i pola niestandardowe faktury
+KSEF_HowTo_Sending_NotesEditing=Uwagi edytuje się na zakładce Notatki faktury. Pod polem tekstowym pojawia się pole pomocnicze pokazujące aktualny tryb, rozbicie wpisów z licznikami znaków oraz pola niestandardowe, które zostaną dołączone.
+KSEF_HowTo_Sending_NotesPreview=Zakładka Notatki i karta faktury pokazują panel podglądu z dokładną zawartością wysyłaną do KSeF, pogrupowaną według źródła. Panel odzwierciedla ostatni zapisany stan.
+KSEF_HowTo_Sending_NotesOverride=Na zakładce Notatki lista rozwijana "Tryb uwag (ta faktura)" nadpisuje globalne ustawienie dla jednej faktury. Prosty lub Klucz:Wartość wymusza Uwagę w tym trybie; skonfigurowane pola niestandardowe nadal są dołączane. Wyłączone pomija całą sekcję w XML tej faktury.
 
 KSEF_CompanyIdentifiers=Identyfikatory firmy
 KSEF_CompanyIdentifiersDesc=NIP jest wymagany. KRS, REGON i BDO są opcjonalne i uzupełnią się automatycznie z ustawień firmy, jeśli zostały tam skonfigurowane.
@@ -492,6 +561,12 @@ KSEF_StatusOffline=Tryb offline
 KSEF_StatusValidationFailed=Błąd walidacji
 KSEF_ExtraFieldSaleDate=Data sprzedaży
 KSEF_ExtraFieldSaleDateHelp=Data sprzedaży/dostawy. Automatycznie uzupełniana z daty dostawy zamówienia lub daty faktury. Można nadpisać ręcznie.
+KSEF_ExtraFieldDodatkowyOpisMode=Tryb uwag (ta faktura)
+KSEF_ExtraFieldDodatkowyOpisModeHelp=Nadpisz globalne ustawienie uwag tylko dla tej faktury. "Domyślnie" używa globalnych ustawień modułu. "Prosty" lub "Klucz:Wartość" wymusza Uwagę w tym trybie; skonfigurowane pola niestandardowe nadal są dołączane. "Wyłączone" całkowicie pomija sekcję uwag w XML KSeF tej faktury.
+KSEF_DodatkowyOpisMode_Default=Domyślnie (użyj ustawień modułu)
+KSEF_DodatkowyOpisMode_Simple=Prosty (Uwaga jako jeden wpis)
+KSEF_DodatkowyOpisMode_KeyValue=Klucz:Wartość (parsuj linie Uwagi)
+KSEF_DodatkowyOpisMode_Disabled=Wyłączone (bez sekcji uwag)
 KSEF_NotSubmitted=Brak w KSeF
 
 # ============================================

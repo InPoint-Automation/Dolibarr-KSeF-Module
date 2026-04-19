@@ -163,6 +163,64 @@ KSEF_FA3_SALE_DATE_SOURCE_Help=Controls how the ksef_sale_date extrafield is aut
 KSEF_FA3_SALE_DATE_SOURCE_INVOICE=Invoice date only
 KSEF_FA3_SALE_DATE_SOURCE_DELIVERY=Linked delivery/order date (default)
 
+# Invoice Notes and Custom Fields (DodatkowyOpis in KSeF XML)
+KSEF_DODATKOWY_OPIS_SECTION=Invoice Notes and Custom Fields
+KSEF_DODATKOWY_OPIS_NOTE_MODE=Public Note Mode
+KSEF_DODATKOWY_OPIS_NOTE_MODE_Help=Controls how the invoice public note is included in the KSeF XML.<br><b>Simple</b> sends the full note as remark(s) with key "Uwagi", splitting into 256-character chunks if needed.<br><b>Key:Value</b> parses each line at the first colon. Text before the colon becomes the key, text after becomes the value.
+KSEF_DODATKOWY_OPIS_NOTE_MODE_DISABLED=Disabled
+KSEF_DODATKOWY_OPIS_NOTE_MODE_SIMPLE=Simple (full note as remark)
+KSEF_DODATKOWY_OPIS_NOTE_MODE_KEYVALUE=Key:Value (parse lines)
+KSEF_DODATKOWY_OPIS_EXTRAFIELDS=Include Invoice Extrafields
+KSEF_DODATKOWY_OPIS_EXTRAFIELDS_Help=Select which invoice custom fields to include as key-value pairs in the KSeF XML. The field's translated label is used as the key, and the field value as the value. Both are truncated to 256 characters.
+KSEF_DODATKOWY_OPIS_NO_EXTRAFIELDS=No custom extrafields available (only KSeF system fields found). Create invoice extrafields in Dolibarr setup to use this feature.
+KSEF_DODATKOWY_OPIS_PREVIEW=Notes Preview
+KSEF_DODATKOWY_OPIS_PREVIEW_ENTRIES=Expand to see
+KSEF_DODATKOWY_OPIS_PREVIEW_KEY=Key
+KSEF_DODATKOWY_OPIS_PREVIEW_VALUE=Value
+KSEF_DODATKOWY_OPIS_HINT_SIMPLE=<b>Simple mode:</b> the note will be sent as a single entry with key "Uwagi". If the text exceeds 256 characters, it will be split into numbered entries (Uwagi, Uwagi 2, Uwagi 3, ...).
+KSEF_DODATKOWY_OPIS_HINT_KEYVALUE=<b>Key:Value mode:</b> each line is parsed at the first colon. Example: <code>Order number: ZAM/2026/001</code><br>Lines without a colon are ignored. Both "Key:Value" and "Key: Value" (with space) work.
+KSEF_DODATKOWY_OPIS_HINT_EXTRAFIELDS=Plus %s extrafield(s) configured in module settings will also be included.
+KSEF_DODATKOWY_OPIS_CHARS_LABEL=characters
+KSEF_DODATKOWY_OPIS_NOTE_NO_ENTRIES=No entries yet. Start typing to see the breakdown.
+KSEF_DODATKOWY_OPIS_NOTE_TRUNCATED=truncated
+KSEF_DODATKOWY_OPIS_PREVIEW_FROM_NOTE=From public note
+KSEF_DODATKOWY_OPIS_PREVIEW_FROM_EXTRAFIELDS=From extrafields
+KSEF_DODATKOWY_OPIS_PREVIEW_EMPTY_SECTION=(no entries yet)
+KSEF_DODATKOWY_OPIS_PREVIEW_OVERRIDDEN=overridden: %s
+KSEF_DODATKOWY_OPIS_CREATE_FIELD=Create new custom field
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL=Label (shown as Klucz in KSeF XML)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE=Field code (internal name)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE=Type
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_OPTIONS=Options (one per line, format: code|Label or just Label)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUBMIT=Create field
+KSEF_DODATKOWY_OPIS_EDIT_FIELD=Edit field
+KSEF_DODATKOWY_OPIS_EDIT_FIELD_SUBMIT=Save changes
+KSEF_DODATKOWY_OPIS_DELETE_FIELD=Delete
+KSEF_DODATKOWY_OPIS_DELETE_CONFIRM=Delete extrafield "%s"? This removes the field and all values stored on existing invoices.
+KSEF_DODATKOWY_OPIS_TYPE_VARCHAR=Text (up to 255 chars)
+KSEF_DODATKOWY_OPIS_TYPE_TEXT=Long text
+KSEF_DODATKOWY_OPIS_TYPE_INT=Integer
+KSEF_DODATKOWY_OPIS_TYPE_DOUBLE=Decimal
+KSEF_DODATKOWY_OPIS_TYPE_DATE=Date
+KSEF_DODATKOWY_OPIS_TYPE_DATETIME=Date and time
+KSEF_DODATKOWY_OPIS_TYPE_SELECT=Select (dropdown)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUCCESS=Custom field "%s" created and included in the notes list
+KSEF_DODATKOWY_OPIS_UPDATE_SUCCESS=Extrafield "%s" updated
+KSEF_DODATKOWY_OPIS_DELETE_SUCCESS=Extrafield "%s" deleted
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL=Label is required
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_CODE=Field code must be lowercase letters, digits and underscores only, and must start with a letter.
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_TYPE=Invalid field type
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_RESERVED=Field code cannot start with "ksef_" (reserved for module system fields)
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUPLICATE=A field with this code already exists
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUP_LABEL=A custom field with this label already exists
+KSEF_DODATKOWY_OPIS_INTERNAL_CODE=Internal code
+KSEF_DODATKOWY_OPIS_OVERRIDE_SAVED=Notes mode override saved
+KSEF_MODULE_NEEDS_REACTIVATION=Module updated but not re-activated
+KSEF_MODULE_NEEDS_REACTIVATION_Desc=The KSeF module was updated from version %s to version %s. Some features may not work until you disable and re-enable the module in the modules list.
+KSEF_VERSION_UNKNOWN=unknown
+KSEF_GOTO_MODULES_LIST=Go to modules list
+KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_NOT_FOUND=Extrafield not found
+
 # ============================================
 # Connection & Testing
 # ============================================
@@ -277,6 +335,17 @@ KSEF_AuthenticationDesc=Certificates are the better choice, however tokens work 
 
 KSEF_OptionalFields=Optional Fields
 KSEF_OptionalFieldsDesc=The setup page has toggles for optional FA(3) fields like customer codes, product references, GTINs, and units of measure. Enable these if you have the data in Dolibarr and want it included in your KSeF submissions.
+
+KSEF_HowTo_Config_Notes=Invoice Notes and Custom Fields
+KSEF_HowTo_Config_NotesIntro=Include extra content in the KSeF XML from the invoice's public note and from invoice custom fields. Configure both in module setup under "Invoice Notes and Custom Fields".
+KSEF_HowTo_Config_NotesModes=Two modes for the public note. <b>Simple</b> sends the whole note as one entry keyed "Uwagi", splitting into numbered entries if over 256 characters. <b>Key:Value</b> parses each line at the first colon into a separate entry. Lines without a colon are skipped. Example:
+KSEF_HowTo_Config_NotesKeyValueExample=Order number: ZAM/2026/001<br>Special instructions: Handle with care
+KSEF_HowTo_Config_CustomFields=Create a custom field with the "Create new custom field" button in the module setup, or pick an existing invoice extrafield from the list. Pencil and trash icons edit or remove a field. Supported types: text, long text, integer, decimal, date, date+time, select.
+KSEF_HowTo_Config_Limits=Keys and values are capped at 256 characters. Simple mode splits longer notes into numbered entries. Key:Value and custom field values beyond 256 characters are truncated.
+KSEF_HowTo_Sending_Notes=Invoice Notes and Custom Fields
+KSEF_HowTo_Sending_NotesEditing=Notes are edited on the invoice's Notes tab. A helper box below the textarea shows the current mode, a per-entry character breakdown, and any custom fields that will be included.
+KSEF_HowTo_Sending_NotesPreview=The Notes tab and invoice card both show a preview panel listing exactly what will be sent, grouped by source. The panel reflects the last saved state.
+KSEF_HowTo_Sending_NotesOverride=On the Notes tab, the "Notes mode (this invoice)" dropdown overrides the global setting for one invoice. Simple or Key:Value forces the note to that mode; configured custom fields are still included. Disabled omits the whole section from that invoice's XML.
 
 KSEF_CompanyIdentifiers=Company Identifiers
 KSEF_CompanyIdentifiersDesc=NIP is required. KRS, REGON, and BDO are optional and will auto-populate from your company settings if configured there.
@@ -492,6 +561,12 @@ KSEF_StatusOffline=Offline
 KSEF_StatusValidationFailed=Validation Failed
 KSEF_ExtraFieldSaleDate=Date of Sale
 KSEF_ExtraFieldSaleDateHelp=Date of sale/delivery. Auto-populated from linked sales order delivery date, or invoice date. Can be manually overridden.
+KSEF_ExtraFieldDodatkowyOpisMode=Notes mode (this invoice)
+KSEF_ExtraFieldDodatkowyOpisModeHelp=Override the global Invoice Notes setting for this invoice only. "Default" uses the module global settings. "Simple" or "Key:Value" forces the note to that mode; configured custom fields are still included. "Disabled" omits the notes section entirely from this invoice's KSeF XML.
+KSEF_DodatkowyOpisMode_Default=Default (use module settings)
+KSEF_DodatkowyOpisMode_Simple=Simple (note as single Uwagi)
+KSEF_DodatkowyOpisMode_KeyValue=Key:Value (parse note lines)
+KSEF_DodatkowyOpisMode_Disabled=Disabled (no notes section)
 KSEF_NotSubmitted=No KSeF data
 
 # ============================================

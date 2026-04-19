@@ -33,6 +33,27 @@ define('KSEF_FA3_NAMESPACE', 'http://crd.gov.pl/wzor/2025/06/25/13775/');
 define('KSEF_FA3_SCHEMA_VERSION', '1-0E');
 
 /**
+ * @brief Returns true if the module has been updated
+ * @param string $currentVersion Version declared by the running module code
+ * @param string $lastInitVersion Version stored in KSEF_LAST_INIT_VERSION (empty if never initialized)
+ * @return bool
+ */
+function ksefNeedsReactivation($currentVersion, $lastInitVersion)
+{
+    if (empty($lastInitVersion)) return true;
+    return version_compare($lastInitVersion, $currentVersion, '<');
+}
+
+/**
+ * @brief Extrafield types not supported as DodatkowyOpis entries
+ * @return string[]
+ */
+function ksefDodatkowyOpisUnsupportedTypes()
+{
+    return array('boolean', 'html', 'link', 'checkbox', 'chkbxlst', 'stars', 'radio', 'separate', 'password');
+}
+
+/**
  * @brief Gets KSeF portal base URL
  * @param string|null $environment Environment (TEST, DEMO, PRODUCTION). If null, uses configured environment.
  * @return string Portal base URL

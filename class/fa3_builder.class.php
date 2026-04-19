@@ -485,6 +485,9 @@ class FA3Builder
             $this->buildDaneFaKorygowanej($xml, $fa, $originalInvoice);
         }
 
+        // Additional Description (DodatkowyOpis)
+        $this->buildDodatkowyOpis($xml, $fa, $invoice);
+
         // Invoice Lines
         $this->buildFaWiersz($xml, $fa, $invoice);
 
@@ -598,6 +601,208 @@ class FA3Builder
         $pmarzy = $xml->createElement('PMarzy');
         $adnotacje->appendChild($pmarzy);
         $pmarzy->appendChild($xml->createElement('P_PMarzyN', '1')); // Not margin scheme
+    }
+
+    /**
+     * @brief Strips HTML from note text
+     * @param string $html HTML text
+     * @return string Plain text
+     * @called_by parseDodatkowyOpisPreview()
+     */
+    private static function stripNoteHtml($html)
+    {
+        $text = preg_replace('/<br\s*\/?>/i', "\n", $html);
+        $text = preg_replace('/<\/(p|div)>/i', "\n", $text);
+        $text = strip_tags($text);
+        $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+        return trim(self::sanitizeForXml($text));
+    }
+
+    /**
+     * @brief Strips ASCII control characters
+     * @param string $str
+     * @return string
+     */
+    private static function sanitizeForXml($str)
+    {
+        return preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]/', '', (string) $str);
+    }
+
+    /**
+     * @brief Parses DodatkowyOpis entries
+     * @param object $invoice Invoice object
+     * @param object $conf Dolibarr config
+     * @param object $db Database handler
+     * @return array Array of ['key' => string, 'value' => string] entries
+     * @called_by buildDodatkowyOpis(), actions_ksef formObjectOptions preview
+     */
+    public static function parseDodatkowyOpisPreview($invoice, $conf, $db)
+    {
+        global $langs;
+
+        dol_include_once('/ksef/lib/ksef.lib.php');
+
+        $entries = array();
+
+        // Load invoice extrafields once
+        if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+            if (method_exists($invoice, 'fetch_optionals')) {
+                $invoice->fetch_optionals();
+            }
+        }
+
+        // Per-invoice override
+        $invoiceOverride = isset($invoice->array_options['options_ksef_dodatkowy_opis_mode'])
+            ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
+            : '';
+
+        if ($invoiceOverride === 'disabled') {
+            return $entries;
+        }
+
+        $globalNoteMode = isset($conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE) ? $conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE : 'disabled';
+        if ($invoiceOverride === 'simple' || $invoiceOverride === 'keyvalue') {
+            $effectiveNoteMode = $invoiceOverride;
+            $includeExtrafields = true;
+        } else {
+            $effectiveNoteMode = $globalNoteMode;
+            $includeExtrafields = true;
+        }
+
+        // Process note_public
+        if ($effectiveNoteMode !== 'disabled' && !empty($invoice->note_public)) {
+            $text = self::stripNoteHtml($invoice->note_public);
+
+            if (!empty($text)) {
+                if ($effectiveNoteMode === 'simple') {
+                    $totalLen = mb_strlen($text, 'UTF-8');
+                    if ($totalLen <= 256) {
+                        $entries[] = array('key' => 'Uwagi', 'value' => $text, 'source' => 'note');
+                    } else {
+                        $chunkNum = 0;
+                        for ($offset = 0; $offset < $totalLen; $offset += 256) {
+                            $chunk = mb_substr($text, $offset, 256, 'UTF-8');
+                            $chunkNum++;
+                            $label = ($chunkNum == 1) ? 'Uwagi' : 'Uwagi ' . $chunkNum;
+                            $entries[] = array('key' => $label, 'value' => $chunk, 'source' => 'note');
+                        }
+                    }
+                } elseif ($effectiveNoteMode === 'keyvalue') {
+                    $lines = explode("\n", $text);
+                    foreach ($lines as $line) {
+                        $line = trim($line);
+                        if (empty($line)) continue;
+                        $parts = explode(':', $line, 2);
+                        if (count($parts) < 2) continue;
+                        $key = trim($parts[0]);
+                        $value = trim($parts[1]);
+                        if ($key === '' || $value === '') continue;
+                        $entries[] = array(
+                            'key' => mb_substr($key, 0, 256, 'UTF-8'),
+                            'value' => mb_substr($value, 0, 256, 'UTF-8'),
+                            'source' => 'note',
+                        );
+                    }
+                }
+            }
+        }
+
+        // Process extrafields
+        if (!$includeExtrafields) {
+            return $entries;
+        }
+
+        $extrafieldsConf = isset($conf->global->KSEF_DODATKOWY_OPIS_EXTRAFIELDS) ? $conf->global->KSEF_DODATKOWY_OPIS_EXTRAFIELDS : '';
+        if (!empty($extrafieldsConf)) {
+            $fieldNames = array_map('trim', explode(',', $extrafieldsConf));
+
+            dol_include_once('/core/class/extrafields.class.php');
+            $ef = new ExtraFields($db);
+            $ef->fetch_name_optionals_label('facture');
+
+            $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
+
+            foreach ($fieldNames as $name) {
+                if (empty($name)) continue;
+                if (!isset($ef->attributes['facture']['label'][$name])) continue;
+
+                $type = isset($ef->attributes['facture']['type'][$name]) ? $ef->attributes['facture']['type'][$name] : '';
+                if (in_array($type, $skipTypes)) continue;
+
+                $rawValue = isset($invoice->array_options['options_' . $name]) ? $invoice->array_options['options_' . $name] : '';
+                if ($rawValue === '' || $rawValue === null) continue;
+
+                $displayValue = $rawValue;
+                if ($type === 'date') {
+                    $displayValue = dol_print_date($rawValue, 'day');
+                } elseif ($type === 'datetime') {
+                    $displayValue = dol_print_date($rawValue, 'dayhour');
+                } elseif ($type === 'select') {
+                    $param = isset($ef->attributes['facture']['param'][$name]) ? $ef->attributes['facture']['param'][$name] : array();
+                    if (isset($param['options'][$rawValue])) {
+                        $optLabel = $param['options'][$rawValue];
+                        if (($pos = strpos($optLabel, '|')) !== false) {
+                            $optLabel = substr($optLabel, 0, $pos);
+                        }
+                        $displayValue = $langs->trans($optLabel);
+                    }
+                } elseif ($type === 'double' || $type === 'price') {
+                    $displayValue = (string) $rawValue;
+                } else {
+                    $displayValue = strip_tags((string) $rawValue);
+                }
+
+                if ($displayValue === '' || $displayValue === null) continue;
+
+                $label = $langs->trans($ef->attributes['facture']['label'][$name]);
+                $entries[] = array(
+                    'key' => mb_substr(self::sanitizeForXml($label), 0, 256, 'UTF-8'),
+                    'value' => mb_substr(self::sanitizeForXml((string) $displayValue), 0, 256, 'UTF-8'),
+                    'source' => 'extrafield',
+                );
+            }
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @brief Returns the per-invoice DodatkowyOpis override value
+     * @param object $invoice Invoice object
+     * @return string
+     */
+    public static function getDodatkowyOpisOverride($invoice)
+    {
+        if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+            if (method_exists($invoice, 'fetch_optionals')) {
+                $invoice->fetch_optionals();
+            }
+        }
+        return isset($invoice->array_options['options_ksef_dodatkowy_opis_mode'])
+            ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
+            : '';
+    }
+
+    /**
+     * @brief Builds DodatkowyOpis XML elements from invoice data
+     * @param $xml DOMDocument
+     * @param $parent Parent element (Fa)
+     * @param $invoice Invoice object
+     * @called_by buildFa()
+     * @calls parseDodatkowyOpisPreview(), xmlSafe()
+     */
+    private function buildDodatkowyOpis($xml, $parent, $invoice)
+    {
+        global $conf;
+
+        $entries = self::parseDodatkowyOpisPreview($invoice, $conf, $this->db);
+
+        foreach ($entries as $entry) {
+            $dodatkowy = $xml->createElement('DodatkowyOpis');
+            $dodatkowy->appendChild($xml->createElement('Klucz', $this->xmlSafe($entry['key'])));
+            $dodatkowy->appendChild($xml->createElement('Wartosc', $this->xmlSafe($entry['value'])));
+            $parent->appendChild($dodatkowy);
+        }
     }
 
     /**

@@ -291,6 +291,28 @@ if ($action == 'update') {
         dolibarr_set_const($db, 'KSEF_FA3_SALE_DATE_SOURCE', $sale_date_source, 'chaine', 0, '', $conf->entity);
     }
 
+    // DodatkowyOpis - Note mode
+    $dodatkowy_opis_note_mode = GETPOST('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'alpha');
+    if (in_array($dodatkowy_opis_note_mode, array('disabled', 'simple', 'keyvalue'))) {
+        dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_NOTE_MODE', $dodatkowy_opis_note_mode, 'chaine', 0, '', $conf->entity);
+    }
+
+    // DodatkowyOpis - Extrafields
+    dol_include_once('/core/class/extrafields.class.php');
+    $ef_save = new ExtraFields($db);
+    $ef_save->fetch_name_optionals_label('facture');
+    $extrafields_val = array();
+    $_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
+    foreach (array_keys($ef_save->attributes['facture']['label'] ?? array()) as $fname) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $_t = $ef_save->attributes['facture']['type'][$fname] ?? '';
+        if (in_array($_t, $_dodUnsupportedTypes)) continue;
+        if (GETPOST('KSEF_EF_' . $fname, 'alpha')) {
+            $extrafields_val[] = $fname;
+        }
+    }
+    dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $extrafields_val), 'chaine', 0, '', $conf->entity);
+
     // NBP Rate Mode
     $nbp_rate_mode = GETPOST('KSEF_NBP_RATE_MODE', 'alpha');
     if (in_array($nbp_rate_mode, array('keep_base', 'keep_foreign'))) {
@@ -300,6 +322,275 @@ if ($action == 'update') {
     if (!$error) {
         setEventMessages($langs->trans("SetupSaved"), null, 'mesgs');
     }
+    header("Location: " . $_SERVER["PHP_SELF"]);
+    exit;
+}
+
+// DodatkowyOpis extrafield: create
+if ($action == 'create_dodatkowy_extrafield') {
+    dol_include_once('/core/class/extrafields.class.php');
+
+    $label = trim(GETPOST('ef_label', 'alphanohtml'));
+    $type = GETPOST('ef_type', 'alpha');
+    $optionsRaw = GETPOST('ef_options', 'restricthtml');
+
+    $validTypes = array('varchar', 'text', 'int', 'double', 'date', 'datetime', 'select');
+
+    $err = '';
+    $code = '';
+    $ef_create = new ExtraFields($db);
+    $ef_create->fetch_name_optionals_label('facture');
+
+    if ($label === '') {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL');
+    } elseif (!in_array($type, $validTypes)) {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_TYPE');
+    } else {
+        // Reject duplicate label (case-insensitive)
+        $labelLower = mb_strtolower($label, 'UTF-8');
+        foreach (($ef_create->attributes['facture']['label'] ?? array()) as $existingName => $existingLabel) {
+            if (strpos($existingName, 'ksef_') === 0) continue;
+            $translated = $langs->trans($existingLabel);
+            if (mb_strtolower($translated, 'UTF-8') === $labelLower) {
+                $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUP_LABEL');
+                break;
+            }
+        }
+    }
+
+    if (!$err) {
+        $baseCode = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $label));
+        $baseCode = trim($baseCode, '_');
+        if ($baseCode === '' || !preg_match('/^[a-z]/', $baseCode)) {
+            $baseCode = 'cf_' . $baseCode;
+            $baseCode = trim($baseCode, '_');
+        }
+        if (strpos($baseCode, 'ksef_') === 0) {
+            $baseCode = 'cf_' . substr($baseCode, 5);
+        }
+        $baseCode = substr($baseCode, 0, 50);
+        $baseCode = rtrim($baseCode, '_');
+        if ($baseCode === '' || !preg_match('/^[a-z][a-z0-9_]*$/', $baseCode)) {
+            $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL');
+        } else {
+            // Avoid collisions
+            $code = $baseCode;
+            $counter = 2;
+            while (isset($ef_create->attributes['facture']['label'][$code])) {
+                $code = $baseCode . '_' . $counter;
+                $counter++;
+                if ($counter > 100) { $err = 'Too many collisions'; break; }
+            }
+        }
+    }
+
+    if (!$err) {
+        // Build param for select type
+        $param = '';
+        if ($type === 'select') {
+            $options = array();
+            $lines = preg_split('/\r\n|\r|\n/', $optionsRaw);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line === '') continue;
+                if (strpos($line, '|') !== false) {
+                    list($optCode, $optLabel) = explode('|', $line, 2);
+                    $optCode = trim($optCode);
+                    $optLabel = trim($optLabel);
+                } else {
+                    $optLabel = $line;
+                    $optCode = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $optLabel));
+                    $optCode = trim($optCode, '_');
+                }
+                if ($optCode !== '' && $optLabel !== '') {
+                    $options[$optCode] = $optLabel;
+                }
+            }
+            $param = array('options' => $options);
+        }
+
+        // Compute auto pos (max existing + 10, min 200)
+        $maxPos = 200;
+        if (!empty($ef_create->attributes['facture']['pos'])) {
+            $maxPos = max(array_map('intval', $ef_create->attributes['facture']['pos'])) + 10;
+        }
+
+        $size = ($type === 'varchar') ? '255' : '';
+
+        $result = $ef_create->addExtraField(
+            $code, $label, $type, $maxPos, $size, 'facture',
+            0, 0, '', $param, 1, '', '1', '', '', '', '', '1', 0, 0
+        );
+
+        if ($result > 0) {
+            // Auto-add to our config
+            $currentEf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+            $currentList = array_filter(array_map('trim', explode(',', $currentEf)));
+            if (!in_array($code, $currentList)) {
+                $currentList[] = $code;
+            }
+            dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $currentList), 'chaine', 0, '', $conf->entity);
+            setEventMessages(sprintf($langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUCCESS'), $label), null, 'mesgs');
+        } else {
+            setEventMessages($ef_create->error ?: 'Error creating extrafield', null, 'errors');
+        }
+    } else {
+        setEventMessages($err, null, 'errors');
+    }
+
+    header("Location: " . $_SERVER["PHP_SELF"]);
+    exit;
+}
+
+// DodatkowyOpis extrafield: edit
+if ($action == 'edit_dodatkowy_extrafield') {
+    dol_include_once('/core/class/extrafields.class.php');
+
+    $code = trim(GETPOST('ef_code', 'alphanohtml'));
+    $label = trim(GETPOST('ef_label', 'alphanohtml'));
+    $type = GETPOST('ef_type', 'alpha');
+    $optionsRaw = GETPOST('ef_options', 'restricthtml');
+
+    $validTypes = array('varchar', 'text', 'int', 'double', 'date', 'datetime', 'select');
+
+    $err = '';
+    $ef_edit = new ExtraFields($db);
+    $ef_edit->fetch_name_optionals_label('facture');
+
+    if (!isset($ef_edit->attributes['facture']['label'][$code])) {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_NOT_FOUND');
+    } elseif (strpos($code, 'ksef_') === 0) {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_RESERVED');
+    } elseif ($label === '') {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL');
+    } elseif (!in_array($type, $validTypes)) {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_TYPE');
+    } else {
+        // Reject duplicate label (excluding self)
+        $labelLower = mb_strtolower($label, 'UTF-8');
+        foreach (($ef_edit->attributes['facture']['label'] ?? array()) as $existingName => $existingLabel) {
+            if ($existingName === $code) continue;
+            if (strpos($existingName, 'ksef_') === 0) continue;
+            $translated = $langs->trans($existingLabel);
+            if (mb_strtolower($translated, 'UTF-8') === $labelLower) {
+                $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUP_LABEL');
+                break;
+            }
+        }
+    }
+
+    if (!$err) {
+        $param = '';
+        if ($type === 'select') {
+            $options = array();
+            $lines = preg_split('/\r\n|\r|\n/', $optionsRaw);
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line === '') continue;
+                if (strpos($line, '|') !== false) {
+                    list($optCode, $optLabel) = explode('|', $line, 2);
+                    $optCode = trim($optCode);
+                    $optLabel = trim($optLabel);
+                } else {
+                    $optLabel = $line;
+                    $optCode = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $optLabel));
+                    $optCode = trim($optCode, '_');
+                }
+                if ($optCode !== '' && $optLabel !== '') {
+                    $options[$optCode] = $optLabel;
+                }
+            }
+            $param = array('options' => $options);
+        }
+
+        // Preserve settings we don't expose
+        $attrs = $ef_edit->attributes['facture'];
+        $pos = $attrs['pos'][$code] ?? 200;
+        $size = ($type === 'varchar') ? (!empty($attrs['size'][$code]) ? $attrs['size'][$code] : '255') : '';
+        $required = $attrs['required'][$code] ?? 0;
+        $defaultValue = $attrs['default'][$code] ?? '';
+        $perms = $attrs['perms'][$code] ?? '';
+        $list = $attrs['list'][$code] ?? '1';
+        $printable = $attrs['printable'][$code] ?? 0;
+        $help = $attrs['help'][$code] ?? '';
+        $computed = $attrs['computed'][$code] ?? '';
+        $entity = $attrs['entityid'][$code] ?? '';
+        $enabled = $attrs['enabled'][$code] ?? '1';
+        $totalizable = $attrs['totalizable'][$code] ?? 0;
+        $unique = $attrs['unique'][$code] ?? 0;
+        $alwayseditable = $attrs['alwayseditable'][$code] ?? 1;
+        $langfile = $attrs['langfile'][$code] ?? '';
+
+        $result = $ef_edit->updateExtraField(
+            $code,
+            $label,
+            $type,
+            $pos,
+            $size,
+            'facture',
+            $unique,
+            $required,
+            $defaultValue,
+            $param,
+            $alwayseditable,
+            $perms,
+            $list,
+            $help,
+            $computed,
+            $entity,
+            $langfile,
+            $enabled,
+            $totalizable,
+            $printable
+        );
+
+        if ($result > 0) {
+            setEventMessages(sprintf($langs->trans('KSEF_DODATKOWY_OPIS_UPDATE_SUCCESS'), $code), null, 'mesgs');
+        } else {
+            setEventMessages($ef_edit->error ?: 'Error updating extrafield', null, 'errors');
+        }
+    } else {
+        setEventMessages($err, null, 'errors');
+    }
+
+    header("Location: " . $_SERVER["PHP_SELF"]);
+    exit;
+}
+
+// DodatkowyOpis extrafield: delete
+if ($action == 'delete_dodatkowy_extrafield') {
+    dol_include_once('/core/class/extrafields.class.php');
+
+    $code = trim(GETPOST('ef_code', 'alphanohtml'));
+
+    $err = '';
+    if ($code === '' || !preg_match('/^[a-z][a-z0-9_]*$/', $code)) {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_CODE');
+    } elseif (strpos($code, 'ksef_') === 0) {
+        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_RESERVED');
+    } else {
+        $ef_del = new ExtraFields($db);
+        $ef_del->fetch_name_optionals_label('facture');
+        if (!isset($ef_del->attributes['facture']['label'][$code])) {
+            $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_NOT_FOUND');
+        }
+    }
+
+    if (!$err) {
+        $result = $ef_del->delete($code, 'facture');
+        if ($result >= 0) {
+            $currentEf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+            $currentList = array_filter(array_map('trim', explode(',', $currentEf)));
+            $currentList = array_values(array_diff($currentList, array($code)));
+            dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $currentList), 'chaine', 0, '', $conf->entity);
+            setEventMessages(sprintf($langs->trans('KSEF_DODATKOWY_OPIS_DELETE_SUCCESS'), $code), null, 'mesgs');
+        } else {
+            setEventMessages($ef_del->error ?: 'Error deleting extrafield', null, 'errors');
+        }
+    } else {
+        setEventMessages($err, null, 'errors');
+    }
+
     header("Location: " . $_SERVER["PHP_SELF"]);
     exit;
 }
@@ -577,6 +868,21 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'settings', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
+
+// Re-activation warning
+dol_include_once('/ksef/core/modules/modKSEF.class.php');
+$_ksefModule = new modKSEF($db);
+$_ksefCurrentVersion = $_ksefModule->version;
+$_ksefLastInit = getDolGlobalString('KSEF_LAST_INIT_VERSION', '');
+if (ksefNeedsReactivation($_ksefCurrentVersion, $_ksefLastInit)) {
+    print '<div style="margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
+    print '<i class="fa fa-exclamation-triangle" style="color: #856404; margin-right: 6px;"></i>';
+    print '<strong>' . $langs->trans('KSEF_MODULE_NEEDS_REACTIVATION') . '</strong><br>';
+    $_ksefFromVersion = $_ksefLastInit !== '' ? $_ksefLastInit : $langs->trans('KSEF_VERSION_UNKNOWN');
+    print dol_escape_htmltag($langs->trans('KSEF_MODULE_NEEDS_REACTIVATION_Desc', $_ksefFromVersion, $_ksefCurrentVersion));
+    print ' <a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1" class="button button-small" style="margin-left: 8px;">' . $langs->trans('KSEF_GOTO_MODULES_LIST') . '</a>';
+    print '</div>';
+}
 
 print '<span class="opacitymedium">' . $langs->trans("KSEF_SetupPage") . '</span><br><br>';
 
@@ -907,6 +1213,176 @@ print '</td></tr>';
 
 print '</table>';
 
+// DodatkowyOpis Settings
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_DODATKOWY_OPIS_SECTION") . '</td></tr>';
+
+// Note mode dropdown
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE'), $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_Help')) . '</td>';
+print '<td>';
+$note_modes = array(
+    'disabled' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_DISABLED'),
+    'simple' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_SIMPLE'),
+    'keyvalue' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_KEYVALUE'),
+);
+$current_note_mode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled');
+print $form->selectarray('KSEF_DODATKOWY_OPIS_NOTE_MODE', $note_modes, $current_note_mode, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
+// Extrafields listing
+print '<tr class="oddeven">';
+print '<td>' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_EXTRAFIELDS'), $langs->trans('KSEF_DODATKOWY_OPIS_EXTRAFIELDS_Help')) . '</td>';
+print '<td>';
+dol_include_once('/core/class/extrafields.class.php');
+$ef_display = new ExtraFields($db);
+$ef_display->fetch_name_optionals_label('facture');
+$current_ef_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+$enabled_fields = array_filter(array_map('trim', explode(',', $current_ef_config)));
+$has_user_fields = false;
+
+if (!empty($ef_display->attributes['facture']['label'])) {
+    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
+    print '<tr class="liste_titre">';
+    print '<td style="width:28px;"></td>';
+    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
+    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
+    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
+    print '<td style="text-align:right; width:120px;"></td>';
+    print '</tr>';
+
+    $_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
+    foreach ($ef_display->attributes['facture']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_display->attributes['facture']['type'][$fname] ?? '';
+        if (in_array($ftype, $_dodUnsupportedTypes)) continue;
+        $has_user_fields = true;
+        $checked = in_array($fname, $enabled_fields) ? ' checked' : '';
+        $translatedLabel = $langs->trans($flabel);
+
+        $optsText = '';
+        if ($ftype === 'select' && !empty($ef_display->attributes['facture']['param'][$fname]['options'])) {
+            $optLines = array();
+            foreach ($ef_display->attributes['facture']['param'][$fname]['options'] as $ocode => $olabel) {
+                $optLines[] = $ocode . '|' . $olabel;
+            }
+            $optsText = implode("\n", $optLines);
+        }
+
+        print '<tr class="oddeven">';
+        print '<td><input type="checkbox" name="KSEF_EF_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
+        print '<td>' . dol_escape_htmltag($translatedLabel) . '</td>';
+        print '<td><code class="opacitymedium">' . dol_escape_htmltag($fname) . '</code></td>';
+        print '<td><span class="opacitymedium">' . dol_escape_htmltag($ftype) . '</span></td>';
+        print '<td style="text-align:right;">';
+        print '<button type="button" class="button button-small" onclick="ksefEditExtrafield(this)"';
+        print ' data-code="' . dol_escape_htmltag($fname) . '"';
+        print ' data-label="' . dol_escape_htmltag($translatedLabel) . '"';
+        print ' data-type="' . dol_escape_htmltag($ftype) . '"';
+        print ' data-options="' . dol_escape_htmltag($optsText) . '"';
+        print ' title="' . $langs->trans('KSEF_DODATKOWY_OPIS_EDIT_FIELD') . '"><span class="fa fa-pencil"></span></button> ';
+        print '<button type="button" class="button button-small butActionDelete" onclick="ksefDeleteExtrafield(this)"';
+        print ' data-code="' . dol_escape_htmltag($fname) . '"';
+        print ' title="' . $langs->trans('KSEF_DODATKOWY_OPIS_DELETE_FIELD') . '"><span class="fa fa-trash"></span></button>';
+        print '</td>';
+        print '</tr>';
+    }
+    print '</table>';
+}
+
+if (!$has_user_fields) {
+    print '<span class="opacitymedium">' . $langs->trans('KSEF_DODATKOWY_OPIS_NO_EXTRAFIELDS') . '</span><br>';
+}
+
+// Create/Edit form area
+$createToken = newToken();
+print '<details id="ksef_ef_create_details" style="margin-top:8px; padding:8px; border:1px dashed #bbb; border-radius:4px;">';
+print '<summary style="cursor:pointer; font-weight:bold;">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD') . '</summary>';
+print '<div id="ksef_ef_form_area" data-mode="create" style="margin-top:8px;">';
+print '<input type="hidden" form="ksef_ef_create_form" name="token" value="' . $createToken . '">';
+print '<input type="hidden" form="ksef_ef_edit_form" name="token" value="' . $createToken . '">';
+print '<table class="noborder" style="width:100%;">';
+print '<tr><td style="width:160px;"><label for="ksef_ef_label">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</label></td>';
+print '<td><input type="text" id="ksef_ef_label" form="ksef_ef_create_form" name="ef_label" class="flat minwidth300"></td></tr>';
+print '<tr id="ksef_ef_code_row" style="display:none;"><td>' . $langs->trans('KSEF_DODATKOWY_OPIS_INTERNAL_CODE') . '</td>';
+print '<td><code id="ksef_ef_code_display" class="opacitymedium"></code><input type="hidden" id="ksef_ef_code" form="ksef_ef_edit_form" name="ef_code" value=""></td></tr>';
+print '<tr><td><label for="ksef_ef_type">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</label></td>';
+print '<td><select id="ksef_ef_type" form="ksef_ef_create_form" name="ef_type" onchange="ksefToggleOptions()">';
+print '<option value="varchar">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_VARCHAR') . '</option>';
+print '<option value="text">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_TEXT') . '</option>';
+print '<option value="int">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_INT') . '</option>';
+print '<option value="double">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DOUBLE') . '</option>';
+print '<option value="date">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATE') . '</option>';
+print '<option value="datetime">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATETIME') . '</option>';
+print '<option value="select">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_SELECT') . '</option>';
+print '</select></td></tr>';
+print '<tr id="ksef_ef_options_row" style="display:none;"><td><label for="ksef_ef_options">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_OPTIONS') . '</label></td>';
+print '<td><textarea id="ksef_ef_options" form="ksef_ef_create_form" name="ef_options" class="flat" rows="4" style="width:100%;"></textarea></td></tr>';
+print '<tr><td></td><td>';
+print '<button type="submit" id="ksef_ef_create_btn" form="ksef_ef_create_form" class="button">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUBMIT') . '</button> ';
+print '<button type="submit" id="ksef_ef_edit_btn" form="ksef_ef_edit_form" class="button" style="display:none;">' . $langs->trans('KSEF_DODATKOWY_OPIS_EDIT_FIELD_SUBMIT') . '</button> ';
+print '<button type="button" id="ksef_ef_cancel_btn" class="button" style="display:none;" onclick="ksefCancelEdit()">' . $langs->trans('Cancel') . '</button>';
+print '</td></tr>';
+print '</table>';
+print '</div>';
+print '</details>';
+
+print '</td></tr>';
+
+print '</table>';
+
+// extrafield create/edit/delete
+print '<script>
+function ksefToggleOptions() {
+    var typeSel = document.getElementById("ksef_ef_type");
+    document.getElementById("ksef_ef_options_row").style.display = (typeSel.value === "select") ? "" : "none";
+}
+function ksefEditExtrafield(btn) {
+    var area = document.getElementById("ksef_ef_form_area");
+    area.dataset.mode = "edit";
+    var code = btn.dataset.code || "";
+    document.getElementById("ksef_ef_label").value = btn.dataset.label || "";
+    document.getElementById("ksef_ef_code").value = code;
+    document.getElementById("ksef_ef_code_display").textContent = code;
+    document.getElementById("ksef_ef_code_row").style.display = "";
+    document.getElementById("ksef_ef_type").value = btn.dataset.type || "varchar";
+    document.getElementById("ksef_ef_options").value = btn.dataset.options || "";
+    // Wire visible inputs to edit form (not label/options textarea which are already wired to create form)
+    var inputs = ["ksef_ef_label", "ksef_ef_type", "ksef_ef_options"];
+    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_edit_form"); });
+    document.getElementById("ksef_ef_create_btn").style.display = "none";
+    document.getElementById("ksef_ef_edit_btn").style.display = "";
+    document.getElementById("ksef_ef_cancel_btn").style.display = "";
+    ksefToggleOptions();
+    document.getElementById("ksef_ef_create_details").open = true;
+    document.getElementById("ksef_ef_label").focus();
+}
+function ksefCancelEdit() {
+    var area = document.getElementById("ksef_ef_form_area");
+    area.dataset.mode = "create";
+    document.getElementById("ksef_ef_label").value = "";
+    document.getElementById("ksef_ef_code").value = "";
+    document.getElementById("ksef_ef_code_display").textContent = "";
+    document.getElementById("ksef_ef_code_row").style.display = "none";
+    document.getElementById("ksef_ef_type").value = "varchar";
+    document.getElementById("ksef_ef_options").value = "";
+    var inputs = ["ksef_ef_label", "ksef_ef_type", "ksef_ef_options"];
+    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_create_form"); });
+    document.getElementById("ksef_ef_create_btn").style.display = "";
+    document.getElementById("ksef_ef_edit_btn").style.display = "none";
+    document.getElementById("ksef_ef_cancel_btn").style.display = "none";
+    ksefToggleOptions();
+}
+function ksefDeleteExtrafield(btn) {
+    var code = btn.dataset.code;
+    var msg = "' . dol_escape_js($langs->transnoentities('KSEF_DODATKOWY_OPIS_DELETE_CONFIRM', '__CODE__')) . '".replace("__CODE__", code);
+    if (confirm(msg)) {
+        document.getElementById("ksef_ef_delete_code").value = code;
+        document.getElementById("ksef_ef_delete_form").submit();
+    }
+}
+</script>';
+
 // Multicurrency Settings
 print '<br><table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_MULTICURRENCY_CONFIG") . '</td></tr>';
@@ -1030,6 +1506,19 @@ print '</div>';
 print '<div class="center" style="margin-top: 10px;">';
 print '<input type="submit" class="button button-save" value="' . $langs->trans("Save") . '">';
 print '</div>';
+print '</form>';
+
+// extrafield create/edit/delete actions
+print '<form id="ksef_ef_create_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+print '<input type="hidden" name="action" value="create_dodatkowy_extrafield">';
+print '</form>';
+print '<form id="ksef_ef_edit_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+print '<input type="hidden" name="action" value="edit_dodatkowy_extrafield">';
+print '</form>';
+print '<form id="ksef_ef_delete_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+print '<input type="hidden" name="action" value="delete_dodatkowy_extrafield">';
+print '<input type="hidden" name="token" value="' . newToken() . '">';
+print '<input type="hidden" id="ksef_ef_delete_code" name="ef_code" value="">';
 print '</form>';
 
 print '<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; margin-top: 20px;">';

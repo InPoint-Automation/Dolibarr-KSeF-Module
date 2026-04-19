@@ -111,6 +111,12 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.6
+>- Add check for whether module was enabled/disabled after updating, and a notification in settings menu to do so if it has not
+>- Notes support for outgoing invoices, sourced from public notes (simple or key:value modes) and/or selected invoice extrafields (Issue #19)
+>- Can preview the notes on the invoice card and in the notes editing page.
+>- Added info to the How To Use page
+
 >### Version v1.3.5
 >- KSeF system monitoring via Latarnia/Lighthouse API and visibility on dashboard/setup/submission/incoming pages
 >- If the KSeF Latarnia indicates an outage, the system shows a warning banner for maintenance/failures and updates the offline deadline calculations based on outage type

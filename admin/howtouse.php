@@ -324,6 +324,15 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                 <h4><?php echo $langs->trans("KSEF_OptionalFields"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_OptionalFieldsDesc"); ?></p>
 
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_Notes"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_NotesIntro"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_NotesModes"); ?></p>
+                <div style="background: #f8f9fa; border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-family: monospace; font-size: 13px;">
+                    <?php echo $langs->trans("KSEF_HowTo_Config_NotesKeyValueExample"); ?>
+                </div>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_CustomFields"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_Limits"); ?></p>
+
                 <h4><?php echo $langs->trans("KSEF_CompanyIdentifiers"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_CompanyIdentifiersDesc"); ?></p>
 
@@ -376,6 +385,11 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                     <li><?php echo $langs->trans("KSEF_BankAccount_Step3"); ?></li>
                     <li><?php echo $langs->trans("KSEF_BankAccount_Step4"); ?></li>
                 </ol>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Sending_Notes"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Sending_NotesEditing"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Sending_NotesPreview"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Sending_NotesOverride"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_AfterAcceptance"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_AfterAcceptanceDesc"); ?></p>
