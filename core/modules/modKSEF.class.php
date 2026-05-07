@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.6';
+        $this->version = '1.3.7';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -319,27 +319,6 @@ class modKSEF extends DolibarrModules
             'KSEF_ENVIRONMENT'       => 'DEMO',
             'KSEF_TIMEOUT'           => '5',
 
-            // Authentication
-            'KSEF_AUTH_METHOD'       => 'token',
-            'KSEF_AUTH_TOKEN'        => '',
-            'KSEF_TOKEN_UPDATED_AT'  => '',
-
-            // Authentication Certificate
-            'KSEF_AUTH_CERTIFICATE'  => '',
-            'KSEF_AUTH_PRIVATE_KEY'  => '',
-            'KSEF_AUTH_KEY_PASSWORD' => '',
-            'KSEF_AUTH_CERT_SERIAL'  => '',
-            'KSEF_AUTH_CERT_VALID_FROM' => '',
-            'KSEF_AUTH_CERT_VALID_TO'   => '',
-
-            // Offline Certificate
-            'KSEF_OFFLINE_CERTIFICATE'  => '',
-            'KSEF_OFFLINE_PRIVATE_KEY'  => '',
-            'KSEF_OFFLINE_KEY_PASSWORD' => '',
-            'KSEF_OFFLINE_CERT_SERIAL'  => '',
-            'KSEF_OFFLINE_CERT_VALID_FROM' => '',
-            'KSEF_OFFLINE_CERT_VALID_TO'   => '',
-
             // Customer Exclusions
             'KSEF_EXCLUDED_CUSTOMERS' => '',
 
@@ -490,10 +469,11 @@ class modKSEF extends DolibarrModules
                 'required' => 0,
                 'default_value' => '',
                 'param' => array('options' => array(
-                    ''         => 'KSEF_DodatkowyOpisMode_Default',
-                    'simple'   => 'KSEF_DodatkowyOpisMode_Simple',
-                    'keyvalue' => 'KSEF_DodatkowyOpisMode_KeyValue',
-                    'disabled' => 'KSEF_DodatkowyOpisMode_Disabled',
+                    ''                   => 'KSEF_DodatkowyOpisMode_Default',
+                    'simple_stopka'      => 'KSEF_DodatkowyOpisMode_SimpleStopka',
+                    'simple_dodatkowy'   => 'KSEF_DodatkowyOpisMode_SimpleDodatkowy',
+                    'keyvalue_dodatkowy' => 'KSEF_DodatkowyOpisMode_KeyValueDodatkowy',
+                    'disabled'           => 'KSEF_DodatkowyOpisMode_Disabled',
                 )),
                 'alwayseditable' => 1,
                 'perms' => '',
@@ -803,6 +783,93 @@ class modKSEF extends DolibarrModules
                     dol_syslog("modKSEF::migration 1.3.3 - Fixed cron job classesname and objectname", LOG_INFO);
                 },
             ),
+            '1.3.7' => array(
+                // Preserve existing if set
+                function () use ($db, $conf) {
+                    $sql = "SELECT value FROM " . MAIN_DB_PREFIX . "const"
+                        . " WHERE name = 'KSEF_DODATKOWY_OPIS_NOTE_MODE'"
+                        . " AND entity = " . ((int) $conf->entity);
+                    $resql = $db->query($sql);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled', 'chaine', 0, '', $conf->entity);
+                        dolibarr_set_const($db, 'KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury', 'chaine', 0, '', $conf->entity);
+                        dol_syslog("modKSEF::migration 1.3.7 - Preserved implicit 'disabled' note mode for existing installation", LOG_INFO);
+                    }
+                },
+                // Backfill langfile on module extrafields
+                function () use ($db, $conf) {
+                    $backfillMap = array(
+                        'facture'    => 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS',
+                        'facturedet' => 'KSEF_DODATKOWY_OPIS_DET_EXTRAFIELDS',
+                        'product'    => 'KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS',
+                        'societe'    => 'KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS',
+                        'projet'     => 'KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS',
+                    );
+                    foreach ($backfillMap as $elType => $configKey) {
+                        $configVal = getDolGlobalString($configKey, '');
+                        if (empty($configVal)) continue;
+                        $fieldEntries = array_filter(array_map('trim', explode(',', $configVal)));
+                        foreach ($fieldEntries as $entry) {
+                            if (empty($entry)) continue;
+                            $parts = explode(':', $entry, 2);
+                            $fn = $parts[0];
+                            if (empty($fn)) continue;
+                            $sql = "UPDATE " . MAIN_DB_PREFIX . "extrafields SET langs = 'ksef@ksef'"
+                                . " WHERE name = '" . $db->escape($fn) . "'"
+                                . " AND elementtype = '" . $db->escape($elType) . "'"
+                                . " AND (langs IS NULL OR langs = '')";
+                            $db->query($sql);
+                        }
+                    }
+                    dol_syslog("modKSEF::migration 1.3.7 - Backfilled langfile on module-managed extrafields", LOG_INFO);
+                },
+                // Migrate DodatkowyOpis overrides
+                function () use ($db, $conf) {
+                    $table = MAIN_DB_PREFIX . "facture_extrafields";
+                    $db->query("UPDATE $table SET ksef_dodatkowy_opis_mode = 'simple_dodatkowy' WHERE ksef_dodatkowy_opis_mode = 'simple'");
+                    $db->query("UPDATE $table SET ksef_dodatkowy_opis_mode = 'keyvalue_dodatkowy' WHERE ksef_dodatkowy_opis_mode = 'keyvalue'");
+                    dol_syslog("modKSEF::migration 1.3.7 - Migrated per-invoice note override values to combined format", LOG_INFO);
+                },
+                // copy existing auth config to the active environment
+                function () use ($db, $conf) {
+                    $env = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+                    $env = strtoupper($env);
+
+                    $authKeys = array(
+                        'KSEF_AUTH_METHOD',
+                        'KSEF_AUTH_TOKEN',
+                        'KSEF_TOKEN_UPDATED_AT',
+                        'KSEF_AUTH_CERTIFICATE',
+                        'KSEF_AUTH_PRIVATE_KEY',
+                        'KSEF_AUTH_KEY_PASSWORD',
+                        'KSEF_AUTH_CERT_SERIAL',
+                        'KSEF_AUTH_CERT_VALID_FROM',
+                        'KSEF_AUTH_CERT_VALID_TO',
+                        'KSEF_OFFLINE_CERTIFICATE',
+                        'KSEF_OFFLINE_PRIVATE_KEY',
+                        'KSEF_OFFLINE_KEY_PASSWORD',
+                        'KSEF_OFFLINE_CERT_SERIAL',
+                        'KSEF_OFFLINE_CERT_VALID_FROM',
+                        'KSEF_OFFLINE_CERT_VALID_TO',
+                    );
+
+                    foreach ($authKeys as $oldKey) {
+                        $oldValue = dolibarr_get_const($db, $oldKey, $conf->entity);
+                        if ($oldValue !== '' && $oldValue !== null) {
+                            $newKey = $oldKey . '_' . $env;
+                            // Idempotent: only copy if suffixed key does not already have a value
+                            $existingVal = dolibarr_get_const($db, $newKey, $conf->entity);
+                            if ($existingVal === '' || $existingVal === null) {
+                                dolibarr_set_const($db, $newKey, $oldValue, 'chaine', 0, '', $conf->entity);
+                                dol_syslog("modKSEF::migration 1.3.7 - Copied $oldKey to $newKey", LOG_INFO);
+                            }
+                        }
+                        // Delete old
+                        dolibarr_del_const($db, $oldKey, $conf->entity);
+                    }
+                    dol_syslog("modKSEF::migration 1.3.7 - Per-environment auth key migration complete (env=$env)", LOG_INFO);
+                },
+            ),
         );
 
         $lastMigration = getDolGlobalString('KSEF_MIGRATION_VERSION', '');
@@ -823,6 +890,33 @@ class modKSEF extends DolibarrModules
 
         // Record the version this module was activated at
         dolibarr_set_const($db, 'KSEF_LAST_INIT_VERSION', $this->version, 'chaine', 0, '', $conf->entity);
+
+        // KSeF VAT rate codes
+        $polandId = 0;
+        $plSql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_country WHERE code = 'PL'";
+        $plRes = $db->query($plSql);
+        if ($plRes && $plObj = $db->fetch_object($plRes)) $polandId = (int) $plObj->rowid;
+        if ($polandId > 0) {
+            $vatSeeds = array(
+                array('code' => 'ZW',  'note' => 'Zwolniony z VAT (art. 43/113) - KSeF: zw'),
+                array('code' => 'RC',  'note' => 'Odwrotne obciazenie (art. 17) - KSeF: oo'),
+                array('code' => 'NP',  'note' => 'Niepodlegajace - poza terytorium kraju - KSeF: np I'),
+                array('code' => 'NP2', 'note' => 'Niepodlegajace - uslugi art. 100 ust. 1 pkt 4 - KSeF: np II'),
+                array('code' => 'WDT', 'note' => 'WDT - wewnatrzwspolnotowa dostawa towarow - KSeF: 0 WDT'),
+                array('code' => 'EX',  'note' => 'Eksport towarow - KSeF: 0 EX'),
+            );
+            foreach ($vatSeeds as $vs) {
+                $chk = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_tva"
+                    . " WHERE entity IN (0, " . ((int) $conf->entity) . ")"
+                    . " AND fk_pays = " . $polandId
+                    . " AND code = '" . $db->escape($vs['code']) . "' AND taux = 0";
+                $chkRes = $db->query($chk);
+                if ($chkRes && $db->num_rows($chkRes) > 0) continue;
+                $db->query("INSERT INTO " . MAIN_DB_PREFIX . "c_tva (entity, fk_pays, code, taux, note, active, recuperableonly)"
+                    . " VALUES (" . ((int) $conf->entity) . ", " . $polandId . ", '" . $db->escape($vs['code']) . "'"
+                    . ", 0, '" . $db->escape($vs['note']) . "', 0, 0)");
+            }
+        }
 
         return $this->_init($sql, $options);
     }
@@ -856,25 +950,55 @@ class modKSEF extends DolibarrModules
                 'KSEF_TIMEOUT',
 
                 // Authentication
-                'KSEF_AUTH_METHOD',
-                'KSEF_AUTH_TOKEN',
-                'KSEF_TOKEN_UPDATED_AT',
+                'KSEF_AUTH_METHOD_TEST',
+                'KSEF_AUTH_METHOD_DEMO',
+                'KSEF_AUTH_METHOD_PRODUCTION',
+                'KSEF_AUTH_TOKEN_TEST',
+                'KSEF_AUTH_TOKEN_DEMO',
+                'KSEF_AUTH_TOKEN_PRODUCTION',
+                'KSEF_TOKEN_UPDATED_AT_TEST',
+                'KSEF_TOKEN_UPDATED_AT_DEMO',
+                'KSEF_TOKEN_UPDATED_AT_PRODUCTION',
 
                 // Authentication Certificate
-                'KSEF_AUTH_CERTIFICATE',
-                'KSEF_AUTH_PRIVATE_KEY',
-                'KSEF_AUTH_KEY_PASSWORD',
-                'KSEF_AUTH_CERT_SERIAL',
-                'KSEF_AUTH_CERT_VALID_FROM',
-                'KSEF_AUTH_CERT_VALID_TO',
+                'KSEF_AUTH_CERTIFICATE_TEST',
+                'KSEF_AUTH_CERTIFICATE_DEMO',
+                'KSEF_AUTH_CERTIFICATE_PRODUCTION',
+                'KSEF_AUTH_PRIVATE_KEY_TEST',
+                'KSEF_AUTH_PRIVATE_KEY_DEMO',
+                'KSEF_AUTH_PRIVATE_KEY_PRODUCTION',
+                'KSEF_AUTH_KEY_PASSWORD_TEST',
+                'KSEF_AUTH_KEY_PASSWORD_DEMO',
+                'KSEF_AUTH_KEY_PASSWORD_PRODUCTION',
+                'KSEF_AUTH_CERT_SERIAL_TEST',
+                'KSEF_AUTH_CERT_SERIAL_DEMO',
+                'KSEF_AUTH_CERT_SERIAL_PRODUCTION',
+                'KSEF_AUTH_CERT_VALID_FROM_TEST',
+                'KSEF_AUTH_CERT_VALID_FROM_DEMO',
+                'KSEF_AUTH_CERT_VALID_FROM_PRODUCTION',
+                'KSEF_AUTH_CERT_VALID_TO_TEST',
+                'KSEF_AUTH_CERT_VALID_TO_DEMO',
+                'KSEF_AUTH_CERT_VALID_TO_PRODUCTION',
 
                 // Offline Certificate
-                'KSEF_OFFLINE_CERTIFICATE',
-                'KSEF_OFFLINE_PRIVATE_KEY',
-                'KSEF_OFFLINE_KEY_PASSWORD',
-                'KSEF_OFFLINE_CERT_SERIAL',
-                'KSEF_OFFLINE_CERT_VALID_FROM',
-                'KSEF_OFFLINE_CERT_VALID_TO',
+                'KSEF_OFFLINE_CERTIFICATE_TEST',
+                'KSEF_OFFLINE_CERTIFICATE_DEMO',
+                'KSEF_OFFLINE_CERTIFICATE_PRODUCTION',
+                'KSEF_OFFLINE_PRIVATE_KEY_TEST',
+                'KSEF_OFFLINE_PRIVATE_KEY_DEMO',
+                'KSEF_OFFLINE_PRIVATE_KEY_PRODUCTION',
+                'KSEF_OFFLINE_KEY_PASSWORD_TEST',
+                'KSEF_OFFLINE_KEY_PASSWORD_DEMO',
+                'KSEF_OFFLINE_KEY_PASSWORD_PRODUCTION',
+                'KSEF_OFFLINE_CERT_SERIAL_TEST',
+                'KSEF_OFFLINE_CERT_SERIAL_DEMO',
+                'KSEF_OFFLINE_CERT_SERIAL_PRODUCTION',
+                'KSEF_OFFLINE_CERT_VALID_FROM_TEST',
+                'KSEF_OFFLINE_CERT_VALID_FROM_DEMO',
+                'KSEF_OFFLINE_CERT_VALID_FROM_PRODUCTION',
+                'KSEF_OFFLINE_CERT_VALID_TO_TEST',
+                'KSEF_OFFLINE_CERT_VALID_TO_DEMO',
+                'KSEF_OFFLINE_CERT_VALID_TO_PRODUCTION',
 
                 // Customer Exclusions
                 'KSEF_EXCLUDED_CUSTOMERS',

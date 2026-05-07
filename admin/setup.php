@@ -79,28 +79,28 @@ $error = 0;
 // Auto-pull identifiers from company object using configured field mappings
 global $mysoc;
 
-if (empty($conf->global->KSEF_COMPANY_NIP)) {
+if (empty(getDolGlobalString('KSEF_COMPANY_NIP'))) {
     $auto_nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
     if (!empty($auto_nip)) {
         dolibarr_set_const($db, 'KSEF_COMPANY_NIP', $auto_nip, 'chaine', 0, '', $conf->entity);
     }
 }
 
-if (empty($conf->global->KSEF_COMPANY_KRS)) {
+if (empty(getDolGlobalString('KSEF_COMPANY_KRS'))) {
     $auto_krs = trim(ksefGetIdentifierField($mysoc, 'KRS'));
     if (!empty($auto_krs)) {
         dolibarr_set_const($db, 'KSEF_COMPANY_KRS', $auto_krs, 'chaine', 0, '', $conf->entity);
     }
 }
 
-if (empty($conf->global->KSEF_COMPANY_REGON)) {
+if (empty(getDolGlobalString('KSEF_COMPANY_REGON'))) {
     $auto_regon = trim(ksefGetIdentifierField($mysoc, 'REGON'));
     if (!empty($auto_regon)) {
         dolibarr_set_const($db, 'KSEF_COMPANY_REGON', $auto_regon, 'chaine', 0, '', $conf->entity);
     }
 }
 
-if (empty($conf->global->KSEF_COMPANY_BDO)) {
+if (empty(getDolGlobalString('KSEF_COMPANY_BDO'))) {
     $auto_bdo = trim(ksefGetIdentifierField($mysoc, 'BDO'));
     if (!empty($auto_bdo)) {
         dolibarr_set_const($db, 'KSEF_COMPANY_BDO', $auto_bdo, 'chaine', 0, '', $conf->entity);
@@ -206,42 +206,19 @@ if ($action == 'update') {
         dolibarr_set_const($db, 'KSEF_ENVIRONMENT', $env, 'chaine', 0, '', $conf->entity);
     }
 
-    // Authentication method
-    $auth_method = GETPOST('KSEF_AUTH_METHOD', 'alpha');
-    if (in_array($auth_method, array('token', 'certificate'))) {
-        dolibarr_set_const($db, 'KSEF_AUTH_METHOD', $auth_method, 'chaine', 0, '', $conf->entity);
-    }
-
-    // Token
-    $new_token = GETPOST('KSEF_AUTH_TOKEN', 'password');
-    if (!empty($new_token)) {
-        $new_token = trim($new_token);
-        if (strlen($new_token) < 50) {
-            setEventMessages($langs->trans("KSEF_TOKEN_TOO_SHORT"), null, 'errors');
-            $error++;
-        } elseif (preg_match('/[\r\n\t]/', $new_token)) {
-            setEventMessages($langs->trans("KSEF_TOKEN_INVALID_FORMAT"), null, 'errors');
-            $error++;
-        } else {
-            $encrypted = dol_encode($new_token);
-            dolibarr_set_const($db, 'KSEF_AUTH_TOKEN', $encrypted, 'chaine', 0, '', $conf->entity);
-            dolibarr_set_const($db, 'KSEF_TOKEN_UPDATED_AT', dol_now(), 'chaine', 0, '', $conf->entity);
-            setEventMessages($langs->trans("KSEF_TOKEN_SAVED"), null, 'mesgs');
-
-            // Auto-select
-            $has_cert_now = !empty($conf->global->KSEF_AUTH_CERTIFICATE)
-                && !empty($conf->global->KSEF_AUTH_PRIVATE_KEY)
-                && !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
-            if (!$has_cert_now) {
-                dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'token',
-                    'chaine', 0, '', $conf->entity);
-            }
+    // Warn if new environment has no auth configured
+    $newEnv = GETPOST('KSEF_ENVIRONMENT', 'alpha');
+    if (!empty($newEnv)) {
+        $newEnv = strtoupper($newEnv);
+        $hasEnvToken = !empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $newEnv));
+        $hasEnvCert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $newEnv))
+            && !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $newEnv))
+            && !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $newEnv));
+        if (!$hasEnvToken && !$hasEnvCert) {
+            $authTabUrl = dol_buildpath('/ksef/admin/setup_auth.php', 1);
+            setEventMessages($langs->trans('KSEF_WARNING_ENV_NO_AUTH', $newEnv) . ' <a href="' . $authTabUrl . '">' . $langs->trans('KSEF_Tab_Authentication') . '</a>', null, 'warnings');
         }
     }
-
-    // QR Code checkbox
-    $qr_val = GETPOST('KSEF_ADD_QR', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_ADD_QR', $qr_val, 'chaine', 0, '', $conf->entity);
 
     // Button color
     $color = GETPOST('KSEF_BUTTON_COLOR', 'alpha');
@@ -253,542 +230,34 @@ if ($action == 'update') {
     $purge_val = GETPOST('KSEF_PURGE_ON_DISABLE', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_PURGE_ON_DISABLE', $purge_val, 'chaine', 0, '', $conf->entity);
 
-    // Importing
-    $batch_auto_suppliers = GETPOST('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_SUPPLIERS', $batch_auto_suppliers, 'chaine', 0, '', $conf->entity);
-    $batch_auto_products = GETPOST('KSEF_BATCH_AUTO_CREATE_PRODUCTS', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_PRODUCTS', $batch_auto_products, 'chaine', 0, '', $conf->entity);
-    $product_ref_use_indeks = GETPOST('KSEF_PRODUCT_REF_USE_INDEKS', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_PRODUCT_REF_USE_INDEKS', $product_ref_use_indeks, 'chaine', 0, '', $conf->entity);
-
-    // Optional Fields
-    $fa3_nrklienta_val = GETPOST('KSEF_FA3_INCLUDE_NRKLIENTA', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_NRKLIENTA', $fa3_nrklienta_val, 'chaine', 0, '', $conf->entity);
-
-    $fa3_indeks_val = GETPOST('KSEF_FA3_INCLUDE_INDEKS', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_INDEKS', $fa3_indeks_val, 'chaine', 0, '', $conf->entity);
-
-    $fa3_gtin_val = GETPOST('KSEF_FA3_INCLUDE_GTIN', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_GTIN', $fa3_gtin_val, 'chaine', 0, '', $conf->entity);
-
-    $fa3_unit_val = GETPOST('KSEF_FA3_INCLUDE_UNIT', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_UNIT', $fa3_unit_val, 'chaine', 0, '', $conf->entity);
-
-    $fa3_bankdesc_val = GETPOST('KSEF_FA3_INCLUDE_BANK_DESC', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_BANK_DESC', $fa3_bankdesc_val, 'chaine', 0, '', $conf->entity);
-
-    // Place of Issue
-    $place_of_issue_mode = GETPOST('KSEF_FA3_PLACE_OF_ISSUE_MODE', 'alpha');
-    if (in_array($place_of_issue_mode, array('disabled', 'company', 'custom'))) {
-        dolibarr_set_const($db, 'KSEF_FA3_PLACE_OF_ISSUE_MODE', $place_of_issue_mode, 'chaine', 0, '', $conf->entity);
-    }
-    $place_of_issue_custom = GETPOST('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM', 'alphanohtml');
-    dolibarr_set_const($db, 'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM', trim($place_of_issue_custom), 'chaine', 0, '', $conf->entity);
-
-    // Sale Date Source
-    $sale_date_source = GETPOST('KSEF_FA3_SALE_DATE_SOURCE', 'alpha');
-    if (in_array($sale_date_source, array('invoice_date', 'delivery_date'))) {
-        dolibarr_set_const($db, 'KSEF_FA3_SALE_DATE_SOURCE', $sale_date_source, 'chaine', 0, '', $conf->entity);
-    }
-
-    // DodatkowyOpis - Note mode
-    $dodatkowy_opis_note_mode = GETPOST('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'alpha');
-    if (in_array($dodatkowy_opis_note_mode, array('disabled', 'simple', 'keyvalue'))) {
-        dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_NOTE_MODE', $dodatkowy_opis_note_mode, 'chaine', 0, '', $conf->entity);
-    }
-
-    // DodatkowyOpis - Extrafields
-    dol_include_once('/core/class/extrafields.class.php');
-    $ef_save = new ExtraFields($db);
-    $ef_save->fetch_name_optionals_label('facture');
-    $extrafields_val = array();
-    $_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
-    foreach (array_keys($ef_save->attributes['facture']['label'] ?? array()) as $fname) {
-        if (strpos($fname, 'ksef_') === 0) continue;
-        $_t = $ef_save->attributes['facture']['type'][$fname] ?? '';
-        if (in_array($_t, $_dodUnsupportedTypes)) continue;
-        if (GETPOST('KSEF_EF_' . $fname, 'alpha')) {
-            $extrafields_val[] = $fname;
-        }
-    }
-    dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $extrafields_val), 'chaine', 0, '', $conf->entity);
-
     // NBP Rate Mode
     $nbp_rate_mode = GETPOST('KSEF_NBP_RATE_MODE', 'alpha');
     if (in_array($nbp_rate_mode, array('keep_base', 'keep_foreign'))) {
         dolibarr_set_const($db, 'KSEF_NBP_RATE_MODE', $nbp_rate_mode, 'chaine', 0, '', $conf->entity);
     }
 
+    // VAT Rate Code toggles (enable/disable dictionary)
+    $_vatPlId = 0;
+    $_vatPlSql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_country WHERE code = 'PL'";
+    $_vatPlRes = $db->query($_vatPlSql);
+    if ($_vatPlRes && $_vatPlObj = $db->fetch_object($_vatPlRes)) $_vatPlId = (int) $_vatPlObj->rowid;
+    if ($_vatPlId > 0) {
+        $_vatAllSql = "SELECT rowid, code, taux, active, entity FROM " . MAIN_DB_PREFIX . "c_tva"
+            . " WHERE fk_pays = " . $_vatPlId
+            . " AND entity = " . ((int) $conf->entity);
+        $_vatAllRes = $db->query($_vatAllSql);
+        while ($_vatAllRes && $_vatRow = $db->fetch_object($_vatAllRes)) {
+            $fieldName = 'KSEF_VAT_TOGGLE_' . ((int) $_vatRow->rowid);
+            $wantEnabled = GETPOST($fieldName, 'alpha') ? 1 : 0;
+            if ($wantEnabled != (int) $_vatRow->active) {
+                $db->query("UPDATE " . MAIN_DB_PREFIX . "c_tva SET active = " . $wantEnabled . " WHERE rowid = " . ((int) $_vatRow->rowid));
+            }
+        }
+    }
+
     if (!$error) {
         setEventMessages($langs->trans("SetupSaved"), null, 'mesgs');
     }
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// DodatkowyOpis extrafield: create
-if ($action == 'create_dodatkowy_extrafield') {
-    dol_include_once('/core/class/extrafields.class.php');
-
-    $label = trim(GETPOST('ef_label', 'alphanohtml'));
-    $type = GETPOST('ef_type', 'alpha');
-    $optionsRaw = GETPOST('ef_options', 'restricthtml');
-
-    $validTypes = array('varchar', 'text', 'int', 'double', 'date', 'datetime', 'select');
-
-    $err = '';
-    $code = '';
-    $ef_create = new ExtraFields($db);
-    $ef_create->fetch_name_optionals_label('facture');
-
-    if ($label === '') {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL');
-    } elseif (!in_array($type, $validTypes)) {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_TYPE');
-    } else {
-        // Reject duplicate label (case-insensitive)
-        $labelLower = mb_strtolower($label, 'UTF-8');
-        foreach (($ef_create->attributes['facture']['label'] ?? array()) as $existingName => $existingLabel) {
-            if (strpos($existingName, 'ksef_') === 0) continue;
-            $translated = $langs->trans($existingLabel);
-            if (mb_strtolower($translated, 'UTF-8') === $labelLower) {
-                $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUP_LABEL');
-                break;
-            }
-        }
-    }
-
-    if (!$err) {
-        $baseCode = strtolower(preg_replace('/[^a-z0-9]+/i', '_', $label));
-        $baseCode = trim($baseCode, '_');
-        if ($baseCode === '' || !preg_match('/^[a-z]/', $baseCode)) {
-            $baseCode = 'cf_' . $baseCode;
-            $baseCode = trim($baseCode, '_');
-        }
-        if (strpos($baseCode, 'ksef_') === 0) {
-            $baseCode = 'cf_' . substr($baseCode, 5);
-        }
-        $baseCode = substr($baseCode, 0, 50);
-        $baseCode = rtrim($baseCode, '_');
-        if ($baseCode === '' || !preg_match('/^[a-z][a-z0-9_]*$/', $baseCode)) {
-            $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL');
-        } else {
-            // Avoid collisions
-            $code = $baseCode;
-            $counter = 2;
-            while (isset($ef_create->attributes['facture']['label'][$code])) {
-                $code = $baseCode . '_' . $counter;
-                $counter++;
-                if ($counter > 100) { $err = 'Too many collisions'; break; }
-            }
-        }
-    }
-
-    if (!$err) {
-        // Build param for select type
-        $param = '';
-        if ($type === 'select') {
-            $options = array();
-            $lines = preg_split('/\r\n|\r|\n/', $optionsRaw);
-            foreach ($lines as $line) {
-                $line = trim($line);
-                if ($line === '') continue;
-                if (strpos($line, '|') !== false) {
-                    list($optCode, $optLabel) = explode('|', $line, 2);
-                    $optCode = trim($optCode);
-                    $optLabel = trim($optLabel);
-                } else {
-                    $optLabel = $line;
-                    $optCode = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $optLabel));
-                    $optCode = trim($optCode, '_');
-                }
-                if ($optCode !== '' && $optLabel !== '') {
-                    $options[$optCode] = $optLabel;
-                }
-            }
-            $param = array('options' => $options);
-        }
-
-        // Compute auto pos (max existing + 10, min 200)
-        $maxPos = 200;
-        if (!empty($ef_create->attributes['facture']['pos'])) {
-            $maxPos = max(array_map('intval', $ef_create->attributes['facture']['pos'])) + 10;
-        }
-
-        $size = ($type === 'varchar') ? '255' : '';
-
-        $result = $ef_create->addExtraField(
-            $code, $label, $type, $maxPos, $size, 'facture',
-            0, 0, '', $param, 1, '', '1', '', '', '', '', '1', 0, 0
-        );
-
-        if ($result > 0) {
-            // Auto-add to our config
-            $currentEf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
-            $currentList = array_filter(array_map('trim', explode(',', $currentEf)));
-            if (!in_array($code, $currentList)) {
-                $currentList[] = $code;
-            }
-            dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $currentList), 'chaine', 0, '', $conf->entity);
-            setEventMessages(sprintf($langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUCCESS'), $label), null, 'mesgs');
-        } else {
-            setEventMessages($ef_create->error ?: 'Error creating extrafield', null, 'errors');
-        }
-    } else {
-        setEventMessages($err, null, 'errors');
-    }
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// DodatkowyOpis extrafield: edit
-if ($action == 'edit_dodatkowy_extrafield') {
-    dol_include_once('/core/class/extrafields.class.php');
-
-    $code = trim(GETPOST('ef_code', 'alphanohtml'));
-    $label = trim(GETPOST('ef_label', 'alphanohtml'));
-    $type = GETPOST('ef_type', 'alpha');
-    $optionsRaw = GETPOST('ef_options', 'restricthtml');
-
-    $validTypes = array('varchar', 'text', 'int', 'double', 'date', 'datetime', 'select');
-
-    $err = '';
-    $ef_edit = new ExtraFields($db);
-    $ef_edit->fetch_name_optionals_label('facture');
-
-    if (!isset($ef_edit->attributes['facture']['label'][$code])) {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_NOT_FOUND');
-    } elseif (strpos($code, 'ksef_') === 0) {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_RESERVED');
-    } elseif ($label === '') {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_LABEL');
-    } elseif (!in_array($type, $validTypes)) {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_TYPE');
-    } else {
-        // Reject duplicate label (excluding self)
-        $labelLower = mb_strtolower($label, 'UTF-8');
-        foreach (($ef_edit->attributes['facture']['label'] ?? array()) as $existingName => $existingLabel) {
-            if ($existingName === $code) continue;
-            if (strpos($existingName, 'ksef_') === 0) continue;
-            $translated = $langs->trans($existingLabel);
-            if (mb_strtolower($translated, 'UTF-8') === $labelLower) {
-                $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_DUP_LABEL');
-                break;
-            }
-        }
-    }
-
-    if (!$err) {
-        $param = '';
-        if ($type === 'select') {
-            $options = array();
-            $lines = preg_split('/\r\n|\r|\n/', $optionsRaw);
-            foreach ($lines as $line) {
-                $line = trim($line);
-                if ($line === '') continue;
-                if (strpos($line, '|') !== false) {
-                    list($optCode, $optLabel) = explode('|', $line, 2);
-                    $optCode = trim($optCode);
-                    $optLabel = trim($optLabel);
-                } else {
-                    $optLabel = $line;
-                    $optCode = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '_', $optLabel));
-                    $optCode = trim($optCode, '_');
-                }
-                if ($optCode !== '' && $optLabel !== '') {
-                    $options[$optCode] = $optLabel;
-                }
-            }
-            $param = array('options' => $options);
-        }
-
-        // Preserve settings we don't expose
-        $attrs = $ef_edit->attributes['facture'];
-        $pos = $attrs['pos'][$code] ?? 200;
-        $size = ($type === 'varchar') ? (!empty($attrs['size'][$code]) ? $attrs['size'][$code] : '255') : '';
-        $required = $attrs['required'][$code] ?? 0;
-        $defaultValue = $attrs['default'][$code] ?? '';
-        $perms = $attrs['perms'][$code] ?? '';
-        $list = $attrs['list'][$code] ?? '1';
-        $printable = $attrs['printable'][$code] ?? 0;
-        $help = $attrs['help'][$code] ?? '';
-        $computed = $attrs['computed'][$code] ?? '';
-        $entity = $attrs['entityid'][$code] ?? '';
-        $enabled = $attrs['enabled'][$code] ?? '1';
-        $totalizable = $attrs['totalizable'][$code] ?? 0;
-        $unique = $attrs['unique'][$code] ?? 0;
-        $alwayseditable = $attrs['alwayseditable'][$code] ?? 1;
-        $langfile = $attrs['langfile'][$code] ?? '';
-
-        $result = $ef_edit->updateExtraField(
-            $code,
-            $label,
-            $type,
-            $pos,
-            $size,
-            'facture',
-            $unique,
-            $required,
-            $defaultValue,
-            $param,
-            $alwayseditable,
-            $perms,
-            $list,
-            $help,
-            $computed,
-            $entity,
-            $langfile,
-            $enabled,
-            $totalizable,
-            $printable
-        );
-
-        if ($result > 0) {
-            setEventMessages(sprintf($langs->trans('KSEF_DODATKOWY_OPIS_UPDATE_SUCCESS'), $code), null, 'mesgs');
-        } else {
-            setEventMessages($ef_edit->error ?: 'Error updating extrafield', null, 'errors');
-        }
-    } else {
-        setEventMessages($err, null, 'errors');
-    }
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// DodatkowyOpis extrafield: delete
-if ($action == 'delete_dodatkowy_extrafield') {
-    dol_include_once('/core/class/extrafields.class.php');
-
-    $code = trim(GETPOST('ef_code', 'alphanohtml'));
-
-    $err = '';
-    if ($code === '' || !preg_match('/^[a-z][a-z0-9_]*$/', $code)) {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_CODE');
-    } elseif (strpos($code, 'ksef_') === 0) {
-        $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_RESERVED');
-    } else {
-        $ef_del = new ExtraFields($db);
-        $ef_del->fetch_name_optionals_label('facture');
-        if (!isset($ef_del->attributes['facture']['label'][$code])) {
-            $err = $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_ERROR_NOT_FOUND');
-        }
-    }
-
-    if (!$err) {
-        $result = $ef_del->delete($code, 'facture');
-        if ($result >= 0) {
-            $currentEf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
-            $currentList = array_filter(array_map('trim', explode(',', $currentEf)));
-            $currentList = array_values(array_diff($currentList, array($code)));
-            dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $currentList), 'chaine', 0, '', $conf->entity);
-            setEventMessages(sprintf($langs->trans('KSEF_DODATKOWY_OPIS_DELETE_SUCCESS'), $code), null, 'mesgs');
-        } else {
-            setEventMessages($ef_del->error ?: 'Error deleting extrafield', null, 'errors');
-        }
-    } else {
-        setEventMessages($err, null, 'errors');
-    }
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// Authentication certificate upload
-if ($action == 'upload_auth_cert') {
-    $error_count = 0;
-
-    // Certificate file
-    if (!empty($_FILES['auth_cert_file']['tmp_name'])) {
-        $cert_content = file_get_contents($_FILES['auth_cert_file']['tmp_name']);
-        if ($cert_content !== false) {
-            $cert_content = trim($cert_content);
-            $cert_resource = openssl_x509_read($cert_content);
-            if ($cert_resource) {
-                $cert_info = openssl_x509_parse($cert_resource);
-                if ($cert_info) {
-                    $serial = $cert_info['serialNumberHex'] ?? $cert_info['serialNumber'] ?? '';
-                    $valid_from = $cert_info['validFrom_time_t'] ?? null;
-                    $valid_to = $cert_info['validTo_time_t'] ?? null;
-
-                    dolibarr_set_const($db, 'KSEF_AUTH_CERTIFICATE', base64_encode($cert_content), 'chaine', 0, '', $conf->entity);
-                    dolibarr_set_const($db, 'KSEF_AUTH_CERT_SERIAL', $serial, 'chaine', 0, '', $conf->entity);
-                    if ($valid_from) dolibarr_set_const($db, 'KSEF_AUTH_CERT_VALID_FROM', $valid_from, 'chaine', 0, '', $conf->entity);
-                    if ($valid_to) dolibarr_set_const($db, 'KSEF_AUTH_CERT_VALID_TO', $valid_to, 'chaine', 0, '', $conf->entity);
-                    setEventMessages($langs->trans("KSEF_AuthCertificateSaved"), null, 'mesgs');
-                } else {
-                    setEventMessages($langs->trans("KSEF_CertificateParseError"), null, 'errors');
-                    $error_count++;
-                }
-            } else {
-                setEventMessages($langs->trans("KSEF_CertificateInvalid") . ': ' . openssl_error_string(), null, 'errors');
-                $error_count++;
-            }
-        }
-    }
-
-    // Private key file
-    if (!empty($_FILES['auth_key_file']['tmp_name'])) {
-        $key_content = file_get_contents($_FILES['auth_key_file']['tmp_name']);
-        if ($key_content !== false) {
-            dolibarr_set_const($db, 'KSEF_AUTH_PRIVATE_KEY', base64_encode(trim($key_content)), 'chaine', 0, '', $conf->entity);
-            setEventMessages($langs->trans("KSEF_AuthPrivateKeySaved"), null, 'mesgs');
-        }
-    }
-
-    // Password
-    $key_password = GETPOST('auth_key_password', 'none');
-    if (!empty($key_password)) {
-        dolibarr_set_const($db, 'KSEF_AUTH_KEY_PASSWORD', dol_encode($key_password), 'chaine', 0, '', $conf->entity);
-
-        // Validate key with password
-        $stored_key = $conf->global->KSEF_AUTH_PRIVATE_KEY ?? '';
-        if (!empty($stored_key)) {
-            $key_pem = base64_decode($stored_key);
-            $pk = openssl_pkey_get_private($key_pem, $key_password);
-            if (!$pk) {
-                setEventMessages($langs->trans("KSEF_PrivateKeyPasswordMismatch"), null, 'warnings');
-            } else {
-                setEventMessages($langs->trans("KSEF_PrivateKeyValidated"), null, 'mesgs');
-            }
-        }
-    }
-
-    // Auto-select
-    if (!$error_count) {
-        $has_token_now = !empty($conf->global->KSEF_AUTH_TOKEN);
-        $current_method = $conf->global->KSEF_AUTH_METHOD ?? 'token';
-        if (!$has_token_now && $current_method != 'certificate') {
-            dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'certificate',
-                'chaine', 0, '', $conf->entity);
-            setEventMessages(
-                $langs->trans("KSEF_AuthMethodAutoSwitchedToCert"), null, 'mesgs'
-            );
-        }
-    }
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// Offline certificate upload
-if ($action == 'upload_offline_cert') {
-    $error_count = 0;
-
-    // Certificate file
-    if (!empty($_FILES['offline_cert_file']['tmp_name'])) {
-        $cert_content = file_get_contents($_FILES['offline_cert_file']['tmp_name']);
-        if ($cert_content !== false) {
-            $cert_content = trim($cert_content);
-            $cert_resource = openssl_x509_read($cert_content);
-            if ($cert_resource) {
-                $cert_info = openssl_x509_parse($cert_resource);
-                if ($cert_info) {
-                    $serial = $cert_info['serialNumberHex'] ?? $cert_info['serialNumber'] ?? '';
-                    $valid_from = $cert_info['validFrom_time_t'] ?? null;
-                    $valid_to = $cert_info['validTo_time_t'] ?? null;
-
-                    dolibarr_set_const($db, 'KSEF_OFFLINE_CERTIFICATE', base64_encode($cert_content), 'chaine', 0, '', $conf->entity);
-                    dolibarr_set_const($db, 'KSEF_OFFLINE_CERT_SERIAL', $serial, 'chaine', 0, '', $conf->entity);
-                    if ($valid_from) dolibarr_set_const($db, 'KSEF_OFFLINE_CERT_VALID_FROM', $valid_from, 'chaine', 0, '', $conf->entity);
-                    if ($valid_to) dolibarr_set_const($db, 'KSEF_OFFLINE_CERT_VALID_TO', $valid_to, 'chaine', 0, '', $conf->entity);
-                    setEventMessages($langs->trans("KSEF_OfflineCertificateSaved"), null, 'mesgs');
-                } else {
-                    setEventMessages($langs->trans("KSEF_CertificateParseError"), null, 'errors');
-                    $error_count++;
-                }
-            } else {
-                setEventMessages($langs->trans("KSEF_CertificateInvalid") . ': ' . openssl_error_string(), null, 'errors');
-                $error_count++;
-            }
-        }
-    }
-
-    // Private key file
-    if (!empty($_FILES['offline_key_file']['tmp_name'])) {
-        $key_content = file_get_contents($_FILES['offline_key_file']['tmp_name']);
-        if ($key_content !== false) {
-            dolibarr_set_const($db, 'KSEF_OFFLINE_PRIVATE_KEY', base64_encode(trim($key_content)), 'chaine', 0, '', $conf->entity);
-            setEventMessages($langs->trans("KSEF_OfflinePrivateKeySaved"), null, 'mesgs');
-        }
-    }
-
-    // Password
-    $key_password = GETPOST('offline_key_password', 'none');
-    if (!empty($key_password)) {
-        dolibarr_set_const($db, 'KSEF_OFFLINE_KEY_PASSWORD', dol_encode($key_password), 'chaine', 0, '', $conf->entity);
-
-        // Validate key with password
-        $stored_key = $conf->global->KSEF_OFFLINE_PRIVATE_KEY ?? '';
-        if (!empty($stored_key)) {
-            $key_pem = base64_decode($stored_key);
-            $pk = openssl_pkey_get_private($key_pem, $key_password);
-            if (!$pk) {
-                setEventMessages($langs->trans("KSEF_PrivateKeyPasswordMismatch"), null, 'warnings');
-            } else {
-                setEventMessages($langs->trans("KSEF_PrivateKeyValidated"), null, 'mesgs');
-            }
-        }
-    }
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// Remove auth certificate
-if ($action == 'remove_auth_cert') {
-    dolibarr_del_const($db, 'KSEF_AUTH_CERTIFICATE', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_AUTH_PRIVATE_KEY', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_AUTH_KEY_PASSWORD', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_AUTH_CERT_SERIAL', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_AUTH_CERT_VALID_FROM', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_AUTH_CERT_VALID_TO', $conf->entity);
-
-    if ($conf->global->KSEF_AUTH_METHOD == 'certificate') {
-        dolibarr_set_const($db, 'KSEF_AUTH_METHOD', 'token', 'chaine', 0, '', $conf->entity);
-    }
-
-    setEventMessages($langs->trans("KSEF_AuthCertificateRemoved"), null, 'mesgs');
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// Remove offline certificate
-if ($action == 'remove_offline_cert') {
-    dolibarr_del_const($db, 'KSEF_OFFLINE_CERTIFICATE', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_OFFLINE_PRIVATE_KEY', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_OFFLINE_KEY_PASSWORD', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_OFFLINE_CERT_SERIAL', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_OFFLINE_CERT_VALID_FROM', $conf->entity);
-    dolibarr_del_const($db, 'KSEF_OFFLINE_CERT_VALID_TO', $conf->entity);
-
-    setEventMessages($langs->trans("KSEF_OfflineCertificateRemoved"), null, 'mesgs');
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-// Customer exclusion management
-if ($action == 'add_excluded') {
-    $socid = GETPOST('socid', 'int');
-    $current = $conf->global->KSEF_EXCLUDED_CUSTOMERS ?? '';
-    $excluded = array_filter(array_map('trim', explode(',', $current)));
-    if (!in_array($socid, $excluded)) {
-        $excluded[] = $socid;
-        dolibarr_set_const($db, "KSEF_EXCLUDED_CUSTOMERS", implode(',', $excluded), 'chaine', 0, '', $conf->entity);
-        setEventMessages($langs->trans("KSEF_CustomerExcludedFromKSEF"), null, 'mesgs');
-    }
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-if ($action == 'remove_excluded') {
-    $socid = GETPOST('socid', 'int');
-    $current = $conf->global->KSEF_EXCLUDED_CUSTOMERS ?? '';
-    $excluded = array_filter(array_map('trim', explode(',', $current)));
-    $excluded = array_diff($excluded, array($socid));
-    dolibarr_set_const($db, "KSEF_EXCLUDED_CUSTOMERS", implode(',', $excluded), 'chaine', 0, '', $conf->entity);
-    setEventMessages($langs->trans("KSEF_CustomerRemovedFromKSEFExclusions"), null, 'mesgs');
     header("Location: " . $_SERVER["PHP_SELF"]);
     exit;
 }
@@ -804,13 +273,13 @@ if ($action == 'checklatarnia') {
     }
 }
 
-// Test connection
+$activeEnv = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+
 if ($action == 'testconnection') {
-    $environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
     try {
-        $client = new KsefClient($db, $environment);
+        $client = new KsefClient($db);
         if ($client->testConnection()) {
-            setEventMessages($langs->trans('KSEF_CONNECTION_SUCCESS') . ' [' . $environment . ']', null, 'mesgs');
+            setEventMessages($langs->trans('KSEF_CONNECTION_SUCCESS') . ' [' . $activeEnv . ']', null, 'mesgs');
         } else {
             setEventMessages($langs->trans('KSEF_CONNECTION_FAILED') . ': ' . $client->error, null, 'errors');
         }
@@ -819,16 +288,15 @@ if ($action == 'testconnection') {
     }
 }
 
-// Test token authentication
 if ($action == 'testtokenauth') {
-    $environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
-    $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    $conf->global->KSEF_AUTH_METHOD = 'token';
+    $envKey = 'KSEF_AUTH_METHOD_' . $activeEnv;
+    $orig_method = getDolGlobalString($envKey, 'token');
+    $conf->global->$envKey = 'token';
 
     try {
-        $client = new KsefClient($db, $environment);
+        $client = new KsefClient($db);
         if ($client->authenticate()) {
-            setEventMessages($langs->trans('KSEF_AUTH_SUCCESS') . ' [' . $environment . '] (Token)', null, 'mesgs');
+            setEventMessages($langs->trans('KSEF_AUTH_SUCCESS') . ' [' . $activeEnv . '] (Token)', null, 'mesgs');
         } else {
             setEventMessages($langs->trans('KSEF_AUTH_FAILED') . ': ' . $client->error, null, 'errors');
         }
@@ -836,26 +304,25 @@ if ($action == 'testtokenauth') {
         setEventMessages($langs->trans('KSEF_AUTH_ERROR') . ': ' . $e->getMessage(), null, 'errors');
     }
 
-    $conf->global->KSEF_AUTH_METHOD = $orig_method;
+    $conf->global->$envKey = $orig_method;
 }
 
-// Test certificate authentication
 if ($action == 'testcertauth') {
-    $environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
-    $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    $conf->global->KSEF_AUTH_METHOD = 'certificate';
+    $envKey = 'KSEF_AUTH_METHOD_' . $activeEnv;
+    $orig_method = getDolGlobalString($envKey, 'token');
+    $conf->global->$envKey = 'certificate';
 
     try {
-        $client = new KsefClient($db, $environment);
+        $client = new KsefClient($db);
         if ($client->authenticate()) {
-            setEventMessages($langs->trans('KSEF_CERT_AUTH_SUCCESS') . ' [' . $environment . ']', null, 'mesgs');
+            setEventMessages($langs->trans('KSEF_CERT_AUTH_SUCCESS') . ' [' . $activeEnv . ']', null, 'mesgs');
         } else {
             setEventMessages($langs->trans('KSEF_CERT_AUTH_FAILED') . ': ' . $client->error, null, 'errors');
         }
     } catch (Exception $e) {
         setEventMessages($langs->trans('KSEF_CERT_AUTH_ERROR') . ': ' . $e->getMessage(), null, 'errors');
     }
-    $conf->global->KSEF_AUTH_METHOD = $orig_method;
+    $conf->global->$envKey = $orig_method;
 }
 
 $form = new Form($db);
@@ -867,88 +334,16 @@ $linkback = '<a href="' . ($backtopage ?: DOL_URL_ROOT . '/admin/modules.php?res
 print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 
 $head = ksefAdminPrepareHead();
-print dol_get_fiche_head($head, 'settings', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
+print dol_get_fiche_head($head, 'general', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-// Re-activation warning
-dol_include_once('/ksef/core/modules/modKSEF.class.php');
-$_ksefModule = new modKSEF($db);
-$_ksefCurrentVersion = $_ksefModule->version;
-$_ksefLastInit = getDolGlobalString('KSEF_LAST_INIT_VERSION', '');
-if (ksefNeedsReactivation($_ksefCurrentVersion, $_ksefLastInit)) {
-    print '<div style="margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
-    print '<i class="fa fa-exclamation-triangle" style="color: #856404; margin-right: 6px;"></i>';
-    print '<strong>' . $langs->trans('KSEF_MODULE_NEEDS_REACTIVATION') . '</strong><br>';
-    $_ksefFromVersion = $_ksefLastInit !== '' ? $_ksefLastInit : $langs->trans('KSEF_VERSION_UNKNOWN');
-    print dol_escape_htmltag($langs->trans('KSEF_MODULE_NEEDS_REACTIVATION_Desc', $_ksefFromVersion, $_ksefCurrentVersion));
-    print ' <a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1" class="button button-small" style="margin-left: 8px;">' . $langs->trans('KSEF_GOTO_MODULES_LIST') . '</a>';
-    print '</div>';
+echo ksefShowReactivationWarning();
+
+$warnings = ksefGetConfigWarnings();
+if (!empty($warnings)) {
+    echo ksefRenderConfigWarnings($warnings, 'general');
 }
 
-print '<span class="opacitymedium">' . $langs->trans("KSEF_SetupPage") . '</span><br><br>';
-
-$missing = array();
-if (!extension_loaded('openssl')) $missing[] = 'OpenSSL';
-if (!extension_loaded('curl')) $missing[] = 'cURL';
-if (!extension_loaded('dom')) $missing[] = 'DOM';
-
-if (count($missing) > 0) {
-    print '<div class="error">';
-    print '<strong>' . $langs->trans("KSEF_Error") . ':</strong> Missing PHP extensions: ' . implode(', ', $missing);
-    print '</div><br>';
-}
-
-// Configuration warnings
-$warnings = array();
-if (empty($conf->global->KSEF_COMPANY_NIP)) {
-    $warnings[] = $langs->trans("KSEF_WARNING_NO_NIP");
-}
-
-// Determine authentication status
-$current_auth_method = $conf->global->KSEF_AUTH_METHOD ?? '';
-$has_token = !empty($conf->global->KSEF_AUTH_TOKEN);
-$has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
-    !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
-    !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
-
-// Check for duplicate
-$configuredFields = array();
-foreach (array('NIP', 'KRS', 'REGON', 'BDO') as $ident) {
-    $fv = ksefGetFieldName($ident);
-    if (!empty($fv)) {
-        $configuredFields[$fv][] = $ident;
-    }
-}
-foreach ($configuredFields as $fv => $idents) {
-    if (count($idents) > 1) {
-        $warnings[] = $langs->trans("KSEF_WARNING_DUPLICATE_FIELD", implode(', ', $idents), $fv);
-    }
-}
-
-// Check if translation are applied
-$currentOverridesCheck = ksefGetCurrentTranslationOverrides($db);
-if (empty($currentOverridesCheck)) {
-    $warnings[] = $langs->trans("KSEF_WARNING_NO_TRANS_OVERRIDES");
-}
-
-$no_auth_configured = (!$has_token && !$has_auth_cert);
-if ($no_auth_configured) {
-    $warnings[] = '<strong style="color: #dc3545;">' . $langs->trans("KSEF_WARNING_NO_AUTH") . '</strong> - ' . $langs->trans("KSEF_WARNING_CONFIGURE_TOKEN_OR_CERT");
-} else {
-    $current_auth_method = $conf->global->KSEF_AUTH_METHOD ?? 'token';
-    if ($current_auth_method == 'token' && !$has_token) {
-        $warnings[] = $langs->trans("KSEF_WARNING_NO_TOKEN");
-    } elseif ($current_auth_method == 'certificate' && !$has_auth_cert) {
-        $warnings[] = $langs->trans("KSEF_WARNING_NO_AUTH_CERTIFICATE");
-    }
-}
-
-if (count($warnings) > 0) {
-    print '<div class="warning" style="margin-bottom: 15px;">';
-    foreach ($warnings as $warning) {
-        print '• ' . $warning . '<br>';
-    }
-    print '</div>';
-}
+print '<span>' . $langs->trans("KSEF_SetupPage") . '</span><br><br>';
 
 // Lighthouse status
 $latarnia_cached = KsefLatarnia::getCachedStatus();
@@ -983,12 +378,12 @@ $fieldOptionsOptional = ksefGetFieldOptions(true);
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_NIP"), $langs->trans("KSEF_COMPANY_NIP_Help")) . '</td>';
 print '<td>';
-print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_NIP" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_NIP ?? '') . '" placeholder="1234567890"> ';
-print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
-print $form->selectarray('KSEF_FIELD_NIP', $fieldOptionsNip, $conf->global->KSEF_FIELD_NIP ?? 'idprof1', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
-$nipField = $conf->global->KSEF_FIELD_NIP ?? 'idprof1';
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_NIP" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_NIP', '')) . '" placeholder="1234567890"> ';
+print '<span class="small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_NIP', $fieldOptionsNip, getDolGlobalString('KSEF_FIELD_NIP', 'idprof1'), 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+$nipField = getDolGlobalString('KSEF_FIELD_NIP', 'idprof1');
 if ($nipField === 'tva_intra') {
-    print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_NIP_FROM_VATID_NOTE") . ')</span>';
+    print ' <span class="small">(' . $langs->trans("KSEF_NIP_FROM_VATID_NOTE") . ')</span>';
 }
 print '</td>';
 print '</tr>';
@@ -996,17 +391,17 @@ print '</tr>';
 // VAT ID
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_FIELD_VATID"), $langs->trans("KSEF_FIELD_VATID_Help")) . '</td>';
-print '<td><span class="opacitymedium">' . $langs->trans("VATIntra") . ' (tva_intra) — ' . $langs->trans("KSEF_FIELD_VATID_ALWAYS") . '</span></td>';
+print '<td><span>' . $langs->trans("VATIntra") . ' (tva_intra) - ' . $langs->trans("KSEF_FIELD_VATID_ALWAYS") . '</span></td>';
 print '</tr>';
 
 // KRS
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_KRS"), $langs->trans("KSEF_COMPANY_KRS_Help")) . '</td>';
 print '<td>';
-print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_KRS" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_KRS ?? '') . '" placeholder="0000000000">';
-print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
-print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
-print $form->selectarray('KSEF_FIELD_KRS', $fieldOptionsOptional, $conf->global->KSEF_FIELD_KRS ?? 'idprof2', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_KRS" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_KRS', '')) . '" placeholder="0000000000">';
+print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_KRS', $fieldOptionsOptional, getDolGlobalString('KSEF_FIELD_KRS', 'idprof2'), 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
 print '</td>';
 print '</tr>';
 
@@ -1014,10 +409,10 @@ print '</tr>';
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_REGON"), $langs->trans("KSEF_COMPANY_REGON_Help")) . '</td>';
 print '<td>';
-print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_REGON" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_REGON ?? '') . '" placeholder="000000000">';
-print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
-print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
-print $form->selectarray('KSEF_FIELD_REGON', $fieldOptionsOptional, $conf->global->KSEF_FIELD_REGON ?? 'idprof3', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_REGON" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_REGON', '')) . '" placeholder="000000000">';
+print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_REGON', $fieldOptionsOptional, getDolGlobalString('KSEF_FIELD_REGON', 'idprof3'), 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
 print '</td>';
 print '</tr>';
 
@@ -1025,10 +420,10 @@ print '</tr>';
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_BDO"), $langs->trans("KSEF_COMPANY_BDO_Help")) . '</td>';
 print '<td>';
-print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_BDO" value="' . dol_escape_htmltag($conf->global->KSEF_COMPANY_BDO ?? '') . '" placeholder="000000000">';
-print ' <span class="opacitymedium small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
-print '<span class="opacitymedium small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
-print $form->selectarray('KSEF_FIELD_BDO', $fieldOptionsOptional, $conf->global->KSEF_FIELD_BDO ?? 'idprof4', 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_BDO" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_BDO', '')) . '" placeholder="000000000">';
+print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_BDO', $fieldOptionsOptional, getDolGlobalString('KSEF_FIELD_BDO', 'idprof4'), 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
 print '</td>';
 print '</tr>';
 
@@ -1041,9 +436,9 @@ $array_env = array(
     'DEMO' => $langs->trans('KSEF_ENV_DEMO') . ' (ksef-demo.mf.gov.pl)',
     'PRODUCTION' => $langs->trans('KSEF_ENV_PRODUCTION') . ' (ksef.mf.gov.pl)'
 );
-print $form->selectarray('KSEF_ENVIRONMENT', $array_env, $conf->global->KSEF_ENVIRONMENT ?? 'DEMO');
+print $form->selectarray('KSEF_ENVIRONMENT', $array_env, getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO'));
 
-$current_env = $conf->global->KSEF_ENVIRONMENT ?? 'DEMO';
+$current_env = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
 print '<div id="production_warning" class="warning" style="margin-top: 10px; padding: 8px 12px; display: ' . ($current_env == 'PRODUCTION' ? 'block' : 'none') . ';">';
 print '<i class="fa fa-exclamation-triangle"></i> ' . $langs->trans("KSEF_PRODUCTION_WARNING");
 print '</div>';
@@ -1068,14 +463,6 @@ print '</table>';
 print '<br><table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_UI_CONFIG") . '</td></tr>';
 
-// QR Code
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_ADD_QR'), $langs->trans('KSEF_ADD_QR_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_ADD_QR" id="KSEF_ADD_QR" value="1" ' . (!empty($conf->global->KSEF_ADD_QR) ? 'checked' : '') . '>';
-print ' <label for="KSEF_ADD_QR">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
 // Button color
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans("KSEF_BUTTON_COLOR"), $langs->trans("KSEF_BUTTON_COLOR_Help")) . '</td>';
@@ -1089,299 +476,97 @@ $array_colors = array(
     '#007bff' => $langs->trans('KSEF_Blue'),
     '#6f42c1' => $langs->trans('KSEF_Purple'),
 );
-print $form->selectarray('KSEF_BUTTON_COLOR', $array_colors, $conf->global->KSEF_BUTTON_COLOR ?? '#dc3545');
+print $form->selectarray('KSEF_BUTTON_COLOR', $array_colors, getDolGlobalString('KSEF_BUTTON_COLOR', '#dc3545'));
 print '</td></tr>';
 
 // Purge configuration on module disable
 print '<tr class="oddeven">';
 print '<td>' . $form->textwithpicto($langs->trans('KSEF_PURGE_ON_DISABLE'), $langs->trans('KSEF_PURGE_ON_DISABLE_Help')) . '</td>';
 print '<td>';
-print '<input type="checkbox" name="KSEF_PURGE_ON_DISABLE" id="KSEF_PURGE_ON_DISABLE" value="1" ' . (!empty($conf->global->KSEF_PURGE_ON_DISABLE) ? 'checked' : '') . '>';
+print '<input type="checkbox" name="KSEF_PURGE_ON_DISABLE" id="KSEF_PURGE_ON_DISABLE" value="1" ' . (getDolGlobalInt('KSEF_PURGE_ON_DISABLE') ? 'checked' : '') . '>';
 print ' <label for="KSEF_PURGE_ON_DISABLE">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
 print '</table>';
 
-// Importing Settings
+// VAT Rate Codes section
 print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_IMPORTING_CONFIG") . '</td></tr>';
+print '<tr class="liste_titre"><td colspan="4">' . $langs->trans("KSEF_VAT_DICTIONARY_HELPER") . '</td></tr>';
+print '<tr class="oddeven"><td colspan="4">' . $form->textwithpicto($langs->trans('KSEF_VAT_DICTIONARY_HELPER_Desc'), $langs->trans('KSEF_VAT_DICTIONARY_HELPER_Help')) . '</td></tr>';
 
-// Auto-create suppliers
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" id="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" value="1" ' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', '1') === '1' ? 'checked' : '') . '>';
-print ' <label for="KSEF_BATCH_AUTO_CREATE_SUPPLIERS">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
+// Fetch Poland ID
+$_vatPolandId = 0;
+$_vatSqlPl = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_country WHERE code = 'PL'";
+$_vatResPl = $db->query($_vatSqlPl);
+if ($_vatResPl && $_vatObjPl = $db->fetch_object($_vatResPl)) $_vatPolandId = (int) $_vatObjPl->rowid;
 
-// Auto-create products
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_PRODUCTS" id="KSEF_BATCH_AUTO_CREATE_PRODUCTS" value="1" ' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_PRODUCTS', '1') === '1' ? 'checked' : '') . '>';
-print ' <label for="KSEF_BATCH_AUTO_CREATE_PRODUCTS">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-// Use indeks as product ref
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING'), $langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_PRODUCT_REF_USE_INDEKS" id="KSEF_PRODUCT_REF_USE_INDEKS" value="1" ' . (getDolGlobalString('KSEF_PRODUCT_REF_USE_INDEKS', '1') === '1' ? 'checked' : '') . '>';
-print ' <label for="KSEF_PRODUCT_REF_USE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-print '</table>';
-
-// Optional Fields
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_FA3_OPTIONAL_FIELDS") . '</td></tr>';
-
-// NrKlienta/Customer code
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA'), $langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_NRKLIENTA" id="KSEF_FA3_INCLUDE_NRKLIENTA" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_NRKLIENTA) ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_NRKLIENTA">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-// Indeks/Product reference code
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_INDEKS'), $langs->trans('KSEF_FA3_INCLUDE_INDEKS_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_INDEKS" id="KSEF_FA3_INCLUDE_INDEKS" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS) ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-// GTIN/Barcode/EAN
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_GTIN'), $langs->trans('KSEF_FA3_INCLUDE_GTIN_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_GTIN" id="KSEF_FA3_INCLUDE_GTIN" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_GTIN) ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_GTIN">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-// P_8A/Unit of measure
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_UNIT'), $langs->trans('KSEF_FA3_INCLUDE_UNIT_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_UNIT" id="KSEF_FA3_INCLUDE_UNIT" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_UNIT) ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_UNIT">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-// OpisRachunku/Bank account description
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_BANK_DESC'), $langs->trans('KSEF_FA3_INCLUDE_BANK_DESC_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_BANK_DESC" id="KSEF_FA3_INCLUDE_BANK_DESC" value="1" ' . (!empty($conf->global->KSEF_FA3_INCLUDE_BANK_DESC) ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_BANK_DESC">' . $langs->trans("KSEF_Enabled") . '</label>';
-print '</td></tr>';
-
-// P_1M/Place of Issue
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_PLACE_OF_ISSUE'), $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_Help')) . '</td>';
-print '<td>';
-$place_modes = array(
-    'disabled' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_DISABLED'),
-    'company' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_COMPANY'),
-    'custom' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM'),
+// KSeF code metadata (for special 0% codes only)
+$ksefVatMeta = array(
+    'ZW'  => array('desc' => $langs->trans('KSEF_VAT_CODE_ZW')),
+    'RC'  => array('desc' => $langs->trans('KSEF_VAT_CODE_RC')),
+    'NP'  => array('desc' => $langs->trans('KSEF_VAT_CODE_NP')),
+    'NP2' => array('desc' => $langs->trans('KSEF_VAT_CODE_NP2')),
+    'WDT' => array('desc' => $langs->trans('KSEF_VAT_CODE_WDT')),
+    'EX'  => array('desc' => $langs->trans('KSEF_VAT_CODE_EX')),
 );
-$current_place_mode = $conf->global->KSEF_FA3_PLACE_OF_ISSUE_MODE ?? 'disabled';
-print $form->selectarray('KSEF_FA3_PLACE_OF_ISSUE_MODE', $place_modes, $current_place_mode, 0, 0, 0, 'onchange="togglePlaceOfIssueCustom()"', 0, 0, 0, '', 'minwidth200');
-print '<span id="place_of_issue_custom_wrapper" style="margin-left: 10px; ' . ($current_place_mode != 'custom' ? 'display:none;' : '') . '">';
-print '<input type="text" name="KSEF_FA3_PLACE_OF_ISSUE_CUSTOM" class="flat minwidth200" value="' . dol_escape_htmltag($conf->global->KSEF_FA3_PLACE_OF_ISSUE_CUSTOM ?? '') . '" placeholder="' . $langs->trans("KSEF_FA3_PLACE_OF_ISSUE_CUSTOM_Placeholder") . '">';
-print '</span>';
-print '</td></tr>';
-print '<script>
-function togglePlaceOfIssueCustom() {
-    var mode = document.querySelector(\'select[name="KSEF_FA3_PLACE_OF_ISSUE_MODE"]\').value;
-    var wrapper = document.getElementById("place_of_issue_custom_wrapper");
-    wrapper.style.display = (mode == "custom") ? "inline" : "none";
+
+// Fetch ALL Polish VAT entries
+$_vatAllEntries = array();
+if ($_vatPolandId > 0) {
+    $_vatSql = "SELECT rowid, code, taux, note, active, entity FROM " . MAIN_DB_PREFIX . "c_tva"
+        . " WHERE entity IN (0, " . ((int) $conf->entity) . ")"
+        . " AND fk_pays = " . $_vatPolandId
+        . " ORDER BY taux DESC, code";
+    $_vatRes = $db->query($_vatSql);
+    while ($_vatRes && $_vatObj = $db->fetch_object($_vatRes)) {
+        $_vatAllEntries[] = $_vatObj;
+    }
 }
-</script>';
 
-// P_6/Sale Date Source
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_SALE_DATE_SOURCE'), $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_Help')) . '</td>';
-print '<td>';
-$sale_date_modes = array(
-    'invoice_date' => $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_INVOICE'),
-    'delivery_date' => $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_DELIVERY'),
-);
-$current_sale_date_source = getDolGlobalString('KSEF_FA3_SALE_DATE_SOURCE', 'delivery_date');
-print $form->selectarray('KSEF_FA3_SALE_DATE_SOURCE', $sale_date_modes, $current_sale_date_source, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
-print '</td></tr>';
+print '<tr class="liste_titre">';
+print '<td style="width:28px;">' . $langs->trans('KSEF_Enabled') . '</td>';
+print '<td style="width:50px;">' . $langs->trans('Rate') . '</td>';
+print '<td style="width:60px;">' . $langs->trans('KSEF_VAT_CODE_COLUMN') . '</td>';
+print '<td>' . $langs->trans('KSEF_VAT_CODE_DESC_COLUMN') . '</td>';
+print '</tr>';
 
-print '</table>';
+foreach ($_vatAllEntries as $entry) {
+    $codeUpper = strtoupper(trim($entry->code));
+    $isKsefCode = isset($ksefVatMeta[$codeUpper]);
+    $isGlobal = ((int) $entry->entity === 0);
+    $isActive = !empty($entry->active);
 
-// DodatkowyOpis Settings
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_DODATKOWY_OPIS_SECTION") . '</td></tr>';
+    print '<tr class="oddeven">';
 
-// Note mode dropdown
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE'), $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_Help')) . '</td>';
-print '<td>';
-$note_modes = array(
-    'disabled' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_DISABLED'),
-    'simple' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_SIMPLE'),
-    'keyvalue' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_KEYVALUE'),
-);
-$current_note_mode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled');
-print $form->selectarray('KSEF_DODATKOWY_OPIS_NOTE_MODE', $note_modes, $current_note_mode, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
-print '</td></tr>';
+    // Checkbox
+    if ($isGlobal) {
+        print '<td class="center"><input type="checkbox" ' . ($isActive ? 'checked' : '') . ' disabled title="' . dol_escape_htmltag($langs->trans('KSEF_VAT_CODE_GLOBAL')) . '"></td>';
+    } else {
+        print '<td class="center"><input type="checkbox" name="KSEF_VAT_TOGGLE_' . ((int) $entry->rowid) . '" value="1"' . ($isActive ? ' checked' : '') . '></td>';
+    }
 
-// Extrafields listing
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_EXTRAFIELDS'), $langs->trans('KSEF_DODATKOWY_OPIS_EXTRAFIELDS_Help')) . '</td>';
-print '<td>';
-dol_include_once('/core/class/extrafields.class.php');
-$ef_display = new ExtraFields($db);
-$ef_display->fetch_name_optionals_label('facture');
-$current_ef_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
-$enabled_fields = array_filter(array_map('trim', explode(',', $current_ef_config)));
-$has_user_fields = false;
+    // Rate
+    print '<td>' . dol_escape_htmltag($entry->taux) . '%</td>';
 
-if (!empty($ef_display->attributes['facture']['label'])) {
-    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
-    print '<tr class="liste_titre">';
-    print '<td style="width:28px;"></td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
-    print '<td style="text-align:right; width:120px;"></td>';
+    // Code
+    $codeDisplay = !empty($entry->code) ? $entry->code : '';
+    print '<td><code style="font-size: inherit;">' . dol_escape_htmltag($codeDisplay) . '</code></td>';
+
+    // Description
+    if ($isKsefCode) {
+        print '<td>' . dol_escape_htmltag($ksefVatMeta[$codeUpper]['desc']) . '</td>';
+    } else {
+        print '<td>' . dol_escape_htmltag($entry->note ?: '') . '</td>';
+    }
+
     print '</tr>';
-
-    $_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
-    foreach ($ef_display->attributes['facture']['label'] as $fname => $flabel) {
-        if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_display->attributes['facture']['type'][$fname] ?? '';
-        if (in_array($ftype, $_dodUnsupportedTypes)) continue;
-        $has_user_fields = true;
-        $checked = in_array($fname, $enabled_fields) ? ' checked' : '';
-        $translatedLabel = $langs->trans($flabel);
-
-        $optsText = '';
-        if ($ftype === 'select' && !empty($ef_display->attributes['facture']['param'][$fname]['options'])) {
-            $optLines = array();
-            foreach ($ef_display->attributes['facture']['param'][$fname]['options'] as $ocode => $olabel) {
-                $optLines[] = $ocode . '|' . $olabel;
-            }
-            $optsText = implode("\n", $optLines);
-        }
-
-        print '<tr class="oddeven">';
-        print '<td><input type="checkbox" name="KSEF_EF_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
-        print '<td>' . dol_escape_htmltag($translatedLabel) . '</td>';
-        print '<td><code class="opacitymedium">' . dol_escape_htmltag($fname) . '</code></td>';
-        print '<td><span class="opacitymedium">' . dol_escape_htmltag($ftype) . '</span></td>';
-        print '<td style="text-align:right;">';
-        print '<button type="button" class="button button-small" onclick="ksefEditExtrafield(this)"';
-        print ' data-code="' . dol_escape_htmltag($fname) . '"';
-        print ' data-label="' . dol_escape_htmltag($translatedLabel) . '"';
-        print ' data-type="' . dol_escape_htmltag($ftype) . '"';
-        print ' data-options="' . dol_escape_htmltag($optsText) . '"';
-        print ' title="' . $langs->trans('KSEF_DODATKOWY_OPIS_EDIT_FIELD') . '"><span class="fa fa-pencil"></span></button> ';
-        print '<button type="button" class="button button-small butActionDelete" onclick="ksefDeleteExtrafield(this)"';
-        print ' data-code="' . dol_escape_htmltag($fname) . '"';
-        print ' title="' . $langs->trans('KSEF_DODATKOWY_OPIS_DELETE_FIELD') . '"><span class="fa fa-trash"></span></button>';
-        print '</td>';
-        print '</tr>';
-    }
-    print '</table>';
 }
 
-if (!$has_user_fields) {
-    print '<span class="opacitymedium">' . $langs->trans('KSEF_DODATKOWY_OPIS_NO_EXTRAFIELDS') . '</span><br>';
-}
-
-// Create/Edit form area
-$createToken = newToken();
-print '<details id="ksef_ef_create_details" style="margin-top:8px; padding:8px; border:1px dashed #bbb; border-radius:4px;">';
-print '<summary style="cursor:pointer; font-weight:bold;">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD') . '</summary>';
-print '<div id="ksef_ef_form_area" data-mode="create" style="margin-top:8px;">';
-print '<input type="hidden" form="ksef_ef_create_form" name="token" value="' . $createToken . '">';
-print '<input type="hidden" form="ksef_ef_edit_form" name="token" value="' . $createToken . '">';
-print '<table class="noborder" style="width:100%;">';
-print '<tr><td style="width:160px;"><label for="ksef_ef_label">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</label></td>';
-print '<td><input type="text" id="ksef_ef_label" form="ksef_ef_create_form" name="ef_label" class="flat minwidth300"></td></tr>';
-print '<tr id="ksef_ef_code_row" style="display:none;"><td>' . $langs->trans('KSEF_DODATKOWY_OPIS_INTERNAL_CODE') . '</td>';
-print '<td><code id="ksef_ef_code_display" class="opacitymedium"></code><input type="hidden" id="ksef_ef_code" form="ksef_ef_edit_form" name="ef_code" value=""></td></tr>';
-print '<tr><td><label for="ksef_ef_type">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</label></td>';
-print '<td><select id="ksef_ef_type" form="ksef_ef_create_form" name="ef_type" onchange="ksefToggleOptions()">';
-print '<option value="varchar">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_VARCHAR') . '</option>';
-print '<option value="text">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_TEXT') . '</option>';
-print '<option value="int">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_INT') . '</option>';
-print '<option value="double">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DOUBLE') . '</option>';
-print '<option value="date">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATE') . '</option>';
-print '<option value="datetime">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATETIME') . '</option>';
-print '<option value="select">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_SELECT') . '</option>';
-print '</select></td></tr>';
-print '<tr id="ksef_ef_options_row" style="display:none;"><td><label for="ksef_ef_options">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_OPTIONS') . '</label></td>';
-print '<td><textarea id="ksef_ef_options" form="ksef_ef_create_form" name="ef_options" class="flat" rows="4" style="width:100%;"></textarea></td></tr>';
-print '<tr><td></td><td>';
-print '<button type="submit" id="ksef_ef_create_btn" form="ksef_ef_create_form" class="button">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUBMIT') . '</button> ';
-print '<button type="submit" id="ksef_ef_edit_btn" form="ksef_ef_edit_form" class="button" style="display:none;">' . $langs->trans('KSEF_DODATKOWY_OPIS_EDIT_FIELD_SUBMIT') . '</button> ';
-print '<button type="button" id="ksef_ef_cancel_btn" class="button" style="display:none;" onclick="ksefCancelEdit()">' . $langs->trans('Cancel') . '</button>';
+print '<tr class="oddeven"><td colspan="4">';
+$dictUrl = DOL_URL_ROOT . '/admin/dict.php?id=10';
+print '<a href="' . $dictUrl . '" target="_blank" class="small">' . $langs->trans('KSEF_VAT_CODE_DICT_LINK') . '</a>';
 print '</td></tr>';
 print '</table>';
-print '</div>';
-print '</details>';
-
-print '</td></tr>';
-
-print '</table>';
-
-// extrafield create/edit/delete
-print '<script>
-function ksefToggleOptions() {
-    var typeSel = document.getElementById("ksef_ef_type");
-    document.getElementById("ksef_ef_options_row").style.display = (typeSel.value === "select") ? "" : "none";
-}
-function ksefEditExtrafield(btn) {
-    var area = document.getElementById("ksef_ef_form_area");
-    area.dataset.mode = "edit";
-    var code = btn.dataset.code || "";
-    document.getElementById("ksef_ef_label").value = btn.dataset.label || "";
-    document.getElementById("ksef_ef_code").value = code;
-    document.getElementById("ksef_ef_code_display").textContent = code;
-    document.getElementById("ksef_ef_code_row").style.display = "";
-    document.getElementById("ksef_ef_type").value = btn.dataset.type || "varchar";
-    document.getElementById("ksef_ef_options").value = btn.dataset.options || "";
-    // Wire visible inputs to edit form (not label/options textarea which are already wired to create form)
-    var inputs = ["ksef_ef_label", "ksef_ef_type", "ksef_ef_options"];
-    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_edit_form"); });
-    document.getElementById("ksef_ef_create_btn").style.display = "none";
-    document.getElementById("ksef_ef_edit_btn").style.display = "";
-    document.getElementById("ksef_ef_cancel_btn").style.display = "";
-    ksefToggleOptions();
-    document.getElementById("ksef_ef_create_details").open = true;
-    document.getElementById("ksef_ef_label").focus();
-}
-function ksefCancelEdit() {
-    var area = document.getElementById("ksef_ef_form_area");
-    area.dataset.mode = "create";
-    document.getElementById("ksef_ef_label").value = "";
-    document.getElementById("ksef_ef_code").value = "";
-    document.getElementById("ksef_ef_code_display").textContent = "";
-    document.getElementById("ksef_ef_code_row").style.display = "none";
-    document.getElementById("ksef_ef_type").value = "varchar";
-    document.getElementById("ksef_ef_options").value = "";
-    var inputs = ["ksef_ef_label", "ksef_ef_type", "ksef_ef_options"];
-    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_create_form"); });
-    document.getElementById("ksef_ef_create_btn").style.display = "";
-    document.getElementById("ksef_ef_edit_btn").style.display = "none";
-    document.getElementById("ksef_ef_cancel_btn").style.display = "none";
-    ksefToggleOptions();
-}
-function ksefDeleteExtrafield(btn) {
-    var code = btn.dataset.code;
-    var msg = "' . dol_escape_js($langs->transnoentities('KSEF_DODATKOWY_OPIS_DELETE_CONFIRM', '__CODE__')) . '".replace("__CODE__", code);
-    if (confirm(msg)) {
-        document.getElementById("ksef_ef_delete_code").value = code;
-        document.getElementById("ksef_ef_delete_form").submit();
-    }
-}
-</script>';
 
 // Multicurrency Settings
 print '<br><table class="noborder centpercent">';
@@ -1393,112 +578,10 @@ $nbp_modes = array(
     'keep_base' => $langs->trans('KSEF_NBP_RATE_MODE_KEEP_BASE'),
     'keep_foreign' => $langs->trans('KSEF_NBP_RATE_MODE_KEEP_FOREIGN'),
 );
-$current_mode = $conf->global->KSEF_NBP_RATE_MODE ?? 'keep_base';
+$current_mode = getDolGlobalString('KSEF_NBP_RATE_MODE', 'keep_base');
 print $form->selectarray('KSEF_NBP_RATE_MODE', $nbp_modes, $current_mode, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
-print '</table>';
-
-// Authentication Method Selection
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_AUTH_METHOD_SELECT") . '</td></tr>';
-
-print '<tr class="oddeven"><td colspan="2">';
-print '<div style="display: flex; gap: 20px; padding: 10px 0; flex-wrap: wrap;">';
-
-// FIX #6: Show warning box when nothing is configured
-if ($no_auth_configured) {
-    print '<div style="flex: 1; min-width: 250px; max-width: 300px; padding: 15px; border: 2px solid #dc3545; border-radius: 8px; background: #fff5f5;">';
-    print '<div style="display: flex; align-items: center; margin-bottom: 10px;">';
-    print '<span style="width: 40px; height: 40px; background: #dc354520; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-right: 10px;">';
-    print '<i class="fa fa-exclamation-triangle" style="color: #dc3545; font-size: 18px;"></i>';
-    print '</span>';
-    print '<strong style="color: #dc3545;">' . $langs->trans("KSEF_NO_AUTH_CONFIGURED") . '</strong>';
-    print '</div>';
-    print '<div style="padding-left: 50px;">';
-    print '<span class="opacitymedium" style="font-size: 12px;">' . $langs->trans("KSEF_ConfigureAuthBelow") . '</span>';
-    print '</div></div>';
-}
-
-// Token option
-$token_selected = ($current_auth_method == 'token' && $has_token)
-    || (empty($current_auth_method) && $has_token);
-$token_border_color = $token_selected ? '#28a745' : ($has_token ? '#17a2b8' : '#dee2e6');
-$token_bg_color = $token_selected ? '#f8fff8' : '#fff';
-
-print '<div style="flex: 1; min-width: 250px; padding: 15px; border: 2px solid ' . $token_border_color . '; border-radius: 8px; background: ' . $token_bg_color . ';">';
-print '<label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">';
-print '<input type="radio" name="KSEF_AUTH_METHOD" value="token" ' . ($token_selected ? 'checked' : '') . ' ' . (!$has_token ? 'disabled' : '') . ' style="margin-right: 10px;">';
-print '<strong>' . $langs->trans("KSEF_AUTH_METHOD_TOKEN") . '</strong>';
-if ($token_selected && $has_token) {
-    print ' <span class="badge badge-success" style="margin-left: 10px;">' . $langs->trans("KSEF_Active") . '</span>';
-}
-print '</label>';
-print '<div style="margin-left: 24px;">';
-if ($has_token) {
-    print '<span class="badge badge-status4"><i class="fa fa-check-circle"></i> ' . $langs->trans("KSEF_TokenConfigured") . '</span>';
-    if (!empty($conf->global->KSEF_TOKEN_UPDATED_AT)) {
-        print '<br><small class="opacitymedium">' . $langs->trans("KSEF_Updated") . ': ' . dol_print_date($conf->global->KSEF_TOKEN_UPDATED_AT, 'dayhour') . '</small>';
-    }
-} else {
-    print '<span class="badge badge-warning"><i class="fa fa-exclamation-triangle"></i> ' . $langs->trans("KSEF_TokenNotConfigured") . '</span>';
-    print '<br><small class="opacitymedium">' . $langs->trans("KSEF_ConfigureTokenBelow") . '</small>';
-}
-print '</div></div>';
-
-// Certificate option
-$cert_selected = ($current_auth_method == 'certificate' && $has_auth_cert)
-    || (empty($current_auth_method) && $has_auth_cert && !$has_token);
-$cert_border_color = $cert_selected ? '#28a745' : ($has_auth_cert ? '#17a2b8' : '#dee2e6');
-$cert_bg_color = $cert_selected ? '#f8fff8' : '#fff';
-
-print '<div style="flex: 1; min-width: 250px; padding: 15px; border: 2px solid ' . $cert_border_color . '; border-radius: 8px; background: ' . $cert_bg_color . ';">';
-print '<label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">';
-print '<input type="radio" name="KSEF_AUTH_METHOD" value="certificate" ' . ($cert_selected ? 'checked' : '') . ' ' . (!$has_auth_cert ? 'disabled title="' . $langs->trans("KSEF_ConfigureCertificateFirst") . '"' : '') . ' style="margin-right: 10px;">';
-print '<strong>' . $langs->trans("KSEF_AUTH_METHOD_CERTIFICATE") . '</strong>';
-if ($cert_selected && $has_auth_cert) {
-    print ' <span class="badge badge-success" style="margin-left: 10px;">' . $langs->trans("KSEF_Active") . '</span>';
-}
-print '</label>';
-print '<div style="margin-left: 24px;">';
-if ($has_auth_cert) {
-    $cert_valid_to = $conf->global->KSEF_AUTH_CERT_VALID_TO ?? null;
-    $is_expired = ($cert_valid_to && $cert_valid_to < dol_now());
-    if ($is_expired) {
-        print '<span class="badge badge-danger"><i class="fa fa-times-circle"></i> ' . $langs->trans("KSEF_CertificateExpired") . '</span>';
-    } else {
-        print '<span class="badge badge-status4"><i class="fa fa-check-circle"></i> ' . $langs->trans("KSEF_CertificateConfigured") . '</span>';
-    }
-    if ($cert_valid_to) {
-        print '<br><small class="opacitymedium">' . $langs->trans("KSEF_ValidUntil") . ': ' . dol_print_date($cert_valid_to, 'day') . '</small>';
-    }
-} else {
-    print '<span class="badge badge-secondary"><i class="fa fa-certificate"></i> ' . $langs->trans("KSEF_CertificateNotConfigured") . '</span>';
-    print '<br><small class="opacitymedium">' . $langs->trans("KSEF_ConfigureCertificateBelow") . '</small>';
-}
-print '</div></div>';
-
-print '</div>';
-print '</td></tr>';
-print '</table>';
-
-
-// Token Configuration
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_TOKEN_CONFIG") . '</td></tr>';
-
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_AUTH_TOKEN"), $langs->trans("KSEF_AUTH_TOKEN_Help")) . '</td>';
-print '<td>';
-if ($has_token) {
-    print '<div style="margin-bottom: 10px;">';
-    print '<span class="badge badge-status4"><i class="fa fa-check-circle"></i> ' . $langs->trans("KSEF_TokenConfigured") . '</span>';
-    print '</div>';
-    print '<strong>' . $langs->trans("KSEF_UpdateToken") . ':</strong><br>';
-}
-print '<input type="password" class="flat minwidth400" name="KSEF_AUTH_TOKEN" value="" placeholder="' . ($has_token ? $langs->trans("KSEF_EnterNewTokenToReplace") : $langs->trans("KSEF_PasteTokenHere")) . '" autocomplete="new-password">';
-print '<br><span class="opacitymedium">' . $langs->trans("KSEF_TOKEN_OBTAIN_INFO") . '</span>';
-print '</td></tr>';
 print '</table>';
 
 print '</div>';
@@ -1508,208 +591,13 @@ print '<input type="submit" class="button button-save" value="' . $langs->trans(
 print '</div>';
 print '</form>';
 
-// extrafield create/edit/delete actions
-print '<form id="ksef_ef_create_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="action" value="create_dodatkowy_extrafield">';
-print '</form>';
-print '<form id="ksef_ef_edit_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="action" value="edit_dodatkowy_extrafield">';
-print '</form>';
-print '<form id="ksef_ef_delete_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="action" value="delete_dodatkowy_extrafield">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-print '<input type="hidden" id="ksef_ef_delete_code" name="ef_code" value="">';
-print '</form>';
-
-print '<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; margin-top: 20px;">';
-print '<div style="flex: 1; min-width: 450px;">';
-
-print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '" enctype="multipart/form-data">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-print '<input type="hidden" name="action" value="upload_auth_cert">';
-
-print '<table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_AUTH_CERTIFICATE_CONFIG") . ' <small class="opacitymedium">(' . $langs->trans("KSEF_ForAPIAuthentication") . ')</small></td></tr>';
-
-print '<tr class="oddeven"><td colspan="2">';
-
-// Current status
-if ($has_auth_cert) {
-    $cert_valid_to = $conf->global->KSEF_AUTH_CERT_VALID_TO ?? null;
-    $is_expired = ($cert_valid_to && $cert_valid_to < dol_now());
-
-    print '<div style="padding: 15px; border-radius: 4px; margin-bottom: 15px; ';
-    print 'background-color: ' . ($is_expired ? '#f8d7da' : '#d4edda') . '; ';
-    print 'border: 1px solid ' . ($is_expired ? '#f5c6cb' : '#c3e6cb') . ';">';
-
-    print '<table class="nobordernopadding">';
-    print '<tr><td><i class="fa fa-check text-success"></i></td><td>' . $langs->trans("KSEF_Certificate") . ' (.crt)</td></tr>';
-    print '<tr><td><i class="fa fa-' . (!empty($conf->global->KSEF_AUTH_PRIVATE_KEY) ? 'check text-success' : 'times text-danger') . '"></i></td><td>' . $langs->trans("KSEF_PrivateKey") . ' (.key)</td></tr>';
-    print '<tr><td><i class="fa fa-' . (!empty($conf->global->KSEF_AUTH_KEY_PASSWORD) ? 'check text-success' : 'times text-danger') . '"></i></td><td>' . $langs->trans("KSEF_Password") . '</td></tr>';
-    print '</table>';
-
-    if (!empty($conf->global->KSEF_AUTH_CERT_SERIAL)) {
-        print '<br><strong>' . $langs->trans("KSEF_CertSerial") . ':</strong> ' . dol_escape_htmltag(substr($conf->global->KSEF_AUTH_CERT_SERIAL, 0, 24)) . '...';
-    }
-    if ($cert_valid_to) {
-        print '<br><strong>' . $langs->trans("KSEF_ValidUntil") . ':</strong> ' . dol_print_date($cert_valid_to, 'day');
-        if ($is_expired) print ' <span class="badge badge-danger">' . $langs->trans("Expired") . '</span>';
-    }
-
-    print '<br><br><a class="button button-cancel small" href="' . $_SERVER["PHP_SELF"] . '?action=remove_auth_cert&token=' . newToken() . '" onclick="return confirm(\'' . dol_escape_js($langs->trans("KSEF_ConfirmRemoveAuthCert")) . '\');">';
-    print '<i class="fa fa-trash"></i> ' . $langs->trans("KSEF_RemoveAll") . '</a>';
-    print '</div>';
-}
-
-// Upload form
-print '<div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">';
-
-print '<div style="margin-bottom: 15px;">';
-print '<label><strong>' . $langs->trans("KSEF_CertificateFile") . ' (.crt):</strong></label><br>';
-print '<input type="file" name="auth_cert_file" accept=".crt,.pem,.cer" class="flat">';
-print '</div>';
-
-print '<div style="margin-bottom: 15px;">';
-print '<label><strong>' . $langs->trans("KSEF_PrivateKeyFile") . ' (.key):</strong></label><br>';
-print '<input type="file" name="auth_key_file" accept=".key,.pem" class="flat">';
-print '</div>';
-
-print '<div style="margin-bottom: 15px;">';
-print '<label><strong>' . $langs->trans("KSEF_PrivateKeyPassword") . ':</strong></label><br>';
-print '<input type="password" name="auth_key_password" class="flat minwidth200" placeholder="' . $langs->trans("KSEF_EnterPassword") . '" autocomplete="new-password">';
-print '</div>';
-
-print '<input type="submit" class="button" value="' . $langs->trans("KSEF_SaveAuthCertificate") . '">';
-print '</div>';
-
-print '</td></tr>';
-print '</table>';
-print '</form>';
-
-print '</div>';
-
-
-print '<div style="flex: 1; min-width: 450px;">';
-
-$has_offline_cert = !empty($conf->global->KSEF_OFFLINE_CERTIFICATE) && !empty($conf->global->KSEF_OFFLINE_PRIVATE_KEY) && !empty($conf->global->KSEF_OFFLINE_KEY_PASSWORD);
-
-print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '" enctype="multipart/form-data">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-print '<input type="hidden" name="action" value="upload_offline_cert">';
-
-print '<table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_OFFLINE_CERTIFICATE_CONFIG") . ' <small class="opacitymedium">(' . $langs->trans("KSEF_ForQRCodeSigning") . ')</small></td></tr>';
-
-print '<tr class="oddeven"><td colspan="2">';
-
-// Current status
-if ($has_offline_cert) {
-    $cert_valid_to = $conf->global->KSEF_OFFLINE_CERT_VALID_TO ?? null;
-    $is_expired = ($cert_valid_to && $cert_valid_to < dol_now());
-
-    print '<div style="padding: 15px; border-radius: 4px; margin-bottom: 15px; ';
-    print 'background-color: ' . ($is_expired ? '#f8d7da' : '#d4edda') . '; ';
-    print 'border: 1px solid ' . ($is_expired ? '#f5c6cb' : '#c3e6cb') . ';">';
-
-    print '<table class="nobordernopadding">';
-    print '<tr><td><i class="fa fa-check text-success"></i></td><td>' . $langs->trans("KSEF_Certificate") . ' (.crt)</td></tr>';
-    print '<tr><td><i class="fa fa-' . (!empty($conf->global->KSEF_OFFLINE_PRIVATE_KEY) ? 'check text-success' : 'times text-danger') . '"></i></td><td>' . $langs->trans("KSEF_PrivateKey") . ' (.key)</td></tr>';
-    print '<tr><td><i class="fa fa-' . (!empty($conf->global->KSEF_OFFLINE_KEY_PASSWORD) ? 'check text-success' : 'times text-danger') . '"></i></td><td>' . $langs->trans("KSEF_Password") . '</td></tr>';
-    print '</table>';
-
-    if (!empty($conf->global->KSEF_OFFLINE_CERT_SERIAL)) {
-        print '<br><strong>' . $langs->trans("KSEF_CertSerial") . ':</strong> ' . dol_escape_htmltag(substr($conf->global->KSEF_OFFLINE_CERT_SERIAL, 0, 24)) . '...';
-    }
-    if ($cert_valid_to) {
-        print '<br><strong>' . $langs->trans("KSEF_ValidUntil") . ':</strong> ' . dol_print_date($cert_valid_to, 'day');
-        if ($is_expired) print ' <span class="badge badge-danger">' . $langs->trans("Expired") . '</span>';
-    }
-
-    print '<br><br><a class="button button-cancel small" href="' . $_SERVER["PHP_SELF"] . '?action=remove_offline_cert&token=' . newToken() . '" onclick="return confirm(\'' . dol_escape_js($langs->trans("KSEF_ConfirmRemoveOfflineCert")) . '\');">';
-    print '<i class="fa fa-trash"></i> ' . $langs->trans("KSEF_RemoveAll") . '</a>';
-    print '</div>';
-}
-
-// Upload form
-print '<div style="background: #f8f9fa; padding: 15px; border-radius: 4px;">';
-
-print '<div style="margin-bottom: 15px;">';
-print '<label><strong>' . $langs->trans("KSEF_CertificateFile") . ' (.crt):</strong></label><br>';
-print '<input type="file" name="offline_cert_file" accept=".crt,.pem,.cer" class="flat">';
-print '</div>';
-
-print '<div style="margin-bottom: 15px;">';
-print '<label><strong>' . $langs->trans("KSEF_PrivateKeyFile") . ' (.key):</strong></label><br>';
-print '<input type="file" name="offline_key_file" accept=".key,.pem" class="flat">';
-print '</div>';
-
-print '<div style="margin-bottom: 15px;">';
-print '<label><strong>' . $langs->trans("KSEF_PrivateKeyPassword") . ':</strong></label><br>';
-print '<input type="password" name="offline_key_password" class="flat minwidth200" placeholder="' . $langs->trans("KSEF_EnterPassword") . '" autocomplete="new-password">';
-print '</div>';
-
-print '<input type="submit" class="button" value="' . $langs->trans("KSEF_SaveOfflineCertificate") . '">';
-print '</div>';
-
-print '</td></tr>';
-print '</table>';
-print '</form>';
-
-print '</div>';
-
-print '</div>';
-
-
-print '<br><form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-
-print '<table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_CUSTOMER_EXCLUSIONS") . '</td></tr>';
-
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_EXCLUDED_CUSTOMERS"), $langs->trans("KSEF_EXCLUDED_CUSTOMERS_Help")) . '</td>';
-print '<td>';
-
-// Show current exclusions
-if (!empty($conf->global->KSEF_EXCLUDED_CUSTOMERS)) {
-    $excluded_ids = array_filter(array_map('trim', explode(',', $conf->global->KSEF_EXCLUDED_CUSTOMERS)));
-    foreach ($excluded_ids as $socid) {
-        $tmpsoc = new Societe($db);
-        if ($tmpsoc->fetch($socid) > 0) {
-            print '<span class="badge badge-secondary" style="margin-right: 5px;">';
-            print dol_escape_htmltag($tmpsoc->name);
-            print ' <a href="' . $_SERVER["PHP_SELF"] . '?action=remove_excluded&socid=' . $socid . '&token=' . newToken() . '" style="color:white;">×</a>';
-            print '</span> ';
-        }
-    }
-    print '<br><br>';
-}
-
-// Add new exclusion
-print '<select id="excluded_customer" name="socid" class="flat minwidth300">';
-print '<option value="">-- ' . $langs->trans("KSEF_SelectCustomer") . ' --</option>';
-$sql = "SELECT rowid, nom FROM " . MAIN_DB_PREFIX . "societe WHERE client IN (1, 3) AND entity = " . $conf->entity . " ORDER BY nom";
-$resql = $db->query($sql);
-if ($resql) {
-    while ($obj = $db->fetch_object($resql)) {
-        print '<option value="' . $obj->rowid . '">' . dol_escape_htmltag($obj->nom) . '</option>';
-    }
-}
-print '</select> ';
-print '<input type="hidden" name="action" value="add_excluded">';
-print '<input type="submit" class="button small" value="' . $langs->trans("Add") . '">';
-print '</td></tr>';
-
-print '</table>';
-print '</form>';
-
 // Translation Overrides
 print '<br><table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="4">' . $langs->trans("KSEF_TranslationOverrides") . '</td></tr>';
 
 print '<tr class="oddeven">';
 print '<td colspan="4">';
-print '<span class="opacitymedium">' . $langs->trans("KSEF_TransOverridesDesc") . '</span>';
+print '<span>' . $langs->trans("KSEF_TransOverridesDesc") . '</span>';
 print '</td>';
 print '</tr>';
 
@@ -1749,13 +637,13 @@ if (!empty($fieldGroups)) {
             if ($applied) {
                 print '<td class="center"><span class="badge badge-status4 badge-status">✓</span></td>';
             } else {
-                print '<td class="center"><span class="badge badge-status8 badge-status">–</span></td>';
+                print '<td class="center"><span class="badge badge-status8 badge-status">-</span></td>';
             }
         }
         print '</tr>';
     }
 } else {
-    print '<tr class="oddeven"><td colspan="4"><span class="opacitymedium">' . $langs->trans("None") . '</span></td></tr>';
+    print '<tr class="oddeven"><td colspan="4"><span>' . $langs->trans("None") . '</span></td></tr>';
 }
 
 print '<tr class="oddeven">';
@@ -1778,25 +666,27 @@ print '</table>';
 
 print dol_get_fiche_end();
 
-if (!empty($conf->global->KSEF_COMPANY_NIP)) {
-    print '<br><div class="tabsAction">';
+$has_active_token = !empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $activeEnv));
+$has_active_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $activeEnv))
+    && !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $activeEnv))
+    && !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $activeEnv));
 
-    print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=checklatarnia&token=' . newToken() . '">' . $langs->trans("KSEF_CheckLatarnia") . '</a>';
+print '<br><div class="tabsAction">';
 
+if (!empty(getDolGlobalString('KSEF_COMPANY_NIP'))) {
     print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=testconnection&token=' . newToken() . '">' . $langs->trans("KSEF_TEST_CONNECTION") . '</a>';
 
-    //if token is configured
-    if ($has_token) {
+    if ($has_active_token) {
         print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=testtokenauth&token=' . newToken() . '">' . $langs->trans("KSEF_TEST_TOKEN_AUTH") . '</a>';
     }
 
-    // if certificate is configured
-    if ($has_auth_cert) {
+    if ($has_active_cert) {
         print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=testcertauth&token=' . newToken() . '">' . $langs->trans("KSEF_TEST_CERT_AUTH") . '</a>';
     }
-
-    print '</div>';
 }
+
+print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=checklatarnia&token=' . newToken() . '">' . $langs->trans("KSEF_CheckLatarnia") . '</a>';
+print '</div>';
 
 llxFooter();
 $db->close();

@@ -95,11 +95,11 @@ class KsefInvoicePdf
      * renderAdditionalInfo(), renderAdditionalDesc(), renderPayment(), renderRegistries(),
      * renderQrCode(), renderFooter()
      */
-    public function generate($incoming, $outputPath = '')
+    public function generate($incoming, $outputPath = '', $previewMode = false)
     {
         global $conf, $langs;
 
-        if (empty($incoming->rowid)) {
+        if (empty($incoming->rowid) && !$previewMode) {
             $this->error = "Invoice object not loaded";
             return false;
         }
@@ -183,7 +183,9 @@ class KsefInvoicePdf
             }
 
             // QR CODE
-            $y = $this->renderQrCode($incoming, $y);
+            if (!$previewMode) {
+                $y = $this->renderQrCode($incoming, $y);
+            }
 
             // FOOTER
             $this->renderFooter();
@@ -935,7 +937,7 @@ class KsefInvoicePdf
                     case 'unit_price_net': $value = isset($line['unit_price_net']) ? $this->formatMoney($line['unit_price_net']) : ''; break;
                     case 'unit_price_gross': $value = isset($line['unit_price_gross']) ? $this->formatMoney($line['unit_price_gross']) : ''; break;
                     case 'discount': $value = isset($line['discount']) ? $this->formatMoney($line['discount']) : ''; break;
-                    case 'vat_rate': $value = $line['vat_rate'] ?? ''; break;
+                    case 'vat_rate': $value = $this->getVatRateLabel($line['vat_rate'] ?? '', true); break;
                     case 'net_amount': $value = isset($line['net_amount']) ? $this->formatMoney($line['net_amount']) : ''; break;
                     case 'gross_amount': $value = isset($line['gross_amount']) ? $this->formatMoney($line['gross_amount']) : ''; break;
                     case 'kurs_waluty': $value = isset($line['kurs_waluty']) ? rtrim(rtrim(number_format((float)$line['kurs_waluty'], 6, ',', ' '), '0'), ',') : ''; break;
@@ -1150,14 +1152,10 @@ class KsefInvoicePdf
         }
         if (empty($vatSummary) && !empty($this->parsed['vat_summary'])) {
             foreach ($this->parsed['vat_summary'] as $rate => $amounts) {
-                if (in_array($rate, array('0', 'zw', 'np'))) {
-                    if (!isset($vatSummary['0'])) {
-                        $vatSummary['0'] = array('net' => 0.0, 'vat' => 0.0);
-                    }
-                    $vatSummary['0']['net'] += ($amounts['net'] ?? 0);
-                } else {
-                    $vatSummary[$rate] = array('net' => $amounts['net'], 'vat' => $amounts['vat'] ?? 0);
-                }
+                $vatSummary[$rate] = array(
+                    'net' => $amounts['net'] ?? 0,
+                    'vat' => $amounts['vat'] ?? 0,
+                );
             }
         }
         if (empty($vatSummary)) return $y;
@@ -1283,8 +1281,23 @@ class KsefInvoicePdf
         $y += 5;
 
         $smallTableFont = 6;
-        $colW = array(10, 50, 130); // Lp ~5%, Rodzaj ~26%, Treść ~69% of 190mm
-        $headers = array('Lp.', 'Rodzaj informacji', 'Treść informacji');
+
+        // Check for NrWiersza column
+        $hasNrWiersza = false;
+        foreach ($items as $item) {
+            if (!empty($item['nr_wiersza'])) {
+                $hasNrWiersza = true;
+                break;
+            }
+        }
+
+        if ($hasNrWiersza) {
+            $colW = array(10, 22, 38, 120); // Lp, Numer wiersza, Rodzaj, Treść
+            $headers = array('Lp.', 'Numer wiersza', 'Rodzaj informacji', 'Treść informacji');
+        } else {
+            $colW = array(10, 50, 130);
+            $headers = array('Lp.', 'Rodzaj informacji', 'Treść informacji');
+        }
 
         $pdf->SetFont($this->fontFamily, 'B', $smallTableFont);
         $pdf->SetFillColorArray($this->colorHeaderBg);
@@ -1299,13 +1312,15 @@ class KsefInvoicePdf
         $y += 5;
 
         $pdf->SetFont($this->fontFamily, '', $smallTableFont);
+        $colIdxRodzaj = $hasNrWiersza ? 2 : 1;
+        $colIdxTresc = $hasNrWiersza ? 3 : 2;
         $rowNum = 1;
         foreach ($items as $item) {
             $rodzaj = $item['key'] ?? '';
             $tresc = $item['value'] ?? '';
 
-            $rodzajLines = $rodzaj !== '' ? $pdf->getNumLines($rodzaj, $colW[1] - 2) : 1;
-            $trescLines = $tresc !== '' ? $pdf->getNumLines($tresc, $colW[2] - 2) : 1;
+            $rodzajLines = $rodzaj !== '' ? $pdf->getNumLines($rodzaj, $colW[$colIdxRodzaj] - 2) : 1;
+            $trescLines = $tresc !== '' ? $pdf->getNumLines($tresc, $colW[$colIdxTresc] - 2) : 1;
             $maxLines = max($rodzajLines, $trescLines, 1);
             $rowHeight = max(5, $maxLines * 4);
 
@@ -1334,18 +1349,26 @@ class KsefInvoicePdf
             $pdf->Cell($colW[0], $rowHeight, $rowNum, 1, 0, 'C');
             $x += $colW[0];
 
+            // NrWiersza
+            if ($hasNrWiersza) {
+                $nrPoz = !empty($item['nr_wiersza']) ? (string) $item['nr_wiersza'] : '';
+                $pdf->SetXY($x, $y);
+                $pdf->Cell($colW[1], $rowHeight, $nrPoz, 1, 0, 'C');
+                $x += $colW[1];
+            }
+
             // Rodzaj
             $pdf->SetXY($x, $y);
-            $pdf->Cell($colW[1], $rowHeight, '', 1, 0, 'L');
+            $pdf->Cell($colW[$colIdxRodzaj], $rowHeight, '', 1, 0, 'L');
             $pdf->SetXY($x + 1, $y + 1);
-            $pdf->MultiCell($colW[1] - 2, 4, $rodzaj, 0, 'L', false, 0);
-            $x += $colW[1];
+            $pdf->MultiCell($colW[$colIdxRodzaj] - 2, 4, $rodzaj, 0, 'L', false, 0);
+            $x += $colW[$colIdxRodzaj];
 
             // Treść
             $pdf->SetXY($x, $y);
-            $pdf->Cell($colW[2], $rowHeight, '', 1, 0, 'L');
+            $pdf->Cell($colW[$colIdxTresc], $rowHeight, '', 1, 0, 'L');
             $pdf->SetXY($x + 1, $y + 1);
-            $pdf->MultiCell($colW[2] - 2, 4, $tresc, 0, 'L', false, 0);
+            $pdf->MultiCell($colW[$colIdxTresc] - 2, 4, $tresc, 0, 'L', false, 0);
 
             $y += $rowHeight;
             $rowNum++;
@@ -1383,6 +1406,7 @@ class KsefInvoicePdf
         if (!empty($payment['status'])) {
             $statusLabel = 'Brak zapłaty';
             if ($payment['status'] == 'paid') $statusLabel = 'Zapłacono';
+            elseif ($payment['status'] == 'paid_installments') $statusLabel = 'Zapłacono w częściach';
             elseif ($payment['status'] == 'partial') $statusLabel = 'Zapłata częściowa';
             $y = $this->renderLabelValue($y, 'Informacja o płatności: ', $statusLabel);
         }
@@ -1390,6 +1414,11 @@ class KsefInvoicePdf
         // Payment date
         if (!empty($payment['payment_date'])) {
             $y = $this->renderLabelValue($y, 'Data zapłaty: ', $payment['payment_date']);
+        }
+
+        // Partial payments
+        if (!empty($payment['partial_payments'])) {
+            $y = $this->renderPartialPayments($payment['partial_payments'], $y);
         }
 
         // Payment method
@@ -1424,6 +1453,75 @@ class KsefInvoicePdf
         // Bank account
         if (!empty($payment['bank_account'])) {
             $y = $this->renderBankAccount($payment, $y);
+        }
+
+        return $y + 2;
+    }
+
+
+    /**
+     * @brief Render partial/installment payment details table
+     * @param $partialPayments Array of partial payment entries
+     * @param $y Current Y position
+     * @return float New Y position
+     * @called_by renderPayment()
+     */
+    private function renderPartialPayments($partialPayments, $y)
+    {
+        $pdf = $this->pdf;
+
+        $y = $this->checkPageBreak($y, 10 + count($partialPayments) * 6);
+
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 4, 'Zapłaty częściowe', 0, 1, 'L');
+        $y += 5;
+
+        $colW = array(15, 40, 40, 40); // Nr, Kwota, Data, Forma
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeTable);
+        $pdf->SetFillColorArray($this->colorHeaderBg);
+        $pdf->SetDrawColorArray($this->colorBorder);
+        $pdf->SetLineWidth($this->borderWidth);
+
+        $x = $this->marginLeft;
+        $headers = array('Nr', 'Kwota', 'Data', 'Forma płatności');
+        for ($i = 0; $i < 4; $i++) {
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($colW[$i], 5, $headers[$i], 1, 0, 'C', true);
+            $x += $colW[$i];
+        }
+        $y += 5;
+
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
+        $num = 1;
+        foreach ($partialPayments as $partial) {
+            $y = $this->checkPageBreak($y, 6);
+            $x = $this->marginLeft;
+
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($colW[0], 5, $num, 1, 0, 'C');
+            $x += $colW[0];
+
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($colW[1], 5, isset($partial['amount']) ? $partial['amount'] : '', 1, 0, 'R');
+            $x += $colW[1];
+
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($colW[2], 5, isset($partial['date']) ? $partial['date'] : '', 1, 0, 'C');
+            $x += $colW[2];
+
+            $pdf->SetXY($x, $y);
+            if (isset($partial['method'])) {
+                $methodLabel = $this->getPaymentMethodLabel($partial['method']);
+            } elseif (isset($partial['method_description'])) {
+                $methodLabel = $partial['method_description'];
+            } else {
+                $methodLabel = '';
+            }
+            $pdf->Cell($colW[3], 5, $methodLabel, 1, 0, 'C');
+
+            $y += 5;
+            $num++;
         }
 
         return $y + 2;
@@ -1488,6 +1586,15 @@ class KsefInvoicePdf
     {
         $pdf = $this->pdf;
         $registries = $this->parsed['registries'];
+
+        // Populated columns
+        $cols = array();
+        if (!empty($registries['krs'])) $cols[] = array('label' => 'KRS', 'value' => $registries['krs']);
+        if (!empty($registries['regon'])) $cols[] = array('label' => 'REGON', 'value' => $registries['regon']);
+        if (!empty($registries['bdo'])) $cols[] = array('label' => 'BDO', 'value' => $registries['bdo']);
+
+        if (empty($cols)) return $y;
+
         $y = $this->checkPageBreak($y, 20);
         $y = $this->drawLine($y);
 
@@ -1503,27 +1610,23 @@ class KsefInvoicePdf
         $pdf->SetDrawColorArray($this->colorBorder);
         $pdf->SetLineWidth($this->borderWidth);
 
+        // Header row
         $x = $this->marginLeft;
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($colW, 5, 'KRS', 1, 0, 'L', true);
-        $x += $colW;
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($colW, 5, 'REGON', 1, 0, 'L', true);
-        $x += $colW;
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($colW, 5, 'BDO', 1, 0, 'L', true);
+        foreach ($cols as $col) {
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($colW, 5, $col['label'], 1, 0, 'L', true);
+            $x += $colW;
+        }
         $y += 5;
 
+        // Value row
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
         $x = $this->marginLeft;
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($colW, 5, $registries['krs'] ?? '', 1, 0, 'L');
-        $x += $colW;
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($colW, 5, $registries['regon'] ?? '', 1, 0, 'L');
-        $x += $colW;
-        $pdf->SetXY($x, $y);
-        $pdf->Cell($colW, 5, $registries['bdo'] ?? '', 1, 0, 'L');
+        foreach ($cols as $col) {
+            $pdf->SetXY($x, $y);
+            $pdf->Cell($colW, 5, $col['value'], 1, 0, 'L');
+            $x += $colW;
+        }
         $y += 5;
 
         return $y + 3;
@@ -1933,16 +2036,34 @@ class KsefInvoicePdf
      * @return string VAT rate label
      * @called_by renderVatSummary()
      */
-    private function getVatRateLabel($rate)
+    private function getVatRateLabel($rate, $short = false)
     {
-        $labels = array(
-            '23' => '23% lub 22%', '22' => '23% lub 22%',
-            '8' => '8% lub 7%', '7' => '8% lub 7%',
-            '5' => '5%', '4' => '5%',
-            '3' => '3%', '0' => '0%',
-            'zw' => 'Zwolnione', 'np' => 'Niepodlegające', 'oo' => 'Odwrotne obciążenie',
-        );
-        return $labels[$rate] ?? $rate . '%';
+        if ($short) {
+            $labels = array(
+                '23' => '23%', '22' => '22%', '8' => '8%', '7' => '7%',
+                '5' => '5%', '4' => '4%', '3' => '3%', '0' => '0%',
+                '0 KR' => '0% KR', '0 WDT' => '0% WDT', '0 EX' => '0% EX',
+                'zw' => 'zw', 'np' => 'np', 'np I' => 'np I', 'np II' => 'np II',
+                'oo' => 'oo',
+            );
+        } else {
+            $labels = array(
+                '23' => '23%', '22' => '22%', '8' => '8%', '7' => '7%',
+                '5' => '5%',
+                '4' => '4% (ryczalt)',
+                '3' => '3%',
+                '0' => '0%',
+                '0 KR' => '0% (krajowe)',
+                '0 WDT' => '0% (WDT)',
+                '0 EX' => '0% (eksport)',
+                'zw' => 'Zwolnione',
+                'np' => 'Niepodlegajace',
+                'np I' => 'Niepodlegajace (I)',
+                'np II' => 'Niepodlegajace (II)',
+                'oo' => 'Odwrotne obciazenie',
+            );
+        }
+        return $labels[$rate] ?? $rate;
     }
 
 

@@ -142,13 +142,14 @@ $cnt_incoming_new = (int)($stats_incoming['new'] ?? 0);
 $cnt_incoming_error = (int)($stats_incoming['error'] ?? 0);
 
 
-$config_ok = !empty($conf->global->KSEF_COMPANY_NIP) && (!empty($conf->global->KSEF_AUTH_TOKEN) || !empty($conf->global->KSEF_AUTH_CERT));
-$environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
+$environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+$config_ok = !empty($conf->global->KSEF_COMPANY_NIP) && (!empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $environment)) || !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $environment)));
 
 $cert_warning = false;
 $cert_days_left = null;
-if (!empty($conf->global->KSEF_AUTH_CERT_VALID_TO)) {
-    $cert_expiry = strtotime($conf->global->KSEF_AUTH_CERT_VALID_TO);
+$_certValidTo = getDolGlobalString('KSEF_AUTH_CERT_VALID_TO_' . $environment, '');
+if (!empty($_certValidTo)) {
+    $cert_expiry = strtotime($_certValidTo);
     if ($cert_expiry) {
         $cert_days_left = floor(($cert_expiry - $now) / 86400);
         if ($cert_days_left <= 30 && $cert_days_left > 0) {
@@ -563,7 +564,7 @@ if (!empty($latarnia_messages)) {
     print '<div class="div-table-responsive-no-min" style="margin-top: 10px;">';
     print '<table class="noborder centpercent">';
     print '<tr class="liste_titre">';
-    print '<th>' . $langs->trans("KSEF_SystemStatus") . ' — ' . $langs->trans("KSEF_LatarniaMessages") . '</th>';
+    print '<th>' . $langs->trans("KSEF_SystemStatus") . ' - ' . $langs->trans("KSEF_LatarniaMessages") . '</th>';
     print '<th>' . $langs->trans("Type") . '</th>';
     print '<th class="center">' . $langs->trans("KSEF_Start") . '</th>';
     print '<th class="center">' . $langs->trans("KSEF_End") . '</th>';
@@ -581,7 +582,7 @@ if (!empty($latarnia_messages)) {
         }
         print '<td class="nowraponall">' . $category_badge . '<br><small class="opacitymedium">' . dol_escape_htmltag($type_label) . '</small></td>';
         print '<td class="center">' . (!empty($lmsg['start']) ? dol_print_date(strtotime($lmsg['start']), 'dayhour') : '') . '</td>';
-        print '<td class="center">' . (!empty($lmsg['end']) ? dol_print_date(strtotime($lmsg['end']), 'dayhour') : '<span class="opacitymedium">—</span>') . '</td>';
+        print '<td class="center">' . (!empty($lmsg['end']) ? dol_print_date(strtotime($lmsg['end']), 'dayhour') : '<span class="opacitymedium">-</span>') . '</td>';
         print '<td class="center">' . (!empty($lmsg['published']) ? dol_print_date(strtotime($lmsg['published']), 'dayhour') : '') . '</td>';
         print '</tr>';
     }

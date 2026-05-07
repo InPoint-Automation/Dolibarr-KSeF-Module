@@ -272,15 +272,16 @@ $requirements['nip'] = array(
         'value' => $nip_configured ? $conf->global->KSEF_COMPANY_NIP : null
 );
 
-$has_token = !empty($conf->global->KSEF_AUTH_TOKEN);
-$has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
-        !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
-        !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
+$_authEnv = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+$has_token = !empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $_authEnv));
+$has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $_authEnv)) &&
+        !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $_authEnv)) &&
+        !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $_authEnv));
 
 $auth_cert_valid_to = null;
 $auth_cert_expired = false;
-if ($has_auth_cert && !empty($conf->global->KSEF_AUTH_CERT_VALID_TO)) {
-    $auth_cert_valid_to = $conf->global->KSEF_AUTH_CERT_VALID_TO;
+if ($has_auth_cert && !empty(getDolGlobalString('KSEF_AUTH_CERT_VALID_TO_' . $_authEnv))) {
+    $auth_cert_valid_to = getDolGlobalString('KSEF_AUTH_CERT_VALID_TO_' . $_authEnv);
     $auth_cert_expired = ($auth_cert_valid_to < dol_now());
 }
 
@@ -311,14 +312,14 @@ $requirements['authentication'] = array(
         'value' => $auth_value
 );
 
-$has_offline_cert = !empty($conf->global->KSEF_OFFLINE_CERTIFICATE) &&
-        !empty($conf->global->KSEF_OFFLINE_PRIVATE_KEY) &&
-        !empty($conf->global->KSEF_OFFLINE_KEY_PASSWORD);
+$has_offline_cert = !empty(getDolGlobalString('KSEF_OFFLINE_CERTIFICATE_' . $_authEnv)) &&
+        !empty(getDolGlobalString('KSEF_OFFLINE_PRIVATE_KEY_' . $_authEnv)) &&
+        !empty(getDolGlobalString('KSEF_OFFLINE_KEY_PASSWORD_' . $_authEnv));
 
 $offline_cert_valid_to = null;
 $offline_cert_expired = false;
-if ($has_offline_cert && !empty($conf->global->KSEF_OFFLINE_CERT_VALID_TO)) {
-    $offline_cert_valid_to = $conf->global->KSEF_OFFLINE_CERT_VALID_TO;
+if ($has_offline_cert && !empty(getDolGlobalString('KSEF_OFFLINE_CERT_VALID_TO_' . $_authEnv))) {
+    $offline_cert_valid_to = getDolGlobalString('KSEF_OFFLINE_CERT_VALID_TO_' . $_authEnv);
     $offline_cert_expired = ($offline_cert_valid_to < dol_now());
 }
 

@@ -382,6 +382,8 @@ if (empty($reshook)) {
         print '<tr><td>' . $langs->trans("KSEF_PaymentStatus") . '</td><td>';
         if ($object->payment_status === 'paid') {
             print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
+        } elseif ($object->payment_status === 'paid_installments') {
+            print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaidInstallments") . '</span>';
         } elseif ($object->payment_status === 'partial') {
             print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
         }
@@ -488,17 +490,25 @@ if (empty($reshook)) {
         print '<td class="right">' . $langs->trans("VATAmount") . '</td>';
         print '</tr>';
 
+        $vatRateLabels = array(
+            '23' => '23%', '22' => '22%', '8' => '8%', '7' => '7%', '5' => '5%',
+            '4' => '4%', '3' => '3%', '0' => '0%',
+            '0 KR' => '0% (' . $langs->trans("KSEF_VATDomestic") . ')',
+            '0 WDT' => '0% (WDT)',
+            '0 EX' => '0% (' . $langs->trans("KSEF_VATExport") . ')',
+            'zw' => $langs->trans("KSEF_VATExempt"),
+            'np' => $langs->trans("KSEF_VATNotSubject"),
+            'np I' => $langs->trans("KSEF_VATNotSubject") . ' (I)',
+            'np II' => $langs->trans("KSEF_VATNotSubject") . ' (II)',
+            'oo' => $langs->trans("KSEF_VATReverseCharge"),
+        );
         foreach ($vatSummary as $rate => $amounts) {
             print '<tr class="oddeven">';
-            if ($rate == 'zw') {
-                print '<td>' . $langs->trans("KSEF_VATExempt") . '</td>';
-                print '<td class="right">' . price($amounts['net'], 0, $langs, 1, -1, -1, $object->currency) . '</td>';
-                print '<td class="right">-</td>';
-            } else {
-                print '<td>' . $rate . '%</td>';
-                print '<td class="right">' . price($amounts['net'], 0, $langs, 1, -1, -1, $object->currency) . '</td>';
-                print '<td class="right">' . price($amounts['vat'], 0, $langs, 1, -1, -1, $object->currency) . '</td>';
-            }
+            $rateLabel = isset($vatRateLabels[$rate]) ? $vatRateLabels[$rate] : dol_escape_htmltag($rate);
+            $hasVat = !empty($amounts['vat']) && $amounts['vat'] != 0;
+            print '<td>' . $rateLabel . '</td>';
+            print '<td class="right">' . price($amounts['net'], 0, $langs, 1, -1, -1, $object->currency) . '</td>';
+            print '<td class="right">' . ($hasVat ? price($amounts['vat'], 0, $langs, 1, -1, -1, $object->currency) : '-') . '</td>';
             print '</tr>';
         }
 

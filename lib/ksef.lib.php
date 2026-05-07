@@ -124,9 +124,9 @@ function ksefGetLatarniaStatusBadge($status)
  * @brief Calculates offline deadline based on the type of KSeF outage
  *
  * Legal deadlines:
- *   MAINTENANCE   — end of next business day after outage ends (Art. 106nh)
- *   FAILURE       — 7 business days after outage ends (Art. 106nf)
- *   TOTAL_FAILURE — no deadline, no obligation to re-send (Art. 106ng)
+ *   MAINTENANCE   - end of next business day after outage ends (Art. 106nh)
+ *   FAILURE       - 7 business days after outage ends (Art. 106nf)
+ *   TOTAL_FAILURE - no deadline, no obligation to re-send (Art. 106ng)
  *
  * @param int         $invoice_date  Invoice issue date (timestamp)
  * @param string|null $outage_type   MAINTENANCE, FAILURE, TOTAL_FAILURE, or null for default
@@ -156,7 +156,7 @@ function ksefCalculateOfflineDeadlineByOutageType($invoice_date, $outage_type = 
         return ksefGetNthWeekday($outage_end, 7);
     }
 
-    // MAINTENANCE — next business day after outage ends
+    // MAINTENANCE - next business day after outage ends
     return ksefGetNextWeekday($outage_end);
 }
 
@@ -200,8 +200,23 @@ function ksefAdminPrepareHead()
     $head = array();
 
     $head[$h][0] = dol_buildpath("/ksef/admin/setup.php", 1);
-    $head[$h][1] = $langs->trans("KSEF_Settings");
-    $head[$h][2] = 'settings';
+    $head[$h][1] = $langs->trans("KSEF_Tab_General");
+    $head[$h][2] = 'general';
+    $h++;
+
+    $head[$h][0] = dol_buildpath("/ksef/admin/setup_auth.php", 1);
+    $head[$h][1] = $langs->trans("KSEF_Tab_Authentication");
+    $head[$h][2] = 'auth';
+    $h++;
+
+    $head[$h][0] = dol_buildpath("/ksef/admin/setup_outgoing.php", 1);
+    $head[$h][1] = $langs->trans("KSEF_Tab_Outgoing");
+    $head[$h][2] = 'outgoing';
+    $h++;
+
+    $head[$h][0] = dol_buildpath("/ksef/admin/setup_incoming.php", 1);
+    $head[$h][1] = $langs->trans("KSEF_Tab_Incoming");
+    $head[$h][2] = 'incoming';
     $h++;
 
     $head[$h][0] = dol_buildpath("/ksef/admin/howtouse.php", 1);
@@ -941,9 +956,12 @@ function ksefGetAuthMethodBadge($method)
  * @return array ['configured' => bool, 'valid' => bool, 'expires_soon' => bool, 'serial' => string]
  * @called_by setup.php, ksef_client.class.php
  */
-function ksefCheckAuthCertificate()
+function ksefCheckAuthCertificate($environment = null)
 {
-    global $conf;
+    if ($environment === null) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+    }
+    $environment = strtoupper($environment);
 
     $result = array(
         'configured' => false,
@@ -953,16 +971,16 @@ function ksefCheckAuthCertificate()
         'valid_to' => null
     );
 
-    if (empty($conf->global->KSEF_AUTH_CERTIFICATE) ||
-        empty($conf->global->KSEF_AUTH_PRIVATE_KEY)) {
+    if (empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $environment)) ||
+        empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $environment))) {
         return $result;
     }
 
     $result['configured'] = true;
-    $result['serial'] = $conf->global->KSEF_AUTH_CERT_SERIAL ?? '';
+    $result['serial'] = getDolGlobalString('KSEF_AUTH_CERT_SERIAL_' . $environment, '');
 
-    if (!empty($conf->global->KSEF_AUTH_CERT_VALID_TO)) {
-        $valid_to = $conf->global->KSEF_AUTH_CERT_VALID_TO;
+    $valid_to = getDolGlobalString('KSEF_AUTH_CERT_VALID_TO_' . $environment, '');
+    if (!empty($valid_to)) {
         $result['valid_to'] = $valid_to;
 
         $now = dol_now();
@@ -1121,26 +1139,30 @@ function ksefSignData($data, $privateKeyPem, $returnBase64URL = true)
  * @brief Loads and decrypts offline certificate credentials
  * @return array|false ['certificate_pem', 'private_key_pem', 'serial'] or false
  */
-function ksefLoadOfflineCertificate()
+function ksefLoadOfflineCertificate($environment = null)
 {
-    global $conf;
     require_once DOL_DOCUMENT_ROOT . '/core/lib/security.lib.php';
 
-    $cert_base64 = $conf->global->KSEF_OFFLINE_CERTIFICATE ?? '';
+    if ($environment === null) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+    }
+    $environment = strtoupper($environment);
+
+    $cert_base64 = getDolGlobalString('KSEF_OFFLINE_CERTIFICATE_' . $environment, '');
     if (empty($cert_base64)) {
-        dol_syslog("ksefLoadOfflineCertificate: Certificate not configured", LOG_WARNING);
+        dol_syslog("ksefLoadOfflineCertificate: Certificate not configured for $environment", LOG_WARNING);
         return false;
     }
 
-    $key_base64 = $conf->global->KSEF_OFFLINE_PRIVATE_KEY ?? '';
+    $key_base64 = getDolGlobalString('KSEF_OFFLINE_PRIVATE_KEY_' . $environment, '');
     if (empty($key_base64)) {
-        dol_syslog("ksefLoadOfflineCertificate: Private key not configured", LOG_WARNING);
+        dol_syslog("ksefLoadOfflineCertificate: Private key not configured for $environment", LOG_WARNING);
         return false;
     }
 
-    $encrypted_password = $conf->global->KSEF_OFFLINE_KEY_PASSWORD ?? '';
+    $encrypted_password = getDolGlobalString('KSEF_OFFLINE_KEY_PASSWORD_' . $environment, '');
     if (empty($encrypted_password)) {
-        dol_syslog("ksefLoadOfflineCertificate: Password not configured", LOG_WARNING);
+        dol_syslog("ksefLoadOfflineCertificate: Password not configured for $environment", LOG_WARNING);
         return false;
     }
 
@@ -1150,7 +1172,7 @@ function ksefLoadOfflineCertificate()
 
     $private_key = openssl_pkey_get_private($encrypted_key_pem, $password);
     if (!$private_key) {
-        dol_syslog("ksefLoadOfflineCertificate: Failed to decrypt key: " . openssl_error_string(), LOG_ERR);
+        dol_syslog("ksefLoadOfflineCertificate: Failed to decrypt key for $environment: " . openssl_error_string(), LOG_ERR);
         return false;
     }
 
@@ -1160,7 +1182,7 @@ function ksefLoadOfflineCertificate()
     return array(
         'certificate_pem' => $certificate_pem,
         'private_key_pem' => $private_key_pem,
-        'serial' => $conf->global->KSEF_OFFLINE_CERT_SERIAL ?? ''
+        'serial' => getDolGlobalString('KSEF_OFFLINE_CERT_SERIAL_' . $environment, '')
     );
 }
 
@@ -1168,22 +1190,25 @@ function ksefLoadOfflineCertificate()
  * @brief Checks if offline certificate is fully configured
  * @return array ['configured' => bool, 'missing' => array of missing items]
  */
-function ksefIsOfflineCertificateConfigured()
+function ksefIsOfflineCertificateConfigured($environment = null)
 {
-    global $conf;
+    if ($environment === null) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+    }
+    $environment = strtoupper($environment);
 
     $result = array(
         'configured' => false,
         'missing' => array()
     );
 
-    if (empty($conf->global->KSEF_OFFLINE_CERTIFICATE)) {
+    if (empty(getDolGlobalString('KSEF_OFFLINE_CERTIFICATE_' . $environment))) {
         $result['missing'][] = 'certificate';
     }
-    if (empty($conf->global->KSEF_OFFLINE_PRIVATE_KEY)) {
+    if (empty(getDolGlobalString('KSEF_OFFLINE_PRIVATE_KEY_' . $environment))) {
         $result['missing'][] = 'private_key';
     }
-    if (empty($conf->global->KSEF_OFFLINE_KEY_PASSWORD)) {
+    if (empty(getDolGlobalString('KSEF_OFFLINE_KEY_PASSWORD_' . $environment))) {
         $result['missing'][] = 'password';
     }
 
@@ -1198,7 +1223,7 @@ function ksefIsOfflineCertificateConfigured()
  * @param KsefSubmission  $submission  Submission with fa3_xml populated
  * @param int             $invoice_id  Invoice (facture) rowid
  * @param string          &$errorMsg   error message
- * @return bool True on success, false on failure (non-fatal — logged only)
+ * @return bool True on success, false on failure (non-fatal - logged only)
  */
 function ksefAutoGeneratePdf($db, $submission, $invoice_id, &$errorMsg = '')
 {
@@ -1510,26 +1535,30 @@ function ksefGenerateIssuerSerialV2DER($certificatePem)
  * @return array|false ['certificate_pem', 'private_key_pem', 'serial'] or false
  * @called_by KsefClient::authenticateWithCertificate()
  */
-function ksefLoadAuthCertificate()
+function ksefLoadAuthCertificate($environment = null)
 {
-    global $conf;
     require_once DOL_DOCUMENT_ROOT . '/core/lib/security.lib.php';
 
-    $cert_base64 = $conf->global->KSEF_AUTH_CERTIFICATE ?? '';
+    if ($environment === null) {
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+    }
+    $environment = strtoupper($environment);
+
+    $cert_base64 = getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $environment, '');
     if (empty($cert_base64)) {
-        dol_syslog("ksefLoadAuthCertificate: Certificate not configured", LOG_WARNING);
+        dol_syslog("ksefLoadAuthCertificate: Certificate not configured for $environment", LOG_WARNING);
         return false;
     }
 
-    $key_base64 = $conf->global->KSEF_AUTH_PRIVATE_KEY ?? '';
+    $key_base64 = getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $environment, '');
     if (empty($key_base64)) {
-        dol_syslog("ksefLoadAuthCertificate: Private key not configured", LOG_WARNING);
+        dol_syslog("ksefLoadAuthCertificate: Private key not configured for $environment", LOG_WARNING);
         return false;
     }
 
-    $encrypted_password = $conf->global->KSEF_AUTH_KEY_PASSWORD ?? '';
+    $encrypted_password = getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $environment, '');
     if (empty($encrypted_password)) {
-        dol_syslog("ksefLoadAuthCertificate: Password not configured", LOG_WARNING);
+        dol_syslog("ksefLoadAuthCertificate: Password not configured for $environment", LOG_WARNING);
         return false;
     }
 
@@ -1539,7 +1568,7 @@ function ksefLoadAuthCertificate()
 
     $private_key = openssl_pkey_get_private($encrypted_key_pem, $password);
     if (!$private_key) {
-        dol_syslog("ksefLoadAuthCertificate: Failed to decrypt key: " . openssl_error_string(), LOG_ERR);
+        dol_syslog("ksefLoadAuthCertificate: Failed to decrypt key for $environment: " . openssl_error_string(), LOG_ERR);
         return false;
     }
 
@@ -1549,7 +1578,7 @@ function ksefLoadAuthCertificate()
     return array(
         'certificate_pem' => $certificate_pem,
         'private_key_pem' => $private_key_pem,
-        'serial' => $conf->global->KSEF_AUTH_CERT_SERIAL ?? ''
+        'serial' => getDolGlobalString('KSEF_AUTH_CERT_SERIAL_' . $environment, '')
     );
 }
 
@@ -1917,4 +1946,235 @@ function ksefPrintSupplierInvoiceCard($invoice, $title, $icon = '', $iconColor =
         print '</table>';
         print '</div>';
     }
+}
+
+/**
+ * @brief Parses a comma-separated extrafield config string
+ * @param string $configStr  e.g. "field1:dodatkowy,field2:stopka"
+ * @return array  ['fieldname' => 'target', ...]
+ */
+function ksefParseEfConfig($configStr)
+{
+    $result = array();
+    $items = array_filter(array_map('trim', explode(',', $configStr)));
+    foreach ($items as $item) {
+        $parts = explode(':', $item, 2);
+        $fname = $parts[0];
+        $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+        if ($fname !== '') $result[$fname] = $target;
+    }
+    return $result;
+}
+
+/**
+ * @brief Shows reactivation warning banner if module version changed since last init
+ * @return string HTML string (empty if no warning needed)
+ */
+function ksefShowReactivationWarning()
+{
+    global $db, $langs;
+    $langs->load("ksef@ksef");
+
+    dol_include_once('/ksef/core/modules/modKSEF.class.php');
+    $module = new modKSEF($db);
+    $currentVersion = $module->version;
+    $lastInit = getDolGlobalString('KSEF_LAST_INIT_VERSION', '');
+
+    if (!ksefNeedsReactivation($currentVersion, $lastInit)) {
+        return '';
+    }
+
+    $html = '<div style="margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
+    $html .= '<i class="fa fa-exclamation-triangle" style="color: #856404; margin-right: 6px;"></i>';
+    $html .= '<strong>' . $langs->trans('KSEF_MODULE_NEEDS_REACTIVATION') . '</strong><br>';
+    $fromVersion = $lastInit !== '' ? $lastInit : $langs->trans('KSEF_VERSION_UNKNOWN');
+    $html .= dol_escape_htmltag($langs->trans('KSEF_MODULE_NEEDS_REACTIVATION_Desc', $fromVersion, $currentVersion));
+    $html .= ' <a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1" class="button button-small" style="margin-left: 8px;">' . $langs->trans('KSEF_GOTO_MODULES_LIST') . '</a>';
+    $html .= '</div>';
+
+    return $html;
+}
+
+/**
+ * @brief Collects all configuration warnings across all settings tabs
+ * @return array of ['message' => string, 'severity' => 'error'|'warning', 'tab' => string]
+ */
+function ksefGetConfigWarnings()
+{
+    global $db, $langs;
+    $langs->load("ksef@ksef");
+
+    $warnings = array();
+    $env = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+
+    // PHP extensions (general tab)
+    $missing = array();
+    if (!extension_loaded('openssl')) $missing[] = 'OpenSSL';
+    if (!extension_loaded('curl')) $missing[] = 'cURL';
+    if (!extension_loaded('dom')) $missing[] = 'DOM';
+    if (!empty($missing)) {
+        $warnings[] = array(
+            'message' => '<strong>' . $langs->trans("KSEF_ErrorMessage") . ':</strong> ' . $langs->trans("KSEF_WARNING_MISSING_EXTENSIONS", implode(', ', $missing)),
+            'severity' => 'error',
+            'tab' => 'general'
+        );
+    }
+
+    // No NIP configured (general tab)
+    if (empty(getDolGlobalString('KSEF_COMPANY_NIP'))) {
+        $warnings[] = array(
+            'message' => $langs->trans("KSEF_WARNING_NO_NIP"),
+            'severity' => 'warning',
+            'tab' => 'general'
+        );
+    }
+
+    // Duplicate field mappings (general tab)
+    $configuredFields = array();
+    foreach (array('NIP', 'KRS', 'REGON', 'BDO') as $ident) {
+        $fv = ksefGetFieldName($ident);
+        if (!empty($fv)) {
+            $configuredFields[$fv][] = $ident;
+        }
+    }
+    foreach ($configuredFields as $fv => $idents) {
+        if (count($idents) > 1) {
+            $warnings[] = array(
+                'message' => $langs->trans("KSEF_WARNING_DUPLICATE_FIELD", implode(', ', $idents), $fv),
+                'severity' => 'warning',
+                'tab' => 'general'
+            );
+        }
+    }
+
+    // Translation overrides not applied (general tab)
+    $currentOverrides = ksefGetCurrentTranslationOverrides($db);
+    if (empty($currentOverrides)) {
+        $warnings[] = array(
+            'message' => $langs->trans("KSEF_WARNING_NO_TRANS_OVERRIDES"),
+            'severity' => 'warning',
+            'tab' => 'general'
+        );
+    }
+
+    // No auth at all for active env (auth tab)
+    $hasToken = !empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $env));
+    $hasCertFile = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $env));
+    $hasPrivKey = !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $env));
+    $hasKeyPass = !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $env));
+    $hasAuthCert = $hasCertFile && $hasPrivKey && $hasKeyPass;
+    $hasPartialCert = ($hasCertFile || $hasPrivKey || $hasKeyPass) && !$hasAuthCert;
+
+    if (!$hasToken && !$hasAuthCert) {
+        if ($hasPartialCert) {
+            // Some cert components present but incomplete
+            $missing = array();
+            if (!$hasCertFile) $missing[] = $langs->trans("KSEF_Certificate");
+            if (!$hasPrivKey) $missing[] = $langs->trans("KSEF_PrivateKey");
+            if (!$hasKeyPass) $missing[] = $langs->trans("KSEF_Password");
+            $warnings[] = array(
+                'message' => '<strong style="color: #dc3545;">' . $langs->trans("KSEF_WARNING_AUTH_CERT_INCOMPLETE") . '</strong> - ' . $langs->trans("KSEF_WARNING_AUTH_CERT_MISSING_PARTS", implode(', ', $missing)),
+                'severity' => 'error',
+                'tab' => 'auth'
+            );
+        } else {
+            $warnings[] = array(
+                'message' => '<strong style="color: #dc3545;">' . $langs->trans("KSEF_WARNING_NO_AUTH") . '</strong> - ' . $langs->trans("KSEF_WARNING_CONFIGURE_TOKEN_OR_CERT"),
+                'severity' => 'error',
+                'tab' => 'auth'
+            );
+        }
+    } else {
+        $authMethod = getDolGlobalString('KSEF_AUTH_METHOD_' . $env, 'token');
+
+        // Auth method=token but no token (auth tab)
+        if ($authMethod === 'token' && !$hasToken) {
+            $warnings[] = array(
+                'message' => $langs->trans("KSEF_WARNING_NO_TOKEN"),
+                'severity' => 'warning',
+                'tab' => 'auth'
+            );
+        }
+
+        // Auth method=certificate but no cert (auth tab)
+        if ($authMethod === 'certificate' && !$hasAuthCert) {
+            $missing = array();
+            if (!$hasCertFile) $missing[] = $langs->trans("KSEF_Certificate");
+            if (!$hasPrivKey) $missing[] = $langs->trans("KSEF_PrivateKey");
+            if (!$hasKeyPass) $missing[] = $langs->trans("KSEF_Password");
+            $warnings[] = array(
+                'message' => $langs->trans("KSEF_WARNING_NO_AUTH_CERTIFICATE") . ' - ' . $langs->trans("KSEF_WARNING_AUTH_CERT_MISSING_PARTS", implode(', ', $missing)),
+                'severity' => 'warning',
+                'tab' => 'auth'
+            );
+        }
+    }
+
+    // Auth certificate expired (auth tab)
+    $authCertCheck = ksefCheckAuthCertificate($env);
+    if ($authCertCheck['configured'] && !$authCertCheck['valid']) {
+        $warnings[] = array(
+            'message' => $langs->trans("KSEF_WARNING_AUTH_CERT_EXPIRED"),
+            'severity' => 'warning',
+            'tab' => 'auth'
+        );
+    }
+
+    // Offline certificate expired (auth tab)
+    $offlineCertCheck = ksefIsOfflineCertificateConfigured($env);
+    if ($offlineCertCheck['configured']) {
+        $offlineValidTo = getDolGlobalString('KSEF_OFFLINE_CERT_VALID_TO_' . $env, '');
+        if (!empty($offlineValidTo) && $offlineValidTo < dol_now()) {
+            $warnings[] = array(
+                'message' => $langs->trans("KSEF_WARNING_OFFLINE_CERT_EXPIRED"),
+                'severity' => 'warning',
+                'tab' => 'auth'
+            );
+        }
+    }
+
+    return $warnings;
+}
+
+/**
+ * @brief Renders config warnings as HTML with links
+ * @param array  $warnings    Array from ksefGetConfigWarnings()
+ * @param string $currentTab  Current tab ID ('general', 'auth', 'outgoing', 'incoming')
+ * @return string HTML
+ */
+function ksefRenderConfigWarnings($warnings, $currentTab = '')
+{
+    global $langs;
+    $langs->load("ksef@ksef");
+
+    if (empty($warnings)) {
+        return '';
+    }
+
+    $tabUrls = array(
+        'general'  => 'setup.php',
+        'auth'     => 'setup_auth.php',
+        'outgoing' => 'setup_outgoing.php',
+        'incoming' => 'setup_incoming.php',
+    );
+    $tabLabels = array(
+        'general'  => $langs->trans('KSEF_Tab_General'),
+        'auth'     => $langs->trans('KSEF_Tab_Authentication'),
+        'outgoing' => $langs->trans('KSEF_Tab_Outgoing'),
+        'incoming' => $langs->trans('KSEF_Tab_Incoming'),
+    );
+
+    $html = '<div class="warning" style="margin-bottom: 15px;">';
+    foreach ($warnings as $w) {
+        $html .= '&bull; ' . $w['message'];
+        if (!empty($w['tab']) && $w['tab'] !== $currentTab && isset($tabUrls[$w['tab']])) {
+            $url = dol_buildpath('/ksef/admin/' . $tabUrls[$w['tab']], 1);
+            $label = $tabLabels[$w['tab']];
+            $html .= ' &mdash; ' . $langs->trans('KSEF_WarningFixOnTab', $url, $label);
+        }
+        $html .= '<br>';
+    }
+    $html .= '</div>';
+
+    return $html;
 }

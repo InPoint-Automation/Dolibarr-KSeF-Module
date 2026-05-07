@@ -111,6 +111,40 @@ This module was developed by InPoint Automation Sp. z o.o.
 
 
 ## Changelog
+>### Version v1.3.7
+>- Fix blank icon in settings (Issue #21)
+>- Settings page split into 4 tabs: General, Authentication, Outgoing, Incoming
+>- Per-environment auth credentials — switch TEST/DEMO/PRODUCTION without re-entering tokens
+>- Setting to disable the "Validate and Upload" button for making validate/enter payment/then upload to KSeF a bit more obvious
+>- Add default invoice payment settings to set terms, method, and account during invoice creation automagically, can be overridden by thirdparty values
+>- VAT rate code helper in General settings to enable/disable ZW/RC/NP/NP2/WDT/EX codes
+>- Automatically adds KSeF VAT codes into dictionary if missing
+>- Notes default to Simple-Stopka on new installs
+>- Third Party and Product extrafields can be created/managed from the module setup page. Fields not made with KSeF module have an "ext" badge to differentiate pre-existing vs added within module
+>- Project extrafields support
+>- Third Party extrafields support in XML output
+>- Extrafields assigned as per-line extrafields result in these fields appearing on the invoice line-items, allowing for per-item additional notes that link back to invoice line number
+>- Extrafield notes now have target — each field routable to either DodatkowyOpis or StopkaFaktury
+>- Fix XML build error after extrafield deletion
+>- After payment is recorded, payment status sent in FA(3) XML (Issue #24)
+>- Multiple payments status and payment detail breakdown for incoming invoices
+>- P_10 line discount: include discount amount in FaWiersz when remise_percent > 0, calculated as unitPrice × qty − lineTotal
+>- NrZamowienia sourced from ref_client (default), linked sales order number, or custom extrafield. Multiple linked orders on a single invoice results in multiple Zamowienia numbers on the invoice (Issue #23)
+>- NrUmowy sourced from third party extrafield so contract number auto-populates from customer record (Issue #23)
+>- NrUmowy also supports invoice extrafield source
+>- Note_public now routable to StopkaFaktury instead (Issue #23). The options are now Simple-Stopka, Simple-DodatkowyOpis, and Key:Value-DodatkowyOpis
+>- Boilerplate invoice footer note on every invoice in module settings (such as for additional company information, legal disclaimers, etc)
+>- Explicit WDT and EX VAT source codes for intra-EU and export lines
+>- Fix line descriptions to use full line desc (with serial numbers, order refs, multiline text as configured on dolibarr page) instead of just product_label, truncated to 512 chars per schema
+>- Tax exemption support - disabled by default. When enabled and legal basis configured, if invoice has ZW lines puts P_19+P_19A/B/C into XML. Has global default plus per-product extrafield override. Settings hidden when disabled
+>- Fix VAT summary when invoice mixes 22%+23% or 7%+8% rate lines
+>- VAT summary now takes into account KR/ZW/etc
+>- KSeF-style PDF preview for draft and validated invoices before submission (Issue #22)
+>- Registries section on PDF only shows columns (KRS/REGON/BDO) that have data
+>- Upload to KSeF button available on paid/closed invoices that haven't been uploaded
+>- Updated How To Use section explaining setup for ZW/RC/NP/WDT codes, adding rates, and exemption setup guide
+>- Migrations to support new auth + notes settings changes
+
 >### Version v1.3.6
 >- Add check for whether module was enabled/disabled after updating, and a notification in settings menu to do so if it has not
 >- Notes support for outgoing invoices, sourced from public notes (simple or key:value modes) and/or selected invoice extrafields (Issue #19)

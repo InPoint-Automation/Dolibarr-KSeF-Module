@@ -27,6 +27,7 @@ class FA3Parser
 {
     // Payment status
     const PAYMENT_PAID = 'paid';
+    const PAYMENT_PAID_INSTALLMENTS = 'paid_installments';
     const PAYMENT_PARTIAL = 'partial';
     const PAYMENT_UNPAID = 'unpaid';
 
@@ -383,22 +384,64 @@ class FA3Parser
             }
         }
 
-        // 0% rate (P_13_6_1)
-        $net0 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_1');
-        if ($net0 != 0) {
-            $summary['0'] = array('net' => $net0, 'vat' => 0.0);
+        // 4% rate (P_13_4 / P_14_4)
+        $net4 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_4');
+        $vat4 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_4');
+        if ($net4 != 0 || $vat4 != 0) {
+            $summary['4'] = array('net' => $net4, 'vat' => $vat4, 'vat_pln' => null);
+            $vatPln4 = $this->getValue($xpath, '//fa:Fa/fa:P_14_4W', null);
+            if ($vatPln4 !== null && $vatPln4 !== '') {
+                $summary['4']['vat_pln'] = (float)$vatPln4;
+            }
         }
 
-        // Exempt (P_13_6_2)
-        $netZw = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_2');
+        // 3% special (P_13_5 / P_14_5)
+        $net3 = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_5');
+        $vat3 = $this->getDecimal($xpath, '//fa:Fa/fa:P_14_5');
+        if ($net3 != 0 || $vat3 != 0) {
+            $summary['3'] = array('net' => $net3, 'vat' => $vat3);
+        }
+
+        // 0% domestic (P_13_6_1)
+        $net0KR = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_1');
+        if ($net0KR != 0) {
+            $summary['0 KR'] = array('net' => $net0KR, 'vat' => 0.0);
+        }
+
+        // 0% intra-EU WDT (P_13_6_2)
+        $net0WDT = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_2');
+        if ($net0WDT != 0) {
+            $summary['0 WDT'] = array('net' => $net0WDT, 'vat' => 0.0);
+        }
+
+        // 0% export (P_13_6_3)
+        $net0EX = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_3');
+        if ($net0EX != 0) {
+            $summary['0 EX'] = array('net' => $net0EX, 'vat' => 0.0);
+        }
+
+        // Exempt (P_13_7)
+        $netZw = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_7');
         if ($netZw != 0) {
             $summary['zw'] = array('net' => $netZw, 'vat' => 0.0);
         }
 
-        // Not subject to tax (P_13_6_3)
-        $netNp = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_3');
-        if ($netNp != 0) {
-            $summary['np'] = array('net' => $netNp, 'vat' => 0.0);
+        // Not subject I (P_13_8)
+        $netNpI = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_8');
+        if ($netNpI != 0) {
+            $summary['np I'] = array('net' => $netNpI, 'vat' => 0.0);
+        }
+
+        // Not subject II - art. 100 services (P_13_9)
+        $netNpII = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_9');
+        if ($netNpII != 0) {
+            $summary['np II'] = array('net' => $netNpII, 'vat' => 0.0);
+        }
+
+        // Reverse charge (P_13_10)
+        $netOO = $this->getDecimal($xpath, '//fa:Fa/fa:P_13_10');
+        if ($netOO != 0) {
+            $summary['oo'] = array('net' => $netOO, 'vat' => 0.0);
         }
 
         return $summary;
@@ -727,6 +770,9 @@ class FA3Parser
         $czesciowa = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:ZnacznikZaplatyCzesciowej');
         if ($zaplacono === '1') {
             $payment['status'] = self::PAYMENT_PAID;
+        } elseif ($czesciowa === '2') {
+            // Fully paid in installments
+            $payment['status'] = self::PAYMENT_PAID_INSTALLMENTS;
         } elseif ($czesciowa === '1') {
             $payment['status'] = self::PAYMENT_PARTIAL;
         }
@@ -734,6 +780,28 @@ class FA3Parser
         // Payment date
         $dataZaplaty = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:DataZaplaty', null);
         if ($dataZaplaty) $payment['payment_date'] = $dataZaplaty;
+
+        // Partial payments
+        $partialNodes = $xpath->query('//fa:Fa/fa:Platnosc/fa:ZaplataCzesciowa');
+        if ($partialNodes && $partialNodes->length > 0) {
+            $payment['partial_payments'] = array();
+            foreach ($partialNodes as $node) {
+                $partial = array();
+                $kwota = $xpath->query('fa:KwotaZaplatyCzesciowej', $node);
+                if ($kwota->length > 0) $partial['amount'] = $kwota->item(0)->textContent;
+                $data = $xpath->query('fa:DataZaplatyCzesciowej', $node);
+                if ($data->length > 0) $partial['date'] = $data->item(0)->textContent;
+                $forma = $xpath->query('fa:FormaPlatnosci', $node);
+                if ($forma->length > 0) {
+                    $partial['method'] = $forma->item(0)->textContent;
+                } else {
+                    // PlatnoscInna
+                    $opis = $xpath->query('fa:OpisPlatnosci', $node);
+                    if ($opis->length > 0) $partial['method_description'] = $opis->item(0)->textContent;
+                }
+                $payment['partial_payments'][] = $partial;
+            }
+        }
 
         // Bank account - full details
         $nrRB = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:NrRB', null);
@@ -885,13 +953,19 @@ class FA3Parser
         foreach ($nodes as $node) {
             $key = null;
             $value = null;
+            $nrWiersza = null;
             foreach ($node->childNodes as $child) {
                 if ($child->nodeType !== XML_ELEMENT_NODE) continue;
+                if ($child->localName === 'NrWiersza') $nrWiersza = trim($child->textContent);
                 if ($child->localName === 'Klucz') $key = trim($child->textContent);
                 if ($child->localName === 'Wartosc') $value = trim($child->textContent);
             }
             if ($key && $value) {
-                $items[] = array('key' => $key, 'value' => $value);
+                $item = array('key' => $key, 'value' => $value);
+                if ($nrWiersza !== null && $nrWiersza !== '') {
+                    $item['nr_wiersza'] = (int) $nrWiersza;
+                }
+                $items[] = $item;
             }
         }
         return $items;

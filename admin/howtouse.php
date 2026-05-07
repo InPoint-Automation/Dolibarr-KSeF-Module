@@ -111,9 +111,9 @@ if ($action == 'testcertauth') {
 
     $environment = $current_env;
 
-    $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
-            !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
-            !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
+    $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_env)) &&
+            !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $current_env)) &&
+            !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $current_env));
 
     if (!$has_auth_cert) {
         setEventMessages($langs->trans('KSEF_CertificateNotConfigured'), null, 'errors');
@@ -121,8 +121,9 @@ if ($action == 'testcertauth') {
         exit;
     }
 
-    $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    $conf->global->KSEF_AUTH_METHOD = 'certificate';
+    $envKey = 'KSEF_AUTH_METHOD_' . $current_env;
+    $orig_method = getDolGlobalString($envKey, 'token');
+    $conf->global->$envKey = 'certificate';
 
     try {
         $client = new KsefClient($db, $environment);
@@ -148,7 +149,7 @@ if ($action == 'testcertauth') {
         );
     }
 
-    $conf->global->KSEF_AUTH_METHOD = $orig_method;
+    $conf->global->$envKey = $orig_method;
 
     header("Location: " . $_SERVER["PHP_SELF"]);
     exit;
@@ -159,8 +160,9 @@ if ($action == 'testtokenauth') {
 
     $environment = $current_env;
 
-    $orig_method = $conf->global->KSEF_AUTH_METHOD;
-    $conf->global->KSEF_AUTH_METHOD = 'token';
+    $envKey = 'KSEF_AUTH_METHOD_' . $current_env;
+    $orig_method = getDolGlobalString($envKey, 'token');
+    $conf->global->$envKey = 'token';
 
     try {
         dol_syslog("Testing KSeF token authentication with $environment environment", LOG_INFO);
@@ -188,7 +190,7 @@ if ($action == 'testtokenauth') {
         );
     }
 
-    $conf->global->KSEF_AUTH_METHOD = $orig_method;
+    $conf->global->$envKey = $orig_method;
 
     header("Location: " . $_SERVER["PHP_SELF"]);
     exit;
@@ -204,16 +206,16 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'howtouse', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-$has_token = !empty($conf->global->KSEF_AUTH_TOKEN);
-$has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
-        !empty($conf->global->KSEF_AUTH_PRIVATE_KEY) &&
-        !empty($conf->global->KSEF_AUTH_KEY_PASSWORD);
+$has_token = !empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $current_env));
+$has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_env)) &&
+        !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $current_env)) &&
+        !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $current_env));
 
 ?>
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
-            <th><span class="fa fa-bolt paddingright"></span><?php echo $langs->trans("KSEF_QuickStartGuide"); ?></th>
+            <th><span class="fas fa-bolt paddingright"></span><?php echo $langs->trans("KSEF_QuickStartGuide"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -231,7 +233,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                         foreach ($portals as $env => $portal) {
                             $is_active = ($env === $current_env);
                             $style = $is_active ? 'font-weight: bold;' : 'opacity: 0.5;';
-                            $icon = $is_active ? '<span class="fa fa-check-circle" style="color: #28a745;"></span> ' : '';
+                            $icon = $is_active ? '<span class="fas fa-check-circle" style="color: #28a745;"></span> ' : '';
                             print '<div style="' . $style . ' margin-bottom: 4px;">';
                             print $icon . '<a href="' . $portal['url'] . '" target="_blank">' . $portal['label'] . '</a>';
                             if ($is_active) {
@@ -242,7 +244,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                         ?>
 
                         <div style="margin-top: 12px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
-                            <span class="fa fa-exclamation-triangle" style="color: #856404;"></span>
+                            <span class="fas fa-exclamation-triangle" style="color: #856404;"></span>
                             <strong><?php echo $langs->trans("KSEF_Important"); ?>:</strong>
                             <?php echo $langs->trans("KSEF_PermissionsWarning"); ?>
                         </div>
@@ -252,8 +254,8 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                         <h4 style="margin-top: 0;">2. <?php echo $langs->trans("KSEF_ConfigureModule"); ?></h4>
                         <p><?php echo $langs->trans("KSEF_ConfigureModuleDesc"); ?></p>
                         <p><?php echo $langs->trans("KSEF_DefaultEnvironmentNote"); ?></p>
-                        <p><a href="<?php echo dol_buildpath('/ksef/admin/setup.php', 1); ?>" class="button small">
-                                <span class="fa fa-cog paddingright"></span><?php echo $langs->trans("KSEF_GoToSetup"); ?>
+                        <p><a href="<?php echo dol_buildpath('/ksef/admin/setup_auth.php', 1); ?>" class="button small">
+                                <span class="fas fa-cog paddingright"></span><?php echo $langs->trans("KSEF_GoToSetup"); ?>
                             </a></p>
                     </div>
 
@@ -263,32 +265,32 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
                         <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testconnection&token=<?php echo newToken(); ?>"
                            class="button small" style="margin-bottom: 8px; display: block;">
-                            <span class="fa fa-plug paddingright"></span><?php echo $langs->trans("KSEF_TEST_CONNECTION"); ?>
+                            <span class="fas fa-plug paddingright"></span><?php echo $langs->trans("KSEF_TEST_CONNECTION"); ?>
                         </a>
 
                         <?php if ($has_token) { ?>
                             <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testtokenauth&token=<?php echo newToken(); ?>"
                                class="button small" style="margin-bottom: 8px; display: block;">
-                                <span class="fa fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+                                <span class="fas fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
                             </a>
                         <?php } else { ?>
                             <span class="button small butActionRefused classfortooltip"
                                   style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
                                   title="<?php echo $langs->trans('KSEF_ConfigureTokenFirst'); ?>">
-                            <span class="fa fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+                            <span class="fas fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
                         </span>
                         <?php } ?>
 
                         <?php if ($has_auth_cert) { ?>
                             <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testcertauth&token=<?php echo newToken(); ?>"
                                class="button small" style="margin-bottom: 8px; display: block;">
-                                <span class="fa fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
+                                <span class="fas fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
                             </a>
                         <?php } else { ?>
                             <span class="button small butActionRefused classfortooltip"
                                   style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
                                   title="<?php echo $langs->trans('KSEF_ConfigureCertificateFirst'); ?>">
-                            <span class="fa fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
+                            <span class="fas fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
                         </span>
                         <?php } ?>
                     </div>
@@ -307,7 +309,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
-            <th><span class="fa fa-cog paddingright"></span><?php echo $langs->trans("KSEF_ConfigurationSection"); ?></th>
+            <th><span class="fas fa-cog paddingright"></span><?php echo $langs->trans("KSEF_ConfigurationSection"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -321,6 +323,12 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                 <h4><?php echo $langs->trans("KSEF_Authentication"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_AuthenticationDesc"); ?></p>
 
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_PerEnvAuth"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_PerEnvAuthDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_PaymentDefaults"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_PaymentDefaultsDesc"); ?></p>
+
                 <h4><?php echo $langs->trans("KSEF_OptionalFields"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_OptionalFieldsDesc"); ?></p>
 
@@ -328,10 +336,18 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_NotesIntro"); ?></p>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_NotesModes"); ?></p>
                 <div style="background: #f8f9fa; border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-family: monospace; font-size: 13px;">
-                    <?php echo $langs->trans("KSEF_HowTo_Config_NotesKeyValueExample"); ?>
+                    <?php echo $langs->trans("KSEF_HowTo_Config_NotesKeyValueExample1"); ?><br>
+                    <?php echo $langs->trans("KSEF_HowTo_Config_NotesKeyValueExample2"); ?>
                 </div>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_CustomFields"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_CustomFieldsTarget"); ?></p>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_Limits"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_OrderContract"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_OrderContractDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_Boilerplate"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_BoilerplateDesc"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_CompanyIdentifiers"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_CompanyIdentifiersDesc"); ?></p>
@@ -341,6 +357,71 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
                 <h4><?php echo $langs->trans("KSEF_TranslationOverridesHowTo"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_TranslationOverridesHowToDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_VatRates"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesIntro"); ?></p>
+                <p><b><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Intro"); ?></b></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Step3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Step4"); ?></li>
+                </ol>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Outro"); ?></p>
+                <div style="background: #f8f9fa; border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-size: 13px;">
+                    <table style="width:100%; border-collapse:collapse;">
+                        <tr style="border-bottom:1px solid #ccc;">
+                            <th style="text-align:left; padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_ColCode"); ?></th>
+                            <th style="text-align:left; padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_ColUse"); ?></th>
+                        </tr>
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px;"><i><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_None"); ?></i></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_NoneUse"); ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px;"><b>ZW</b></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_ZWUse"); ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px;"><b>RC</b></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_RCUse"); ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px;"><b>NP</b></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_NPUse"); ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px;"><b>NP2</b></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_NP2Use"); ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px;"><b>WDT</b></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_WDTUse"); ?></td>
+                        </tr>
+                        <tr>
+                            <td style="padding:4px;"><b>EX</b></td>
+                            <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_EXUse"); ?></td>
+                        </tr>
+                    </table>
+                </div>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesSetup"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSetup"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptIntro"); ?></p>
+                <p><b><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S1Title"); ?></b></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S1_1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S1_2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S1_3"); ?></li>
+                </ol>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S1Outro"); ?></p>
+                <p><b><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2Title"); ?></b></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2_1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2_2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2_3"); ?></li>
+                </ol>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2Outro"); ?></p>
             </td>
         </tr>
     </table>
@@ -349,7 +430,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
-            <th><span class="fa fa-file-invoice paddingright"></span><?php echo $langs->trans("KSEF_SendingInvoices"); ?></th>
+            <th><span class="fas fa-file-invoice paddingright"></span><?php echo $langs->trans("KSEF_SendingInvoices"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -365,6 +446,9 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                     </li>
                     <li><?php echo $langs->trans("KSEF_Workflow_Step4"); ?></li>
                 </ol>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Sending_PaymentFirst"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Sending_PaymentFirstDesc"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_Statuses"); ?></h4>
                 <ul style="list-style: none; padding-left: 0;">
@@ -386,6 +470,9 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
                     <li><?php echo $langs->trans("KSEF_BankAccount_Step4"); ?></li>
                 </ol>
 
+                <h4><?php echo $langs->trans("KSEF_HowTo_Sending_PDFPreview"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Sending_PDFPreviewDesc"); ?></p>
+
                 <h4><?php echo $langs->trans("KSEF_HowTo_Sending_Notes"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Sending_NotesEditing"); ?></p>
                 <p><?php echo $langs->trans("KSEF_HowTo_Sending_NotesPreview"); ?></p>
@@ -406,7 +493,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
-            <th><span class="fa fa-download paddingright"></span><?php echo $langs->trans("KSEF_ReceivingInvoices"); ?></th>
+            <th><span class="fas fa-download paddingright"></span><?php echo $langs->trans("KSEF_ReceivingInvoices"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -446,7 +533,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
-            <th><span class="fa fa-user-slash paddingright"></span><?php echo $langs->trans("KSEF_CustomerExclusions"); ?></th>
+            <th><span class="fas fa-user-slash paddingright"></span><?php echo $langs->trans("KSEF_CustomerExclusions"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -459,7 +546,7 @@ $has_auth_cert = !empty($conf->global->KSEF_AUTH_CERTIFICATE) &&
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
-            <th><span class="fa fa-wrench paddingright"></span><?php echo $langs->trans("KSEF_Troubleshooting"); ?></th>
+            <th><span class="fas fa-wrench paddingright"></span><?php echo $langs->trans("KSEF_Troubleshooting"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>

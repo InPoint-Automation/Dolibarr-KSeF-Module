@@ -36,6 +36,7 @@ class FA3Builder
     private $lastCreationDate;
     private $currentInvoiceCurrency;
     private $currentKursWaluty;
+    private $currentCustomer;
     private $currentCustomerCountry;
     private $currentCustomerIsEU;
 
@@ -57,13 +58,25 @@ class FA3Builder
      */
     public function buildFromInvoice($invoice_id, $options = array())
     {
-        global $conf, $mysoc;
+        global $conf, $mysoc, $extrafields;
 
         // Reset hash
         $this->lastXmlHash = null;
         $this->lastCreationDate = null;
 
         try {
+            // Clear stale extrafield attributes
+            if (!isset($extrafields) || !is_object($extrafields)) {
+                dol_include_once('/core/class/extrafields.class.php');
+                $extrafields = new ExtraFields($this->db);
+            }
+            $extrafields->attributes['facture'] = array();
+            $extrafields->attributes['facturedet'] = array();
+            $extrafields->attributes['product'] = array();
+            $extrafields->fetch_name_optionals_label('facture', true);
+            $extrafields->fetch_name_optionals_label('facturedet', true);
+            $extrafields->fetch_name_optionals_label('product', true);
+
             $invoice = new Facture($this->db);
             if ($invoice->fetch($invoice_id) <= 0) {
                 $this->error = "Invoice not found: $invoice_id";
@@ -76,6 +89,7 @@ class FA3Builder
                 $this->error = "Customer not found: " . $invoice->socid;
                 return false;
             }
+            $this->currentCustomer = $customer;
 
             // For corrective invoices, load original
             $originalInvoice = null;
@@ -104,7 +118,7 @@ class FA3Builder
             $this->buildPodmiot1($xml, $faktura, $mysoc, $customer);
             $this->buildPodmiot2($xml, $faktura, $customer);
             $this->buildFa($xml, $faktura, $invoice, $originalInvoice);
-            $this->buildStopka($xml, $faktura);
+            $this->buildStopka($xml, $faktura, $invoice);
 
             $xmlString = $xml->saveXML();
 
@@ -428,54 +442,91 @@ class FA3Builder
         // Net/Tax Amounts (P_13_* / P_14_*) - in invoice currency!!!!
         $vatSummary = $this->calculateVatSummary($invoice, $useMulticurrency);
 
-        // P_13_x: Net amounts by VAT rate
+        // P_13_x/P_14_x: by rate
+        $isMulticurrency = ($invoiceCurrency != 'PLN' && $kursWaluty > 0);
+
+        // 23%/22% - P_13_1, P_14_1, P_14_1W
         if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
-            $fa->appendChild($xml->createElement('P_13_1', number_format($vatSummary['23']['net'] ?? $vatSummary['22']['net'], 2, '.', '')));
+            $net = ($vatSummary['23']['net'] ?? 0) + ($vatSummary['22']['net'] ?? 0);
+            $vat = ($vatSummary['23']['vat'] ?? 0) + ($vatSummary['22']['vat'] ?? 0);
+            $fa->appendChild($xml->createElement('P_13_1', number_format($net, 2, '.', '')));
+            $fa->appendChild($xml->createElement('P_14_1', number_format($vat, 2, '.', '')));
+            if ($isMulticurrency) {
+                $fa->appendChild($xml->createElement('P_14_1W', number_format($vat * $kursWaluty, 2, '.', '')));
+            }
         }
+
+        // 8%/7% - P_13_2, P_14_2, P_14_2W
         if (isset($vatSummary['8']) || isset($vatSummary['7'])) {
-            $fa->appendChild($xml->createElement('P_13_2', number_format($vatSummary['8']['net'] ?? $vatSummary['7']['net'], 2, '.', '')));
+            $net = ($vatSummary['8']['net'] ?? 0) + ($vatSummary['7']['net'] ?? 0);
+            $vat = ($vatSummary['8']['vat'] ?? 0) + ($vatSummary['7']['vat'] ?? 0);
+            $fa->appendChild($xml->createElement('P_13_2', number_format($net, 2, '.', '')));
+            $fa->appendChild($xml->createElement('P_14_2', number_format($vat, 2, '.', '')));
+            if ($isMulticurrency) {
+                $fa->appendChild($xml->createElement('P_14_2W', number_format($vat * $kursWaluty, 2, '.', '')));
+            }
         }
+
+        // 5% - P_13_3, P_14_3, P_14_3W
         if (isset($vatSummary['5'])) {
             $fa->appendChild($xml->createElement('P_13_3', number_format($vatSummary['5']['net'], 2, '.', '')));
-        }
-        if (isset($vatSummary['0'])) {
-            $fa->appendChild($xml->createElement('P_13_6_1', number_format($vatSummary['0']['net'], 2, '.', '')));
-        }
-
-        // P_14_x: VAT amounts by rate
-        if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
-            $fa->appendChild($xml->createElement('P_14_1', number_format($vatSummary['23']['vat'] ?? $vatSummary['22']['vat'], 2, '.', '')));
-        }
-        if (isset($vatSummary['8']) || isset($vatSummary['7'])) {
-            $fa->appendChild($xml->createElement('P_14_2', number_format($vatSummary['8']['vat'] ?? $vatSummary['7']['vat'], 2, '.', '')));
-        }
-        if (isset($vatSummary['5'])) {
             $fa->appendChild($xml->createElement('P_14_3', number_format($vatSummary['5']['vat'], 2, '.', '')));
+            if ($isMulticurrency) {
+                $fa->appendChild($xml->createElement('P_14_3W', number_format($vatSummary['5']['vat'] * $kursWaluty, 2, '.', '')));
+            }
         }
 
-        // P_14_xW: VAT amounts in PLN
-        if ($invoiceCurrency != 'PLN' && $kursWaluty > 0) {
-            if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
-                $vatInvoice = $vatSummary['23']['vat'] ?? $vatSummary['22']['vat'];
-                $vatPLN = $vatInvoice * $kursWaluty;
-                $fa->appendChild($xml->createElement('P_14_1W', number_format($vatPLN, 2, '.', '')));
+        // 4% - P_13_4, P_14_4, P_14_4W
+        if (isset($vatSummary['4'])) {
+            $fa->appendChild($xml->createElement('P_13_4', number_format($vatSummary['4']['net'], 2, '.', '')));
+            $fa->appendChild($xml->createElement('P_14_4', number_format($vatSummary['4']['vat'], 2, '.', '')));
+            if ($isMulticurrency) {
+                $fa->appendChild($xml->createElement('P_14_4W', number_format($vatSummary['4']['vat'] * $kursWaluty, 2, '.', '')));
             }
-            if (isset($vatSummary['8']) || isset($vatSummary['7'])) {
-                $vatInvoice = $vatSummary['8']['vat'] ?? $vatSummary['7']['vat'];
-                $vatPLN = $vatInvoice * $kursWaluty;
-                $fa->appendChild($xml->createElement('P_14_2W', number_format($vatPLN, 2, '.', '')));
+        }
+
+        // 3% (special procedure) - P_13_5, P_14_5
+        if (isset($vatSummary['3'])) {
+            $fa->appendChild($xml->createElement('P_13_5', number_format($vatSummary['3']['net'], 2, '.', '')));
+            if (!empty($vatSummary['3']['vat'])) {
+                $fa->appendChild($xml->createElement('P_14_5', number_format($vatSummary['3']['vat'], 2, '.', '')));
             }
-            if (isset($vatSummary['5'])) {
-                $vatPLN = $vatSummary['5']['vat'] * $kursWaluty;
-                $fa->appendChild($xml->createElement('P_14_3W', number_format($vatPLN, 2, '.', '')));
-            }
+        }
+
+        // 0% domestic (KR) - P_13_6_1
+        if (isset($vatSummary['0 KR'])) {
+            $fa->appendChild($xml->createElement('P_13_6_1', number_format($vatSummary['0 KR']['net'], 2, '.', '')));
+        }
+        // 0% intra-EU (WDT) - P_13_6_2
+        if (isset($vatSummary['0 WDT'])) {
+            $fa->appendChild($xml->createElement('P_13_6_2', number_format($vatSummary['0 WDT']['net'], 2, '.', '')));
+        }
+        // 0% export - P_13_6_3
+        if (isset($vatSummary['0 EX'])) {
+            $fa->appendChild($xml->createElement('P_13_6_3', number_format($vatSummary['0 EX']['net'], 2, '.', '')));
+        }
+        // Exempt (zw) - P_13_7
+        if (isset($vatSummary['zw'])) {
+            $fa->appendChild($xml->createElement('P_13_7', number_format($vatSummary['zw']['net'], 2, '.', '')));
+        }
+        // Not subject I (np I) - P_13_8
+        if (isset($vatSummary['np I'])) {
+            $fa->appendChild($xml->createElement('P_13_8', number_format($vatSummary['np I']['net'], 2, '.', '')));
+        }
+        // Not subject II (np II, art. 100) - P_13_9
+        if (isset($vatSummary['np II'])) {
+            $fa->appendChild($xml->createElement('P_13_9', number_format($vatSummary['np II']['net'], 2, '.', '')));
+        }
+        // Reverse charge (oo) - P_13_10
+        if (isset($vatSummary['oo'])) {
+            $fa->appendChild($xml->createElement('P_13_10', number_format($vatSummary['oo']['net'], 2, '.', '')));
         }
 
         // P_15: Total Amount
         $totalAmount = $useMulticurrency ? $invoice->multicurrency_total_ttc : $invoice->total_ttc;
         $fa->appendChild($xml->createElement('P_15', number_format($totalAmount, 2, '.', '')));
 
-        $this->buildAdnotacje($xml, $fa, $invoice);
+        $this->buildAdnotacje($xml, $fa, $invoice, $vatSummary);
 
         // Invoice Type
         $fa->appendChild($xml->createElement('RodzajFaktury', $invoiceType));
@@ -493,6 +544,9 @@ class FA3Builder
 
         // Payment Info
         $this->buildPlatnosc($xml, $fa, $invoice);
+
+        // Transaction conditions
+        $this->buildWarunkiTransakcji($xml, $fa, $invoice);
     }
 
     /**
@@ -505,15 +559,15 @@ class FA3Builder
     {
         $summary = array();
         foreach ($invoice->lines as $line) {
-            $rate = number_format($line->tva_tx, 0);
-            if (!isset($summary[$rate])) $summary[$rate] = array('net' => 0, 'vat' => 0);
+            $ksefRate = $this->mapVatRateToKSeF($line->tva_tx, $line);
+            if (!isset($summary[$ksefRate])) $summary[$ksefRate] = array('net' => 0, 'vat' => 0);
 
             if ($useMulticurrency) {
-                $summary[$rate]['net'] += $line->multicurrency_total_ht;
-                $summary[$rate]['vat'] += $line->multicurrency_total_tva;
+                $summary[$ksefRate]['net'] += $line->multicurrency_total_ht;
+                $summary[$ksefRate]['vat'] += $line->multicurrency_total_tva;
             } else {
-                $summary[$rate]['net'] += $line->total_ht;
-                $summary[$rate]['vat'] += $line->total_tva;
+                $summary[$ksefRate]['net'] += $line->total_ht;
+                $summary[$ksefRate]['vat'] += $line->total_tva;
             }
         }
         return $summary;
@@ -577,8 +631,10 @@ class FA3Builder
      * @param $invoice Invoice object
      * @called_by buildFa()
      */
-    private function buildAdnotacje($xml, $parent, $invoice)
+    private function buildAdnotacje($xml, $parent, $invoice, $vatSummary = array())
     {
+        global $conf;
+
         $adnotacje = $xml->createElement('Adnotacje');
         $parent->appendChild($adnotacje);
 
@@ -590,7 +646,51 @@ class FA3Builder
 
         $zwolnienie = $xml->createElement('Zwolnienie');
         $adnotacje->appendChild($zwolnienie);
-        $zwolnienie->appendChild($xml->createElement('P_19N', '1')); // No exemption
+
+        $hasExempt = isset($vatSummary['zw']);
+        $globalPodstawa = getDolGlobalString('KSEF_ZWOLNIENIE_PODSTAWA', '');
+        $zwolnienieType = getDolGlobalString('KSEF_ZWOLNIENIE_TYPE', 'disabled');
+        $productField = getDolGlobalString('KSEF_ZWOLNIENIE_PRODUCT_FIELD', '');
+
+        $podstawa = '';
+        if ($hasExempt && $zwolnienieType !== 'disabled') {
+            // Per-product exemption bases
+            $bases = array();
+            if (!empty($productField) && !empty($invoice->lines)) {
+                require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+                $productCache = array();
+                foreach ($invoice->lines as $line) {
+                    $ksefRate = $this->mapVatRateToKSeF($line->tva_tx, $line);
+                    if ($ksefRate !== 'zw' || empty($line->fk_product)) continue;
+
+                    if (!isset($productCache[$line->fk_product])) {
+                        $prod = new Product($this->db);
+                        if ($prod->fetch($line->fk_product) > 0) {
+                            if (method_exists($prod, 'fetch_optionals')) $prod->fetch_optionals();
+                            $productCache[$line->fk_product] = $prod;
+                        }
+                    }
+                    if (isset($productCache[$line->fk_product])) {
+                        $val = $productCache[$line->fk_product]->array_options['options_' . $productField] ?? '';
+                        $val = trim(strip_tags((string) $val));
+                        if (!empty($val)) $bases[$val] = true;
+                    }
+                }
+            }
+
+            if (!empty($bases)) {
+                $podstawa = implode(', ', array_keys($bases));
+            } elseif (!empty($globalPodstawa)) {
+                $podstawa = $globalPodstawa;
+            }
+        }
+
+        if ($hasExempt && !empty($podstawa)) {
+            $zwolnienie->appendChild($xml->createElement('P_19', '1'));
+            $zwolnienie->appendChild($xml->createElement($zwolnienieType, $this->xmlSafe(mb_substr($podstawa, 0, 256, 'UTF-8'))));
+        } else {
+            $zwolnienie->appendChild($xml->createElement('P_19N', '1'));
+        }
 
         $noweSrodki = $xml->createElement('NoweSrodkiTransportu');
         $adnotacje->appendChild($noweSrodki);
@@ -611,10 +711,13 @@ class FA3Builder
      */
     private static function stripNoteHtml($html)
     {
-        $text = preg_replace('/<br\s*\/?>/i', "\n", $html);
+        $text = str_replace("\r\n", "\n", $html);
+        $text = preg_replace('/<br\s*\/?>/i', "\n", $text);
         $text = preg_replace('/<\/(p|div)>/i', "\n", $text);
         $text = strip_tags($text);
         $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+        $text = preg_replace('/[ \t]+\n/', "\n", $text);
+        $text = preg_replace('/\n{2,}/', "\n", $text);
         return trim(self::sanitizeForXml($text));
     }
 
@@ -656,21 +759,27 @@ class FA3Builder
             ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
             : '';
 
-        if ($invoiceOverride === 'disabled') {
+        $globalNoteMode = isset($conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE) ? $conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE : 'simple';
+        $noteTarget = getDolGlobalString('KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury');
+
+        if (!empty($invoiceOverride)) {
+            $parsed = self::parseCombinedNoteMode($invoiceOverride);
+            if ($parsed) {
+                $effectiveNoteMode = $parsed['mode'];
+                $noteTarget = $parsed['target'];
+            } else {
+                $effectiveNoteMode = $globalNoteMode;
+            }
+        } else {
+            $effectiveNoteMode = $globalNoteMode;
+        }
+
+        if ($effectiveNoteMode === 'disabled' && !empty($invoiceOverride) && $invoiceOverride === 'disabled') {
             return $entries;
         }
 
-        $globalNoteMode = isset($conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE) ? $conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE : 'disabled';
-        if ($invoiceOverride === 'simple' || $invoiceOverride === 'keyvalue') {
-            $effectiveNoteMode = $invoiceOverride;
-            $includeExtrafields = true;
-        } else {
-            $effectiveNoteMode = $globalNoteMode;
-            $includeExtrafields = true;
-        }
-
-        // Process note_public
-        if ($effectiveNoteMode !== 'disabled' && !empty($invoice->note_public)) {
+        // note_public as DodatkowyOpis
+        if ($effectiveNoteMode !== 'disabled' && $noteTarget === 'dodatkowy_opis' && !empty($invoice->note_public)) {
             $text = self::stripNoteHtml($invoice->note_public);
 
             if (!empty($text)) {
@@ -708,13 +817,9 @@ class FA3Builder
         }
 
         // Process extrafields
-        if (!$includeExtrafields) {
-            return $entries;
-        }
-
         $extrafieldsConf = isset($conf->global->KSEF_DODATKOWY_OPIS_EXTRAFIELDS) ? $conf->global->KSEF_DODATKOWY_OPIS_EXTRAFIELDS : '';
         if (!empty($extrafieldsConf)) {
-            $fieldNames = array_map('trim', explode(',', $extrafieldsConf));
+            $fieldEntries = array_filter(array_map('trim', explode(',', $extrafieldsConf)));
 
             dol_include_once('/core/class/extrafields.class.php');
             $ef = new ExtraFields($db);
@@ -722,8 +827,13 @@ class FA3Builder
 
             $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
 
-            foreach ($fieldNames as $name) {
-                if (empty($name)) continue;
+            foreach ($fieldEntries as $entry) {
+                if (empty($entry)) continue;
+                $parts = explode(':', $entry, 2);
+                $name = $parts[0];
+                $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+                if ($target !== 'dodatkowy') continue;
+
                 if (!isset($ef->attributes['facture']['label'][$name])) continue;
 
                 $type = isset($ef->attributes['facture']['type'][$name]) ? $ef->attributes['facture']['type'][$name] : '';
@@ -732,26 +842,7 @@ class FA3Builder
                 $rawValue = isset($invoice->array_options['options_' . $name]) ? $invoice->array_options['options_' . $name] : '';
                 if ($rawValue === '' || $rawValue === null) continue;
 
-                $displayValue = $rawValue;
-                if ($type === 'date') {
-                    $displayValue = dol_print_date($rawValue, 'day');
-                } elseif ($type === 'datetime') {
-                    $displayValue = dol_print_date($rawValue, 'dayhour');
-                } elseif ($type === 'select') {
-                    $param = isset($ef->attributes['facture']['param'][$name]) ? $ef->attributes['facture']['param'][$name] : array();
-                    if (isset($param['options'][$rawValue])) {
-                        $optLabel = $param['options'][$rawValue];
-                        if (($pos = strpos($optLabel, '|')) !== false) {
-                            $optLabel = substr($optLabel, 0, $pos);
-                        }
-                        $displayValue = $langs->trans($optLabel);
-                    }
-                } elseif ($type === 'double' || $type === 'price') {
-                    $displayValue = (string) $rawValue;
-                } else {
-                    $displayValue = strip_tags((string) $rawValue);
-                }
-
+                $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'facture', $name, $langs);
                 if ($displayValue === '' || $displayValue === null) continue;
 
                 $label = $langs->trans($ef->attributes['facture']['label'][$name]);
@@ -763,7 +854,363 @@ class FA3Builder
             }
         }
 
+        // Line extrafields
+        $detExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_DET_EXTRAFIELDS', '');
+        if (!empty($detExtrafieldsConf) && !empty($invoice->lines)) {
+            $detFieldNames = array_filter(array_map('trim', explode(',', $detExtrafieldsConf)));
+            if (!empty($detFieldNames)) {
+                if (!isset($ef)) {
+                    dol_include_once('/core/class/extrafields.class.php');
+                    $ef = new ExtraFields($db);
+                }
+                $ef->fetch_name_optionals_label('facturedet');
+
+                if (!isset($skipTypes)) $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
+
+                $lineNum = 0;
+                foreach ($invoice->lines as $line) {
+                    $lineNum++;
+                    if (!isset($line->array_options) || empty($line->array_options)) {
+                        if (method_exists($line, 'fetch_optionals')) {
+                            $line->fetch_optionals();
+                        }
+                    }
+                    foreach ($detFieldNames as $name) {
+                        if (empty($name)) continue;
+                        if (!isset($ef->attributes['facturedet']['label'][$name])) continue;
+
+                        $type = isset($ef->attributes['facturedet']['type'][$name]) ? $ef->attributes['facturedet']['type'][$name] : '';
+                        if (in_array($type, $skipTypes)) continue;
+
+                        $rawValue = isset($line->array_options['options_' . $name]) ? $line->array_options['options_' . $name] : '';
+                        if ($rawValue === '' || $rawValue === null) continue;
+
+                        $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'facturedet', $name, $langs);
+                        if ($displayValue === '' || $displayValue === null) continue;
+
+                        $label = $langs->trans($ef->attributes['facturedet']['label'][$name]);
+                        $entries[] = array(
+                            'key' => mb_substr(self::sanitizeForXml($label), 0, 256, 'UTF-8'),
+                            'value' => mb_substr(self::sanitizeForXml((string) $displayValue), 0, 256, 'UTF-8'),
+                            'source' => 'extrafield_det',
+                            'nr_wiersza' => $lineNum,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Product extrafields
+        $prodExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS', '');
+        if (!empty($prodExtrafieldsConf) && !empty($invoice->lines)) {
+            $prodFieldNames = array_filter(array_map('trim', explode(',', $prodExtrafieldsConf)));
+            if (!empty($prodFieldNames)) {
+                if (!isset($ef)) {
+                    dol_include_once('/core/class/extrafields.class.php');
+                    $ef = new ExtraFields($db);
+                }
+                $ef->fetch_name_optionals_label('product');
+
+                if (!isset($skipTypes)) $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
+
+                require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+                $productCache = array();
+                $lineNum = 0;
+                foreach ($invoice->lines as $line) {
+                    $lineNum++;
+                    if (empty($line->fk_product)) continue;
+
+                    if (!isset($productCache[$line->fk_product])) {
+                        $prod = new Product($db);
+                        if ($prod->fetch($line->fk_product) > 0) {
+                            if (method_exists($prod, 'fetch_optionals')) $prod->fetch_optionals();
+                            $productCache[$line->fk_product] = $prod;
+                        }
+                    }
+                    if (!isset($productCache[$line->fk_product])) continue;
+
+                    $prod = $productCache[$line->fk_product];
+
+                    foreach ($prodFieldNames as $name) {
+                        if (empty($name)) continue;
+                        if (!isset($ef->attributes['product']['label'][$name])) continue;
+
+                        $type = isset($ef->attributes['product']['type'][$name]) ? $ef->attributes['product']['type'][$name] : '';
+                        if (in_array($type, $skipTypes)) continue;
+
+                        $rawValue = isset($prod->array_options['options_' . $name]) ? $prod->array_options['options_' . $name] : '';
+                        if ($rawValue === '' || $rawValue === null) continue;
+
+                        $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'product', $name, $langs);
+                        if ($displayValue === '' || $displayValue === null) continue;
+
+                        $label = $langs->trans($ef->attributes['product']['label'][$name]);
+                        $entries[] = array(
+                            'key' => mb_substr(self::sanitizeForXml($label), 0, 256, 'UTF-8'),
+                            'value' => mb_substr(self::sanitizeForXml((string) $displayValue), 0, 256, 'UTF-8'),
+                            'source' => 'extrafield_product',
+                            'nr_wiersza' => $lineNum,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Societe extrafields
+        $socExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', '');
+        if (!empty($socExtrafieldsConf) && !empty($invoice->socid)) {
+            $socFieldEntries = array_filter(array_map('trim', explode(',', $socExtrafieldsConf)));
+            if (!empty($socFieldEntries)) {
+                if (!isset($ef)) {
+                    dol_include_once('/core/class/extrafields.class.php');
+                    $ef = new ExtraFields($db);
+                }
+                $ef->fetch_name_optionals_label('societe');
+
+                if (!isset($skipTypes)) $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
+
+                require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+                $soc = new Societe($db);
+                if ($soc->fetch($invoice->socid) > 0) {
+                    if (method_exists($soc, 'fetch_optionals')) $soc->fetch_optionals();
+
+                    foreach ($socFieldEntries as $entry) {
+                        if (empty($entry)) continue;
+                        $parts = explode(':', $entry, 2);
+                        $name = $parts[0];
+                        $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+                        if ($target !== 'dodatkowy') continue;
+
+                        if (!isset($ef->attributes['societe']['label'][$name])) continue;
+                        $type = isset($ef->attributes['societe']['type'][$name]) ? $ef->attributes['societe']['type'][$name] : '';
+                        if (in_array($type, $skipTypes)) continue;
+
+                        $rawValue = isset($soc->array_options['options_' . $name]) ? $soc->array_options['options_' . $name] : '';
+                        if ($rawValue === '' || $rawValue === null) continue;
+
+                        $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'societe', $name, $langs);
+                        if ($displayValue === '' || $displayValue === null) continue;
+
+                        $label = $langs->trans($ef->attributes['societe']['label'][$name]);
+                        $entries[] = array(
+                            'key' => mb_substr(self::sanitizeForXml($label), 0, 256, 'UTF-8'),
+                            'value' => mb_substr(self::sanitizeForXml((string) $displayValue), 0, 256, 'UTF-8'),
+                            'source' => 'extrafield_societe',
+                        );
+                    }
+                }
+            }
+        }
+
+        // Project extrafields
+        $projExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', '');
+        if (!empty($projExtrafieldsConf) && !empty($invoice->fk_project)) {
+            $projFieldEntries = array_filter(array_map('trim', explode(',', $projExtrafieldsConf)));
+            if (!empty($projFieldEntries)) {
+                if (!isset($ef)) {
+                    dol_include_once('/core/class/extrafields.class.php');
+                    $ef = new ExtraFields($db);
+                }
+                $ef->fetch_name_optionals_label('projet');
+
+                if (!isset($skipTypes)) $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
+
+                require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
+                $proj = new Project($db);
+                if ($proj->fetch($invoice->fk_project) > 0) {
+                    if (method_exists($proj, 'fetch_optionals')) $proj->fetch_optionals();
+
+                    foreach ($projFieldEntries as $entry) {
+                        if (empty($entry)) continue;
+                        $parts = explode(':', $entry, 2);
+                        $name = $parts[0];
+                        $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+                        if ($target !== 'dodatkowy') continue;
+
+                        if (!isset($ef->attributes['projet']['label'][$name])) continue;
+                        $type = isset($ef->attributes['projet']['type'][$name]) ? $ef->attributes['projet']['type'][$name] : '';
+                        if (in_array($type, $skipTypes)) continue;
+
+                        $rawValue = isset($proj->array_options['options_' . $name]) ? $proj->array_options['options_' . $name] : '';
+                        if ($rawValue === '' || $rawValue === null) continue;
+
+                        $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'projet', $name, $langs);
+                        if ($displayValue === '' || $displayValue === null) continue;
+
+                        $label = $langs->trans($ef->attributes['projet']['label'][$name]);
+                        $entries[] = array(
+                            'key' => mb_substr(self::sanitizeForXml($label), 0, 256, 'UTF-8'),
+                            'value' => mb_substr(self::sanitizeForXml((string) $displayValue), 0, 256, 'UTF-8'),
+                            'source' => 'extrafield_project',
+                        );
+                    }
+                }
+            }
+        }
+
         return $entries;
+    }
+
+    /**
+     * Collect extrafield valuess.
+     * Returns a single text block of "Label: Value" lines.
+     *
+     * @param object $invoice Invoice object
+     * @param object $conf Global conf
+     * @param object $db Database handler
+     * @return string Combined text for StopkaFaktury
+     */
+    public static function collectStopkaExtrafields($invoice, $conf, $db, $customer = null)
+    {
+        global $langs;
+
+        dol_include_once('/ksef/lib/ksef.lib.php');
+        dol_include_once('/core/class/extrafields.class.php');
+
+        $lines = array();
+        $skipTypes = ksefDodatkowyOpisUnsupportedTypes();
+        $ef = new ExtraFields($db);
+
+        if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+            if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+        }
+
+        // Invoice extrafields for stopka
+        $extrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+        if (!empty($extrafieldsConf)) {
+            $ef->fetch_name_optionals_label('facture');
+            $fieldEntries = array_filter(array_map('trim', explode(',', $extrafieldsConf)));
+            foreach ($fieldEntries as $entry) {
+                $parts = explode(':', $entry, 2);
+                $name = $parts[0];
+                $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+                if ($target !== 'stopka') continue;
+                if (empty($name) || !isset($ef->attributes['facture']['label'][$name])) continue;
+                $type = $ef->attributes['facture']['type'][$name] ?? '';
+                if (in_array($type, $skipTypes)) continue;
+
+                $rawValue = isset($invoice->array_options['options_' . $name]) ? $invoice->array_options['options_' . $name] : '';
+                if ($rawValue === '' || $rawValue === null) continue;
+                $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'facture', $name, $langs);
+                if ($displayValue === '' || $displayValue === null) continue;
+
+                $label = $langs->trans($ef->attributes['facture']['label'][$name]);
+                $lines[] = self::sanitizeForXml($label) . ': ' . self::sanitizeForXml((string) $displayValue);
+            }
+        }
+
+        // Societe extrafields for stopka
+        $socConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', '');
+        if (!empty($socConf) && !empty($invoice->socid)) {
+            $ef->fetch_name_optionals_label('societe');
+            $socEntries = array_filter(array_map('trim', explode(',', $socConf)));
+            $hasStopka = false;
+            foreach ($socEntries as $entry) {
+                $parts = explode(':', $entry, 2);
+                if (isset($parts[1]) && $parts[1] === 'stopka') { $hasStopka = true; break; }
+            }
+            if ($hasStopka) {
+                $soc = null;
+                if ($customer && $customer->id == $invoice->socid) {
+                    $soc = $customer;
+                } else {
+                    require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+                    $soc = new Societe($db);
+                    if ($soc->fetch($invoice->socid) <= 0) $soc = null;
+                }
+                if ($soc) {
+                    if (method_exists($soc, 'fetch_optionals')) $soc->fetch_optionals();
+                    foreach ($socEntries as $entry) {
+                        $parts = explode(':', $entry, 2);
+                        $name = $parts[0];
+                        $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+                        if ($target !== 'stopka') continue;
+                        if (empty($name) || !isset($ef->attributes['societe']['label'][$name])) continue;
+                        $type = $ef->attributes['societe']['type'][$name] ?? '';
+                        if (in_array($type, $skipTypes)) continue;
+
+                        $rawValue = isset($soc->array_options['options_' . $name]) ? $soc->array_options['options_' . $name] : '';
+                        if ($rawValue === '' || $rawValue === null) continue;
+                        $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'societe', $name, $langs);
+                        if ($displayValue === '' || $displayValue === null) continue;
+
+                        $label = $langs->trans($ef->attributes['societe']['label'][$name]);
+                        $lines[] = self::sanitizeForXml($label) . ': ' . self::sanitizeForXml((string) $displayValue);
+                    }
+                }
+            }
+        }
+
+        // Project extrafields for stopka
+        $projConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', '');
+        if (!empty($projConf) && !empty($invoice->fk_project)) {
+            $ef->fetch_name_optionals_label('projet');
+            $projEntries = array_filter(array_map('trim', explode(',', $projConf)));
+            $hasStopka = false;
+            foreach ($projEntries as $entry) {
+                $parts = explode(':', $entry, 2);
+                if (isset($parts[1]) && $parts[1] === 'stopka') { $hasStopka = true; break; }
+            }
+            if ($hasStopka) {
+                require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
+                $proj = new Project($db);
+                if ($proj->fetch($invoice->fk_project) > 0) {
+                    if (method_exists($proj, 'fetch_optionals')) $proj->fetch_optionals();
+                    foreach ($projEntries as $entry) {
+                        $parts = explode(':', $entry, 2);
+                        $name = $parts[0];
+                        $target = isset($parts[1]) ? $parts[1] : 'dodatkowy';
+                        if ($target !== 'stopka') continue;
+                        if (empty($name) || !isset($ef->attributes['projet']['label'][$name])) continue;
+                        $type = $ef->attributes['projet']['type'][$name] ?? '';
+                        if (in_array($type, $skipTypes)) continue;
+
+                        $rawValue = isset($proj->array_options['options_' . $name]) ? $proj->array_options['options_' . $name] : '';
+                        if ($rawValue === '' || $rawValue === null) continue;
+                        $displayValue = self::formatExtraFieldValue($rawValue, $type, $ef, 'projet', $name, $langs);
+                        if ($displayValue === '' || $displayValue === null) continue;
+
+                        $label = $langs->trans($ef->attributes['projet']['label'][$name]);
+                        $lines[] = self::sanitizeForXml($label) . ': ' . self::sanitizeForXml((string) $displayValue);
+                    }
+                }
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @brief Formats an extrafield value for display in DodatkowyOpis
+     * @param mixed $rawValue Raw extrafield value
+     * @param string $type Extrafield type
+     * @param ExtraFields $ef ExtraFields instance
+     * @param string $elementType Element type ('facture' or 'facturedet')
+     * @param string $name Field name
+     * @param Translate $langs Language object
+     * @return string Formatted display value
+     */
+    private static function formatExtraFieldValue($rawValue, $type, $ef, $elementType, $name, $langs)
+    {
+        if ($type === 'date') {
+            return dol_print_date($rawValue, 'day');
+        } elseif ($type === 'datetime') {
+            return dol_print_date($rawValue, 'dayhour');
+        } elseif ($type === 'select') {
+            $param = isset($ef->attributes[$elementType]['param'][$name]) ? $ef->attributes[$elementType]['param'][$name] : array();
+            if (isset($param['options'][$rawValue])) {
+                $optLabel = $param['options'][$rawValue];
+                if (($pos = strpos($optLabel, '|')) !== false) {
+                    $optLabel = substr($optLabel, 0, $pos);
+                }
+                return $langs->trans($optLabel);
+            }
+            return (string) $rawValue;
+        } elseif ($type === 'double' || $type === 'price') {
+            return (string) $rawValue;
+        } else {
+            return strip_tags((string) $rawValue);
+        }
     }
 
     /**
@@ -784,6 +1231,22 @@ class FA3Builder
     }
 
     /**
+     * @brief Parses a combined note mode value into mode and target components
+     * @param string $combined Combined value (e.g. 'simple_stopka', 'keyvalue_dodatkowy', 'disabled')
+     * @return array|null Array with 'mode' and 'target' keys, or null if not recognized
+     */
+    public static function parseCombinedNoteMode($combined)
+    {
+        $map = array(
+            'simple_stopka'      => array('mode' => 'simple',   'target' => 'stopka_faktury'),
+            'simple_dodatkowy'   => array('mode' => 'simple',   'target' => 'dodatkowy_opis'),
+            'keyvalue_dodatkowy' => array('mode' => 'keyvalue', 'target' => 'dodatkowy_opis'),
+            'disabled'           => array('mode' => 'disabled', 'target' => ''),
+        );
+        return isset($map[$combined]) ? $map[$combined] : null;
+    }
+
+    /**
      * @brief Builds DodatkowyOpis XML elements from invoice data
      * @param $xml DOMDocument
      * @param $parent Parent element (Fa)
@@ -799,6 +1262,10 @@ class FA3Builder
 
         foreach ($entries as $entry) {
             $dodatkowy = $xml->createElement('DodatkowyOpis');
+            // NrWiersza before Klucz (schema order)
+            if (!empty($entry['nr_wiersza'])) {
+                $dodatkowy->appendChild($xml->createElement('NrWiersza', (int) $entry['nr_wiersza']));
+            }
             $dodatkowy->appendChild($xml->createElement('Klucz', $this->xmlSafe($entry['key'])));
             $dodatkowy->appendChild($xml->createElement('Wartosc', $this->xmlSafe($entry['value'])));
             $parent->appendChild($dodatkowy);
@@ -825,8 +1292,22 @@ class FA3Builder
             $faWiersz->appendChild($xml->createElement('NrWierszaFa', $lineNum++));
 
             // P_7: Product Name
-            $description = $line->product_label ?: $line->desc;
-            $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(substr($description, 0, 512))));
+            $descText = !empty($line->desc) ? self::stripNoteHtml($line->desc) : '';
+            $label = !empty($line->product_label) ? trim($line->product_label) : '';
+            if (!empty($label) && !empty($descText)) {
+                if (stripos($descText, $label) !== 0) {
+                    $description = $label . "\n" . $descText;
+                } else {
+                    $description = $descText;
+                }
+            } elseif (!empty($descText)) {
+                $description = $descText;
+            } elseif (!empty($label)) {
+                $description = $label;
+            } else {
+                $description = '';
+            }
+            $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(mb_substr($description, 0, 512, 'UTF-8'))));
 
             // Indeks: Product reference code
             if (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS) && !empty($line->product_ref)) {
@@ -852,6 +1333,16 @@ class FA3Builder
                 : $line->subprice;
             $faWiersz->appendChild($xml->createElement('P_9A', number_format($unitPrice, 2, '.', '')));
 
+            // P_10: Discount amount
+            if (!empty($line->remise_percent) && $line->remise_percent > 0) {
+                $discountAmount = $unitPrice * $line->qty - ((!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
+                    ? $line->multicurrency_total_ht
+                    : $line->total_ht);
+                if ($discountAmount > 0) {
+                    $faWiersz->appendChild($xml->createElement('P_10', number_format($discountAmount, 2, '.', '')));
+                }
+            }
+
             // P_11: Net Line Total
             $lineTotal = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
                 ? $line->multicurrency_total_ht
@@ -875,7 +1366,7 @@ class FA3Builder
      * @param $parent Parent element
      * @param $invoice Invoice object
      * @called_by buildFa()
-     * @calls getPaymentMethodCode(), cleanIBAN(), xmlSafe()
+     * @calls getPaymentMethodCode(), getPaymentMethodCodeByType(), cleanIBAN(), xmlSafe()
      */
     private function buildPlatnosc($xml, $parent, $invoice)
     {
@@ -884,16 +1375,60 @@ class FA3Builder
         $platnosc = $xml->createElement('Platnosc');
         $parent->appendChild($platnosc);
 
+        // Payment status
+        if ($invoice->statut >= 1) {
+            $payments = $invoice->getListOfPayments('', 0, 1);
+
+            if (!empty($payments)) {
+                $isFullyPaid = !empty($invoice->paye);
+                $paymentCount = count($payments);
+
+                if ($isFullyPaid && $paymentCount == 1) {
+                    // Full payment
+                    $platnosc->appendChild($xml->createElement('Zaplacono', '1'));
+                    $payDate = dol_print_date($this->db->jdate($payments[0]['date']), '%Y-%m-%d');
+                    $platnosc->appendChild($xml->createElement('DataZaplaty', $payDate));
+                } else {
+                    // Partial/multiple: 1=partial, 2=fully paid in installments
+                    $znacznik = $isFullyPaid ? '2' : '1';
+                    $platnosc->appendChild($xml->createElement('ZnacznikZaplatyCzesciowej', $znacznik));
+
+                    foreach ($payments as $payment) {
+                        $zaplataCzesciowa = $xml->createElement('ZaplataCzesciowa');
+                        $platnosc->appendChild($zaplataCzesciowa);
+
+                        $zaplataCzesciowa->appendChild($xml->createElement(
+                            'KwotaZaplatyCzesciowej',
+                            number_format((float)$payment['amount'], 2, '.', '')
+                        ));
+                        $zaplataCzesciowa->appendChild($xml->createElement(
+                            'DataZaplatyCzesciowej',
+                            dol_print_date($this->db->jdate($payment['date']), '%Y-%m-%d')
+                        ));
+
+                        if (!empty($payment['type'])) {
+                            $partialPayCode = $this->getPaymentMethodCodeByType($payment['type']);
+                            if ($partialPayCode !== null) {
+                                $zaplataCzesciowa->appendChild($xml->createElement('FormaPlatnosci', $partialPayCode));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Payment terms
         $terminPlatnosci = $xml->createElement('TerminPlatnosci');
         $platnosc->appendChild($terminPlatnosci);
 
         $dueDate = $invoice->date_lim_reglement ?: ($invoice->date + (30 * 86400));
         $terminPlatnosci->appendChild($xml->createElement('Termin', dol_print_date($dueDate, '%Y-%m-%d')));
 
+        // Payment method
         $paymentCode = $this->getPaymentMethodCode($invoice->mode_reglement_id);
         $platnosc->appendChild($xml->createElement('FormaPlatnosci', $paymentCode));
 
-        // Add bank account if Transfer (6)
+        // Bank account for transfers
         if ($paymentCode == '6' && !empty($invoice->fk_account)) {
             require_once DOL_DOCUMENT_ROOT . '/compta/bank/class/account.class.php';
             $account = new Account($this->db);
@@ -916,12 +1451,93 @@ class FA3Builder
     }
 
     /**
+     * @brief Builds WarunkiTransakcji section (order/contract numbers)
+     * @param DOMDocument $xml
+     * @param DOMElement $parent Parent element (Fa)
+     * @param object $invoice Invoice object
+     * @called_by buildFa()
+     */
+    private function buildWarunkiTransakcji($xml, $parent, $invoice)
+    {
+        global $conf;
+
+        // NrZamowienia
+        $orderRefs = array();
+        $zamowieniaSource = getDolGlobalString('KSEF_NR_ZAMOWIENIA_SOURCE', 'ref_client');
+        if ($zamowieniaSource === 'ref_client') {
+            $val = isset($invoice->ref_client) ? trim((string) $invoice->ref_client) : '';
+            if (!empty($val)) $orderRefs[] = mb_substr($val, 0, 256, 'UTF-8');
+        } elseif ($zamowieniaSource === 'linked_order') {
+            foreach ($this->getLinkedOrderRefs($invoice) as $ref) {
+                $orderRefs[] = mb_substr($ref, 0, 256, 'UTF-8');
+            }
+        } elseif (strpos($zamowieniaSource, 'extrafield:') === 0) {
+            $fieldName = substr($zamowieniaSource, strlen('extrafield:'));
+            if (!empty($fieldName)) {
+                if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+                    if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+                }
+                $val = isset($invoice->array_options['options_' . $fieldName])
+                    ? trim(strip_tags((string) $invoice->array_options['options_' . $fieldName]))
+                    : '';
+                if (!empty($val)) $orderRefs[] = mb_substr($val, 0, 256, 'UTF-8');
+            }
+        }
+
+        // NrUmowy
+        $nrUmowy = '';
+        $umowySource = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
+        if (strpos($umowySource, 'thirdparty_extrafield:') === 0) {
+            $fieldName = substr($umowySource, strlen('thirdparty_extrafield:'));
+            if (!empty($fieldName) && !empty($this->currentCustomer)) {
+                if (!isset($this->currentCustomer->array_options) || empty($this->currentCustomer->array_options)) {
+                    if (method_exists($this->currentCustomer, 'fetch_optionals')) $this->currentCustomer->fetch_optionals();
+                }
+                $nrUmowy = isset($this->currentCustomer->array_options['options_' . $fieldName])
+                    ? trim(strip_tags((string) $this->currentCustomer->array_options['options_' . $fieldName]))
+                    : '';
+            }
+        } elseif (strpos($umowySource, 'extrafield:') === 0) {
+            // Invoice extrafield
+            $fieldName = substr($umowySource, strlen('extrafield:'));
+            if (!empty($fieldName)) {
+                if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+                    if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+                }
+                $nrUmowy = isset($invoice->array_options['options_' . $fieldName])
+                    ? trim(strip_tags((string) $invoice->array_options['options_' . $fieldName]))
+                    : '';
+            }
+        }
+        $nrUmowy = mb_substr($nrUmowy, 0, 256, 'UTF-8');
+
+        if (empty($orderRefs) && empty($nrUmowy)) {
+            return;
+        }
+
+        $warunki = $xml->createElement('WarunkiTransakcji');
+        $parent->appendChild($warunki);
+
+        if (!empty($nrUmowy)) {
+            $umowy = $xml->createElement('Umowy');
+            $warunki->appendChild($umowy);
+            $umowy->appendChild($xml->createElement('NrUmowy', $this->xmlSafe($nrUmowy)));
+        }
+
+        foreach ($orderRefs as $ref) {
+            $zamowienia = $xml->createElement('Zamowienia');
+            $warunki->appendChild($zamowienia);
+            $zamowienia->appendChild($xml->createElement('NrZamowienia', $this->xmlSafe($ref)));
+        }
+    }
+
+    /**
      * @brief Builds footer section with registry numbers
      * @param DOMDocument $xml
      * @param DOMElement $parent Parent element
      * @called_by buildFromInvoice()
      */
-    private function buildStopka($xml, $parent)
+    private function buildStopka($xml, $parent, $invoice = null)
     {
         global $conf, $mysoc;
 
@@ -938,25 +1554,87 @@ class FA3Builder
             $bdo = trim(ksefGetIdentifierField($mysoc, 'BDO'));
         }
 
-        // Only create Stopka if at least one registry number is set
-        if (empty($krs) && empty($regon) && empty($bdo)) {
+        $hasRejestry = !empty($krs) || !empty($regon) || !empty($bdo);
+
+        // StopkaFaktury
+        $stopkaTexts = array();
+
+        // note_public
+        $noteTarget = getDolGlobalString('KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury');
+        $noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
+        $includeNoteInStopka = ($noteTarget === 'stopka_faktury' && $noteMode !== 'disabled');
+
+        $isDisabledOverride = false;
+        if ($invoice) {
+            if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+                if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+            }
+            $invoiceOverride = isset($invoice->array_options['options_ksef_dodatkowy_opis_mode'])
+                ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
+                : '';
+            if (!empty($invoiceOverride)) {
+                if ($invoiceOverride === 'disabled') {
+                    $isDisabledOverride = true;
+                    $includeNoteInStopka = false;
+                } else {
+                    $parsed = self::parseCombinedNoteMode($invoiceOverride);
+                    if ($parsed) {
+                        $includeNoteInStopka = ($parsed['target'] === 'stopka_faktury' && $parsed['mode'] !== 'disabled');
+                    }
+                }
+            }
+        }
+
+        if ($includeNoteInStopka && $invoice && !empty($invoice->note_public)) {
+            $text = trim(self::stripNoteHtml($invoice->note_public));
+            if (!empty($text)) {
+                $stopkaTexts[] = mb_substr($text, 0, 3500, 'UTF-8');
+            }
+        }
+
+        // Boilerplate note
+        $boilerplate = getDolGlobalString('KSEF_STOPKA_BOILERPLATE', '');
+        if (!empty($boilerplate)) {
+            $stopkaTexts[] = mb_substr(trim($boilerplate), 0, 3500, 'UTF-8');
+        }
+
+        // Extrafields for stopka
+        if ($invoice && !$isDisabledOverride) {
+            $stopkaEfText = self::collectStopkaExtrafields($invoice, $conf, $this->db, $this->currentCustomer);
+            if (!empty($stopkaEfText)) {
+                $stopkaTexts[] = mb_substr($stopkaEfText, 0, 3500, 'UTF-8');
+            }
+        }
+
+        if (!$hasRejestry && empty($stopkaTexts)) {
             return;
         }
 
         $stopka = $xml->createElement('Stopka');
         $parent->appendChild($stopka);
 
-        $rejestry = $xml->createElement('Rejestry');
-        $stopka->appendChild($rejestry);
+        // StopkaFaktury before Rejestry
+        if (!empty($stopkaTexts)) {
+            foreach ($stopkaTexts as $footerText) {
+                $informacje = $xml->createElement('Informacje');
+                $stopka->appendChild($informacje);
+                $informacje->appendChild($xml->createElement('StopkaFaktury', $this->xmlSafe($footerText)));
+            }
+        }
 
-        if (!empty($krs)) {
-            $rejestry->appendChild($xml->createElement('KRS', $this->xmlSafe($krs)));
-        }
-        if (!empty($regon)) {
-            $rejestry->appendChild($xml->createElement('REGON', $this->xmlSafe($regon)));
-        }
-        if (!empty($bdo)) {
-            $rejestry->appendChild($xml->createElement('BDO', $this->xmlSafe($bdo)));
+        if ($hasRejestry) {
+            $rejestry = $xml->createElement('Rejestry');
+            $stopka->appendChild($rejestry);
+
+            if (!empty($krs)) {
+                $rejestry->appendChild($xml->createElement('KRS', $this->xmlSafe($krs)));
+            }
+            if (!empty($regon)) {
+                $rejestry->appendChild($xml->createElement('REGON', $this->xmlSafe($regon)));
+            }
+            if (!empty($bdo)) {
+                $rejestry->appendChild($xml->createElement('BDO', $this->xmlSafe($bdo)));
+            }
         }
     }
 
@@ -994,20 +1672,43 @@ class FA3Builder
     private function getPaymentMethodCode($mode_reglement_id)
     {
         $mapping = array(
-            1  => '6',  // TIP -> Przelew (Transfer)
-            2  => '6',  // VIR (Credit Transfer) -> Przelew (Transfer)
-            3  => '6',  // PRE (Direct Debit) -> Przelew (Transfer)
-            4  => '1',  // LIQ (Cash) -> Gotówka (Cash)
-            6  => '2',  // CB (Credit card) -> Karta (Card)
-            7  => '4',  // CHQ (Cheque) -> Czek (Check)
-            50 => '6',  // VAD (Online payment) -> Przelew (Transfer)
-            51 => '6',  // TRA (Traite) -> Przelew (Transfer)
-            52 => '6',  // LCR -> Przelew (Transfer)
-            53 => '6',  // FAC (Factor) -> Przelew (Transfer)
+            1  => '6',  // TIP
+            2  => '6',  // VIR
+            3  => '6',  // PRE
+            4  => '1',  // LIQ
+            6  => '2',  // CB
+            7  => '4',  // CHQ
+            50 => '6',  // VAD
+            51 => '6',  // TRA
+            52 => '6',  // LCR
+            53 => '6',  // FAC
         );
         return isset($mapping[$mode_reglement_id]) ? $mapping[$mode_reglement_id] : '6';
     }
 
+    /**
+     * @brief Maps Dolibarr string to KSeF FormaPlatnosci code
+     * @param string $typeCode Payment type code from c_paiement table (e.g. 'VIR', 'CB', 'CHQ')
+     * @return string|null KSeF payment code, or null if unknown
+     * @called_by buildPlatnosc()
+     * KSeF codes: 1=Cash, 2=Card, 3=Voucher, 4=Check, 5=Credit, 6=Transfer, 7=Mobile
+     */
+    private function getPaymentMethodCodeByType($typeCode)
+    {
+        $mapping = array(
+            'TIP' => '6',
+            'VIR' => '6',
+            'PRE' => '6',
+            'LIQ' => '1',
+            'CB'  => '2',
+            'CHQ' => '4',
+            'VAD' => '6',
+            'TRA' => '6',
+            'LCR' => '6',
+            'FAC' => '6',
+        );
+        return isset($mapping[$typeCode]) ? $mapping[$typeCode] : null;
+    }
 
     /**
      * @brief Gets KSeF number from previous submission
@@ -1087,11 +1788,34 @@ class FA3Builder
     }
 
     /**
+     * @brief Gets reference numbers of linked sales orders
+     * @param object $invoice Invoice object
+     * @return array Array of order reference strings
+     * @called_by buildWarunkiTransakcji()
+     */
+    private function getLinkedOrderRefs($invoice)
+    {
+        $invoice->fetchObjectLinked(null, '', null, '', 'OR', 1, 'sourcetype', 0);
+        if (empty($invoice->linkedObjectsIds['commande'])) return array();
+
+        require_once DOL_DOCUMENT_ROOT . '/commande/class/commande.class.php';
+        $refs = array();
+        foreach ($invoice->linkedObjectsIds['commande'] as $orderId) {
+            $order = new Commande($this->db);
+            if ($order->fetch($orderId) > 0) {
+                $ref = trim($order->ref);
+                if (!empty($ref)) $refs[] = $ref;
+            }
+        }
+        return $refs;
+    }
+
+    /**
      * @brief Maps VAT rate to KSeF P_12 value
      * @param float $vatRate VAT rate from invoice line
      * @param object $line Invoice line object (for additional context)
      * @return string KSeF P_12 value
-     * @called_by buildFaWiersz()
+     * @called_by buildFaWiersz(), calculateVatSummary()
      */
     private function mapVatRateToKSeF($vatRate, $line = null)
     {
@@ -1101,17 +1825,21 @@ class FA3Builder
         }
 
         if ($rateInt == 0) {
-            // Check if this is exempt (zw)
-            if (!empty($line->vat_src_code) && stripos($line->vat_src_code, 'ZW') !== false) {
-                return 'zw';
-            }
+            $code = !empty($line->vat_src_code) ? strtoupper(trim($line->vat_src_code)) : '';
+            if (!empty($code)) {
+                if ($code === 'ZW')  return 'zw';
+                if ($code === 'RC' || $code === 'OO')  return 'oo';
+                if ($code === 'NP2' || $code === 'NPII' || $code === 'NP II') return 'np II';
+                if ($code === 'NP' || $code === 'NP1' || $code === 'NPI' || $code === 'NP I') return 'np I';
+                if ($code === 'WDT') return '0 WDT';
+                if ($code === 'EX')  return '0 EX';
 
-            if (!empty($line->vat_src_code) && (stripos($line->vat_src_code, 'RC') !== false || stripos($line->vat_src_code, 'OO') !== false)) {
-                return 'oo';
-            }
-
-            if (!empty($line->vat_src_code) && stripos($line->vat_src_code, 'NP') !== false) {
-                return 'np I';
+                if (strpos($code, 'ZW') !== false)  return 'zw';
+                if (strpos($code, 'RC') !== false || strpos($code, 'OO') !== false)  return 'oo';
+                if (strpos($code, 'WDT') !== false) return '0 WDT';
+                if (strpos($code, 'EX') !== false)  return '0 EX';
+                if (strpos($code, 'NP2') !== false || strpos($code, 'NPII') !== false) return 'np II';
+                if (strpos($code, 'NP') !== false)  return 'np I';
             }
 
             if (!empty($this->currentCustomerCountry)) {

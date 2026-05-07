@@ -92,7 +92,14 @@ class ActionsKSEF
 
         $is_accepted = $has_submission && $submission->status == 'ACCEPTED' && $has_real_ksef_number;
         $is_offline = $has_submission && $submission->status == 'OFFLINE' && !empty($submission->fa3_xml);
+        $is_pending_submission = $has_submission && $submission->status == 'PENDING';
         $can_generate_pdf = $is_accepted || $is_offline;
+
+        // Preview
+        $is_preview = !$can_generate_pdf
+            && in_array($object->statut, array(0, 1, 2))
+            && !empty($object->lines)
+            && !$is_pending_submission;
 
         $out .= '<tr class="oddeven"><td colspan="5" style="padding: 4px 8px;">';
         $out .= '<div style="display: flex; align-items: center; gap: 8px;">';
@@ -103,6 +110,11 @@ class ActionsKSEF
             $out .= 'style="background: #a94442; border-color: #8c2e2e; color: #fff; border-radius: 0;" ';
             $out .= 'value="' . $langs->trans('Generate') . '" ';
             $out .= 'onclick="window.location.href=\'' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_generate_pdf&token=' . newToken() . '\'" />';
+        } elseif ($is_preview) {
+            $out .= '<input type="button" class="button buttongen reposition nomargintop nomarginbottom" ';
+            $out .= 'style="background: #a94442; border-color: #8c2e2e; color: #fff; border-radius: 0;" ';
+            $out .= 'value="' . $langs->trans('Generate') . '" ';
+            $out .= 'onclick="window.location.href=\'' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_generate_pdf&preview=1&token=' . newToken() . '\'" />';
         } else {
             $tooltip = '';
             if (!$has_submission) {
@@ -174,13 +186,13 @@ class ActionsKSEF
 
         if ($has_ksef_number) {
             $warning_msg = '<div class="warning" style="margin-bottom: 15px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
-            $warning_msg .= '<i class="fa fa-exclamation-triangle" style="color: #856404;"></i> ';
+            $warning_msg .= '<i class="fas fa-exclamation-triangle" style="color: #856404;"></i> ';
             $warning_msg .= '<strong>' . $langs->trans('KSEF_ModifyWarningTitle') . '</strong><br>';
             $warning_msg .= $langs->trans('KSEF_ModifyWarningKSeF', $submission->ksef_number);
             $warning_msg .= '</div>';
         } elseif ($is_offline) {
             $warning_msg = '<div class="warning" style="margin-bottom: 15px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
-            $warning_msg .= '<i class="fa fa-exclamation-triangle" style="color: #856404;"></i> ';
+            $warning_msg .= '<i class="fas fa-exclamation-triangle" style="color: #856404;"></i> ';
             $warning_msg .= '<strong>' . $langs->trans('KSEF_ModifyWarningTitle') . '</strong><br>';
             $warning_msg .= $langs->trans('KSEF_ModifyWarningOffline');
             if (!empty($submission->offline_deadline)) {
@@ -234,8 +246,8 @@ class ActionsKSEF
                             $langs->load("ksef@ksef");
                             $methodLabel = ksefGetPaymentMethodLabel($incoming->payment_method);
                             $tooltip = dol_escape_htmltag(price($incoming->total_gross, 0, $langs, 0, -1, -1, $incoming->currency)
-                                . ' — ' . dol_print_date($incoming->payment_date, 'day')
-                                . ' — ' . $methodLabel);
+                                . ' - ' . dol_print_date($incoming->payment_date, 'day')
+                                . ' - ' . $methodLabel);
                             print '<a class="butAction classfortooltip" style="background-color: #28a745; color: white; font-weight: bold;"'
                                 . ' title="' . $tooltip . '"'
                                 . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_payment&token=' . newToken() . '">'
@@ -303,7 +315,7 @@ class ActionsKSEF
             print '<strong>' . $langs->trans('KSEF_SystemStatus') . ':</strong> ';
             print ksefGetLatarniaStatusBadge($latarnia_cached['status']);
             if (!empty($latarnia_msg)) {
-                print ' — ' . $latarnia_msg;
+                print ' - ' . $latarnia_msg;
             }
             print '<br><small>' . $langs->trans('KSEF_SystemDownWarning') . '</small>';
             print '</div>';
@@ -346,12 +358,12 @@ class ActionsKSEF
             $spinner_added = true;
         }
 
-        if ($object->statut == 0 && !empty($object->lines)) {
+        if ($object->statut == 0 && !empty($object->lines) && !getDolGlobalString('KSEF_DISABLE_VALIDATE_AND_UPLOAD')) {
             print '<a class="butAction" ' . $button_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_validate_and_submit&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_ValidatingAndSubmitting') . '..." onclick="return ksefShowSpinner(event, this);">' . $langs->trans('KSEF_ValidateAndUpload') . '</a>';
             return 0;
         }
 
-        if ($object->statut == 1) {
+        if (in_array($object->statut, array(1, 2))) {
             if ($is_accepted && $has_ksef_number) {
                 // invoice already submitted to KSeF
                 $modifyTooltip = dol_escape_htmltag($langs->trans('KSEF_CannotModifySubmitted'));
@@ -378,14 +390,14 @@ class ActionsKSEF
                 $deadline_passed = !empty($submission->offline_deadline) && ksefIsDeadlinePassed($submission->offline_deadline);
                 if ($deadline_passed) {
                     print '<span class="butActionRefused classfortooltip" style="background-color: #dc3545; color: white;" title="' . $langs->trans('KSEF_OfflineDeadlinePassed') . '">';
-                    print '<i class="fa fa-exclamation-triangle"></i> ' . $langs->trans('KSEF_DeadlinePassed') . '</span>';
+                    print '<i class="fas fa-exclamation-triangle"></i> ' . $langs->trans('KSEF_DeadlinePassed') . '</span>';
                 } else {
                     print '<a class="butAction" ' . $button_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_retry_online&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_SubmittingToKSEF') . '..." onclick="return ksefShowSpinner(event, this);">';
-                    print '<i class="fa fa-cloud-upload"></i> ' . $langs->trans('KSEF_SubmitOnline') . '</a>';
+                    print '<i class="fas fa-cloud-upload-alt"></i> ' . $langs->trans('KSEF_SubmitOnline') . '</a>';
                     if (!empty($submission->offline_deadline)) {
                         $hours_remaining = ($submission->offline_deadline - dol_now()) / 3600;
                         if ($hours_remaining < 8) {
-                            print ' <span class="badge badge-warning" style="margin-left: 5px;"><i class="fa fa-clock-o"></i> ' . $langs->trans('KSEF_HoursRemaining', round($hours_remaining)) . '</span>';
+                            print ' <span class="badge badge-warning" style="margin-left: 5px;"><i class="fas fa-clock"></i> ' . $langs->trans('KSEF_HoursRemaining', round($hours_remaining)) . '</span>';
                         }
                     }
                 }
@@ -405,12 +417,12 @@ class ActionsKSEF
                     }
                 }
 
-                print '<a class="butAction" ' . $retry_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_retry&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_RetryingSubmission') . '..." onclick="return ksefShowSpinner(event, this);" title="' . ($error_display ?? '') . '"><i class="fa fa-refresh"></i> ' . $langs->trans('KSEF_RetrySubmission') . '</a>';
+                print '<a class="butAction" ' . $retry_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_retry&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_RetryingSubmission') . '..." onclick="return ksefShowSpinner(event, this);" title="' . ($error_display ?? '') . '"><i class="fas fa-sync-alt"></i> ' . $langs->trans('KSEF_RetrySubmission') . '</a>';
 
                 if ($offline_cert_check['configured']) {
-                    print '<a class="butAction" ' . $offline_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_create_offline&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_CreatingOfflineInvoice') . '..." onclick="return ksefShowSpinner(event, this);"><i class="fa fa-file-text-o"></i> ' . $langs->trans('KSEF_CreateOfflineInvoice') . '</a>';
+                    print '<a class="butAction" ' . $offline_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_create_offline&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_CreatingOfflineInvoice') . '..." onclick="return ksefShowSpinner(event, this);"><i class="fas fa-file-alt"></i> ' . $langs->trans('KSEF_CreateOfflineInvoice') . '</a>';
                 } else {
-                    print '<span class="butActionRefused classfortooltip" title="' . $langs->trans('KSEF_OfflineCertificateRequired') . '"><i class="fa fa-file-text-o"></i> ' . $langs->trans('KSEF_CreateOfflineInvoice') . '</span>';
+                    print '<span class="butActionRefused classfortooltip" title="' . $langs->trans('KSEF_OfflineCertificateRequired') . '"><i class="fas fa-file-alt"></i> ' . $langs->trans('KSEF_CreateOfflineInvoice') . '</span>';
                 }
                 return 0;
             }
@@ -449,7 +461,7 @@ class ActionsKSEF
         if ($currentcontext === 'invoicenote' && $action === 'ksef_set_note_override') {
             if (is_object($object) && !empty($object->id) && $object->element === 'facture') {
                 $val = GETPOST('ksef_override_value', 'alpha');
-                if (!in_array($val, array('', 'simple', 'keyvalue', 'disabled'), true)) {
+                if (!in_array($val, array('', 'simple_stopka', 'simple_dodatkowy', 'keyvalue_dodatkowy', 'disabled'), true)) {
                     $val = '';
                 }
                 if (!isset($object->array_options) || empty($object->array_options)) {
@@ -463,6 +475,19 @@ class ActionsKSEF
                     setEventMessages($object->error ?: 'Error saving override', $object->errors, 'errors');
                 }
                 $action = '';
+            }
+        }
+
+        // Default payment settings
+        if ($currentcontext === 'invoicecard' && $action === 'create') {
+            if (!empty($conf->global->KSEF_DEFAULT_PAYMENT_TERM_ID) && !GETPOSTISSET('cond_reglement_id')) {
+                $_POST['cond_reglement_id'] = $conf->global->KSEF_DEFAULT_PAYMENT_TERM_ID;
+            }
+            if (!empty($conf->global->KSEF_DEFAULT_PAYMENT_METHOD_ID) && !GETPOSTISSET('mode_reglement_id')) {
+                $_POST['mode_reglement_id'] = $conf->global->KSEF_DEFAULT_PAYMENT_METHOD_ID;
+            }
+            if (!empty($conf->global->KSEF_DEFAULT_BANK_ACCOUNT_ID) && !GETPOSTISSET('fk_account')) {
+                $_POST['fk_account'] = $conf->global->KSEF_DEFAULT_BANK_ACCOUNT_ID;
             }
         }
 
@@ -582,6 +607,54 @@ class ActionsKSEF
         if ($action == 'ksef_generate_pdf' && !empty($object->id)) {
             $langs->load("ksef@ksef");
 
+            // Preview
+            if (GETPOST('preview', 'int') && in_array($object->statut, array(0, 1, 2))) {
+                dol_include_once('/ksef/class/fa3_builder.class.php');
+
+                $builder = new FA3Builder($db);
+                $xml = $builder->buildFromInvoice($object->id);
+                if ($xml === false) {
+                    setEventMessages($langs->trans('KSEF_PreviewXMLBuildError') . ': ' . dol_escape_htmltag($builder->error), null, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+
+                if (!$builder->validate($xml)) {
+                    setEventMessages($langs->trans('KSEF_PreviewXMLValidationWarnings') . ': ' . dol_escape_htmltag(implode(', ', $builder->errors)), null, 'warnings');
+                }
+
+                $mockSubmission = new stdClass();
+                $mockSubmission->rowid = 0;
+                $mockSubmission->ksef_number = 'PODGLĄD';
+                $mockSubmission->fa3_xml = $xml;
+                $mockSubmission->environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+                $mockSubmission->offline_mode = false;
+                $mockSubmission->offline_deadline = null;
+                $mockSubmission->invoice_hash = $builder->getLastXmlHash();
+
+                $pdfData = $this->createPdfDataFromSubmission($mockSubmission, $object);
+
+                dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
+                $pdfGen = new KsefInvoicePdf($db);
+                $content = $pdfGen->generate($pdfData, '', true);
+
+                if ($content === false) {
+                    setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . dol_escape_htmltag($pdfGen->error), null, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+
+                $filename = dol_sanitizeFileName($object->ref) . '_ksef.pdf';
+                $dir = $conf->invoice->multidir_output[$object->entity ?? $conf->entity] . '/' . dol_sanitizeFileName($object->ref);
+                dol_mkdir($dir);
+                file_put_contents($dir . '/' . $filename, $content);
+
+                setEventMessages($langs->trans('KSEF_PreviewPDFGenerated', $filename), null, 'mesgs');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            // Standard path
             $submission = new KsefSubmission($db);
             if ($submission->fetchByInvoice($object->id) <= 0) {
                 setEventMessages($langs->trans('KSEF_PDFRequiresSubmission'), null, 'errors');
@@ -840,7 +913,7 @@ class ActionsKSEF
                 }
 
                 print '<div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; border-radius: 8px; margin-bottom: 20px;">';
-                print '<p style="margin: 0 0 10px 0; font-weight: bold; color: #155724;"><i class="fa fa-file-text-o"></i> ' . $langs->trans('KSEF_OfflineOptionAvailable') . '</p>';
+                print '<p style="margin: 0 0 10px 0; font-weight: bold; color: #155724;"><i class="fas fa-file-alt"></i> ' . $langs->trans('KSEF_OfflineOptionAvailable') . '</p>';
                 print '<p style="margin: 0 0 10px 0; font-size: 13px; color: #155724;">' . $langs->trans('KSEF_OfflineOptionExplanation') . '</p>';
                 print '<p style="margin: 0; font-size: 12px; color: #155724;"><strong>' . $langs->trans('KSEF_OfflineDeadline') . ':</strong> ' . dol_print_date($offline_deadline, 'dayhour') . '</p>';
                 print '</div>';
@@ -848,9 +921,9 @@ class ActionsKSEF
                 print '<div style="display: flex; gap: 12px; justify-content: flex-end; flex-wrap: wrap;">';
                 print '<a class="button" href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_dismiss_failure&token=' . newToken() . '" style="padding: 10px 20px; text-decoration: none; border-radius: 6px;">' . $langs->trans('Close') . '</a>';
                 print '<a class="button" href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_retry&token=' . newToken() . '" style="padding: 10px 20px; text-decoration: none; border-radius: 6px; background: #ffc107; color: #212529;">';
-                print '<i class="fa fa-refresh"></i> ' . $langs->trans('KSEF_TryAgain') . '</a>';
+                print '<i class="fas fa-sync-alt"></i> ' . $langs->trans('KSEF_TryAgain') . '</a>';
                 print '<a class="button button-save" href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_submit_offline_confirmed&token=' . newToken() . '" style="padding: 10px 20px; text-decoration: none; border-radius: 6px; background: #28a745; color: white;">';
-                print '<i class="fa fa-file-text-o"></i> ' . $langs->trans('KSEF_CreateOfflineInvoice') . '</a>';
+                print '<i class="fas fa-file-alt"></i> ' . $langs->trans('KSEF_CreateOfflineInvoice') . '</a>';
 
                 print '</div>';
 
@@ -1006,7 +1079,7 @@ class ActionsKSEF
                 print '<div style="background: white; padding: 30px; border-radius: 12px; max-width: 520px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); margin: 20px;">';
                 print '<div style="text-align: center; margin-bottom: 20px;">';
                 print '<div style="width: 60px; height: 60px; background: ' . $icon_color . '20; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 15px;">';
-                print '<i class="fa fa-exclamation-triangle" style="font-size: 28px; color: ' . $icon_color . ';"></i>';
+                print '<i class="fas fa-exclamation-triangle" style="font-size: 28px; color: ' . $icon_color . ';"></i>';
                 print '</div>';
                 print '<h3 style="margin: 0; color: #333; font-size: 20px;">' . $title . '</h3>';
                 print '</div>';
@@ -1017,7 +1090,7 @@ class ActionsKSEF
                 }
                 print '</div>';
                 print '<div style="background: #fff3cd; border: 1px solid #ffc107; padding: 12px; border-radius: 8px; margin-bottom: 20px;">';
-                print '<p style="margin: 0; font-size: 14px;"><strong><i class="fa fa-clock-o"></i> ' . $langs->trans('KSEF_OfflineDeadline') . ':</strong><br>';
+                print '<p style="margin: 0; font-size: 14px;"><strong><i class="fas fa-clock"></i> ' . $langs->trans('KSEF_OfflineDeadline') . ':</strong><br>';
                 print dol_print_date($confirm_data['deadline'], 'dayhour') . '</p>';
                 print '</div>';
                 print '<p style="color: #666; font-size: 13px; margin-bottom: 25px;">';
@@ -1290,9 +1363,18 @@ class ActionsKSEF
     private function ksefComputeDodatkowyOpisContext($object)
     {
         dol_include_once('/ksef/class/fa3_builder.class.php');
-        $noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled');
+        $noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
         $efConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
         $efCount = !empty($efConf) ? count(array_filter(array_map('trim', explode(',', $efConf)))) : 0;
+        // Count all extrafield types
+        $detConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_DET_EXTRAFIELDS', '');
+        if (!empty($detConf)) $efCount += count(array_filter(array_map('trim', explode(',', $detConf))));
+        $prodConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS', '');
+        if (!empty($prodConf)) $efCount += count(array_filter(array_map('trim', explode(',', $prodConf))));
+        $socConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', '');
+        if (!empty($socConf)) $efCount += count(array_filter(array_map('trim', explode(',', $socConf))));
+        $projConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', '');
+        if (!empty($projConf)) $efCount += count(array_filter(array_map('trim', explode(',', $projConf))));
         $dodOverride = FA3Builder::getDodatkowyOpisOverride($object);
 
         $effectiveNoteMode = $noteMode;
@@ -1305,8 +1387,9 @@ class ActionsKSEF
             $effectiveEfCount = 0;
             $effectiveNoteConfigured = false;
             $effectiveEfConfigured = false;
-        } elseif ($dodOverride === 'simple' || $dodOverride === 'keyvalue') {
-            $effectiveNoteMode = $dodOverride;
+        } elseif (in_array($dodOverride, array('simple_stopka', 'simple_dodatkowy', 'keyvalue_dodatkowy'))) {
+            $parsed = FA3Builder::parseCombinedNoteMode($dodOverride);
+            $effectiveNoteMode = $parsed ? $parsed['mode'] : $noteMode;
             $effectiveNoteConfigured = true;
         }
 
@@ -1318,7 +1401,7 @@ class ActionsKSEF
             'noteConfigured' => $effectiveNoteConfigured,
             'efConfigured' => $effectiveEfConfigured,
             'dodOverride' => $dodOverride,
-            'featureActive' => ($noteMode !== 'disabled') || !empty($efConf) || in_array($dodOverride, array('simple', 'keyvalue', 'disabled')),
+            'featureActive' => ($noteMode !== 'disabled') || ($efCount > 0) || in_array($dodOverride, array('simple_stopka', 'simple_dodatkowy', 'keyvalue_dodatkowy', 'disabled')),
         );
     }
 
@@ -1339,7 +1422,7 @@ class ActionsKSEF
         $noteEntries = array();
         $efEntries = array();
         foreach ($dodEntries as $entry) {
-            if (isset($entry['source']) && $entry['source'] === 'extrafield') {
+            if (isset($entry['source']) && strpos($entry['source'], 'extrafield') === 0) {
                 $efEntries[] = $entry;
             } else {
                 $noteEntries[] = $entry;
@@ -1349,8 +1432,9 @@ class ActionsKSEF
         $overrideBadge = '';
         if (!empty($ctx['dodOverride'])) {
             $overrideLabel = '';
-            if ($ctx['dodOverride'] === 'simple') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_Simple');
-            elseif ($ctx['dodOverride'] === 'keyvalue') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_KeyValue');
+            if ($ctx['dodOverride'] === 'simple_stopka') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_SimpleStopka');
+            elseif ($ctx['dodOverride'] === 'simple_dodatkowy') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_SimpleDodatkowy');
+            elseif ($ctx['dodOverride'] === 'keyvalue_dodatkowy') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_KeyValueDodatkowy');
             elseif ($ctx['dodOverride'] === 'disabled') $overrideLabel = $langs->transnoentities('KSEF_DodatkowyOpisMode_Disabled');
             if ($overrideLabel !== '') {
                 $overrideBadge = ' <span class="badge badge-warning" style="margin-left:6px;">' . dol_escape_htmltag(sprintf($langs->transnoentities('KSEF_DODATKOWY_OPIS_PREVIEW_OVERRIDDEN'), $overrideLabel)) . '</span>';
@@ -1367,6 +1451,15 @@ class ActionsKSEF
             }
         }
 
+        // Check for NrWiersza column
+        $hasNrWiersza = false;
+        foreach ($dodEntries as $entry) {
+            if (!empty($entry['nr_wiersza'])) {
+                $hasNrWiersza = true;
+                break;
+            }
+        }
+
         $sections = array(
             array('title' => $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_FROM_NOTE"), 'entries' => $noteEntries, 'configured' => $ctx['noteConfigured']),
             array('title' => $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_FROM_EXTRAFIELDS"), 'entries' => $efEntries, 'configured' => $ctx['efConfigured']),
@@ -1380,11 +1473,19 @@ class ActionsKSEF
                 continue;
             }
             $html .= '<table class="noborder" style="margin-bottom:4px; width:100%; table-layout:fixed;">';
-            $html .= '<tr class="liste_titre"><td style="width:30%;">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_KEY") . '</td><td>' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_VALUE") . '</td></tr>';
+            $html .= '<tr class="liste_titre">';
+            if ($hasNrWiersza) {
+                $html .= '<td style="width:60px;">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_NRWIERSZA") . '</td>';
+            }
+            $html .= '<td style="width:30%;">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_KEY") . '</td><td>' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW_VALUE") . '</td></tr>';
             foreach ($sec['entries'] as $entry) {
                 $dispKey = dol_escape_htmltag($entry['key']);
                 $dispVal = dol_escape_htmltag($entry['value']);
-                $html .= '<tr class="oddeven"><td style="word-break:break-word; vertical-align:top;">' . $dispKey . '</td><td style="word-break:break-word; white-space:pre-wrap;">' . $dispVal . '</td></tr>';
+                $html .= '<tr class="oddeven">';
+                if ($hasNrWiersza) {
+                    $html .= '<td style="text-align:center; vertical-align:top;">' . (!empty($entry['nr_wiersza']) ? (int) $entry['nr_wiersza'] : '') . '</td>';
+                }
+                $html .= '<td style="word-break:break-word; vertical-align:top;">' . $dispKey . '</td><td style="word-break:break-word; white-space:pre-wrap;">' . $dispVal . '</td></tr>';
             }
             $html .= '</table>';
         }
@@ -1554,7 +1655,7 @@ jQuery(document).ready(function() {
             print '<style>tr:has(.facture_extras_ksef_number), tr:has(.facture_extras_ksef_status), tr:has(.facture_extras_ksef_submission_date) { display: none !important; }</style>';
 
             // Hide DodatkowyOpis mode override row unless feature is configured
-            $_dodActiveCheck_noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'disabled');
+            $_dodActiveCheck_noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
             $_dodActiveCheck_efConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
             if ((!isset($object->array_options) || empty($object->array_options)) && method_exists($object, 'fetch_optionals')) {
                 $object->fetch_optionals();
@@ -1596,7 +1697,7 @@ jQuery(document).ready(function() {
                 if (!empty($submission->error_code) && in_array($submission->status, array('REJECTED', 'FAILED'))) {
                     $ksefClient = new KsefClient($db);
                     $errorDesc = $ksefClient->getErrorDescription($submission->error_code);
-                    print ' <span class="fa fa-exclamation-triangle classfortooltip" style="color: #d9534f; cursor: help;" title="' . dol_escape_htmltag("Error {$submission->error_code}: {$errorDesc}") . '"></span>';
+                    print ' <span class="fas fa-exclamation-triangle classfortooltip" style="color: #d9534f; cursor: help;" title="' . dol_escape_htmltag("Error {$submission->error_code}: {$errorDesc}") . '"></span>';
                 }
 
                 if (!empty($submission->ksef_number)) {
@@ -1617,7 +1718,7 @@ jQuery(document).ready(function() {
                 }
 
                 if ($submission->status == 'OFFLINE' && !empty($submission->offline_deadline)) {
-                    print '<br><small style="color: #856404;"><i class="fa fa-clock-o"></i> ' . $langs->trans('KSEF_OfflineDeadline') . ': ' . ksefFormatDeadline($submission->offline_deadline) . '</small>';
+                    print '<br><small style="color: #856404;"><i class="fas fa-clock"></i> ' . $langs->trans('KSEF_OfflineDeadline') . ': ' . ksefFormatDeadline($submission->offline_deadline) . '</small>';
                 }
 
                 print '</td></tr>';
@@ -1730,7 +1831,7 @@ jQuery(document).ready(function() {
                         print '<span class="opacitymedium">-</span>';
                     }
                     if ($isSelfReference) {
-                        print '<br><span class="warning"><span class="fa fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_CorrectedKsefNumberSameAsOwn") . '</span>';
+                        print '<br><span class="warning"><span class="fas fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_CorrectedKsefNumberSameAsOwn") . '</span>';
                     }
 
                     // Vendor invoice reference
@@ -1827,6 +1928,8 @@ jQuery(document).ready(function() {
                 print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_PaymentStatus") . '</td><td colspan="3">';
                 if ($incomingCorr->payment_status === 'paid') {
                     print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
+                } elseif ($incomingCorr->payment_status === 'paid_installments') {
+                    print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaidInstallments") . '</span>';
                 } elseif ($incomingCorr->payment_status === 'partial') {
                     print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
                 }
@@ -1837,7 +1940,7 @@ jQuery(document).ready(function() {
                 print $incomingCorr->payment_date ? dol_print_date($incomingCorr->payment_date, 'day') : $notSpecified;
                 print '</td></tr>';
 
-                // method — only show if Dolibarr's own payment method field is empty (otherwise it's duplicate)
+                // method - only show if Dolibarr's own payment method field is empty (otherwise it's duplicate)
                 if (empty($object->mode_reglement_id)) {
                     print '<tr><td class="titlefieldcreate">' . $langs->trans("KSEF_PaymentMethod") . '</td><td colspan="3">';
                     $methodLabel = ksefGetPaymentMethodLabel($incomingCorr->payment_method);
@@ -2266,10 +2369,10 @@ jQuery(document).ready(function() {
                 $nbpContent .= ' <a class="button buttongen reposition" style="padding: 2px 8px; font-size: 0.85em; margin-left: 10px;" ';
                 $nbpContent .= 'href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_fetch_nbp_rate&token=' . newToken() . '" ';
                 $nbpContent .= 'title="' . dol_escape_htmltag($langs->trans('KSEF_RefreshNBPRateTooltip')) . '">';
-                $nbpContent .= '<i class="fa fa-refresh"></i> ' . $langs->trans('KSEF_RefreshNBPRate') . '</a>';
+                $nbpContent .= '<i class="fas fa-sync-alt"></i> ' . $langs->trans('KSEF_RefreshNBPRate') . '</a>';
             }
         } else {
-            $nbpContent .= '<span style="color: #dc3545;"><i class="fa fa-exclamation-triangle"></i> ';
+            $nbpContent .= '<span style="color: #dc3545;"><i class="fas fa-exclamation-triangle"></i> ';
             $nbpContent .= $langs->trans('KSEF_NBPRateMissing');
             $nbpContent .= '</span>';
 

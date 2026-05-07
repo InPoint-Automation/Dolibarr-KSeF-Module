@@ -156,13 +156,17 @@ class KsefClient
         445 => 'Błąd weryfikacji, brak poprawnych faktur'
     );
 
-    public function __construct($db, $environment = 'TEST')
+    public function __construct($db, $environment = null)
     {
-        global $conf;
         require_once DOL_DOCUMENT_ROOT . '/core/lib/security.lib.php';
 
         $this->db = $db;
+
+        if ($environment === null) {
+            $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+        }
         $this->environment = strtoupper($environment);
+
         switch ($this->environment) {
             case 'PRODUCTION':
                 $this->api_url = self::API_PROD;
@@ -176,13 +180,14 @@ class KsefClient
                 break;
         }
 
-        $this->nip = $conf->global->KSEF_COMPANY_NIP ?? '';
-        $this->auth_method = $conf->global->KSEF_AUTH_METHOD ?? 'token';
-        $encrypted_token = $conf->global->KSEF_AUTH_TOKEN ?? '';
+        $envKey = $this->environment;
+        $this->nip = getDolGlobalString('KSEF_COMPANY_NIP', '');
+        $this->auth_method = getDolGlobalString('KSEF_AUTH_METHOD_' . $envKey, 'token');
+        $encrypted_token = getDolGlobalString('KSEF_AUTH_TOKEN_' . $envKey, '');
         $this->ksef_token = !empty($encrypted_token) ? dol_decode($encrypted_token) : '';
         $this->auth_certificate_pem = '';
         $this->auth_private_key_pem = '';
-        $this->timeout = !empty($conf->global->KSEF_TIMEOUT) ? (int)$conf->global->KSEF_TIMEOUT : 30;
+        $this->timeout = getDolGlobalInt('KSEF_TIMEOUT', 30);
     }
 
     /**
@@ -192,7 +197,7 @@ class KsefClient
      */
     private function loadAuthCertificateCredentials()
     {
-        $credentials = ksefLoadAuthCertificate();
+        $credentials = ksefLoadAuthCertificate($this->environment);
         if (!$credentials) {
             $this->error = 'Authentication certificate not properly configured';
             return false;

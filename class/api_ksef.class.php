@@ -356,7 +356,7 @@ class KsefApi extends DolibarrApi
                 global $conf;
                 $client = new KsefClient(
                     $this->db,
-                    $conf->global->KSEF_ENVIRONMENT ?? 'TEST'
+                    getDolGlobalString('KSEF_ENVIRONMENT', 'TEST')
                 );
                 try {
                     $upo = $client->downloadUPO($sub->ksef_number);
@@ -815,7 +815,7 @@ class KsefApi extends DolibarrApi
 
         $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
         $nip = getDolGlobalString('KSEF_COMPANY_NIP', '');
-        $authMethod = getDolGlobalString('KSEF_AUTH_METHOD', 'token');
+        $authMethod = getDolGlobalString('KSEF_AUTH_METHOD_' . $environment, 'token');
 
         $data = array(
             'module_enabled'  => isModEnabled('ksef'),
@@ -830,11 +830,11 @@ class KsefApi extends DolibarrApi
         // Check auth configuration
         if ($authMethod === 'token') {
             $data['auth_configured'] = !empty(
-            getDolGlobalString('KSEF_AUTH_TOKEN', '')
+            getDolGlobalString('KSEF_AUTH_TOKEN_' . $environment, '')
             );
         } elseif ($authMethod === 'certificate') {
             $certCheck = function_exists('ksefCheckAuthCertificate')
-                ? ksefCheckAuthCertificate()
+                ? ksefCheckAuthCertificate($environment)
                 : array('configured' => false);
             $data['auth_configured'] = !empty($certCheck['configured']);
         }
@@ -843,7 +843,7 @@ class KsefApi extends DolibarrApi
         $data['offline_certificate_configured'] = function_exists(
             'ksefIsOfflineCertificateConfigured'
         )
-            ? !empty(ksefIsOfflineCertificateConfigured()['configured'])
+            ? !empty(ksefIsOfflineCertificateConfigured($environment)['configured'])
             : false;
 
         // connectivity test
@@ -884,10 +884,12 @@ class KsefApi extends DolibarrApi
     {
         $this->checkKsefReadPermission();
 
+        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+
         return array(
-            'environment'       => getDolGlobalString('KSEF_ENVIRONMENT', 'TEST'),
+            'environment'       => $environment,
             'company_nip'       => getDolGlobalString('KSEF_COMPANY_NIP', ''),
-            'auth_method'       => getDolGlobalString('KSEF_AUTH_METHOD', 'token'),
+            'auth_method'       => getDolGlobalString('KSEF_AUTH_METHOD_' . $environment, 'token'),
             'timeout'           => getDolGlobalInt('KSEF_TIMEOUT', 30),
             'add_to_pdf'        => getDolGlobalString('KSEF_ADD_TO_PDF', '1'),
             'add_qr'            => getDolGlobalString('KSEF_ADD_QR', '1'),

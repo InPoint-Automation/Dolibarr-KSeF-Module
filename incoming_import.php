@@ -728,6 +728,8 @@ if (!empty($object->payment_status) && $object->payment_status !== 'unpaid') {
     print '<tr><td>' . $langs->trans("KSEF_PaymentStatus") . '</td><td>';
     if ($object->payment_status === 'paid') {
         print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
+    } elseif ($object->payment_status === 'paid_installments') {
+        print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaidInstallments") . '</span>';
     } elseif ($object->payment_status === 'partial') {
         print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
     }

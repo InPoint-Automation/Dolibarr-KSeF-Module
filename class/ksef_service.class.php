@@ -44,7 +44,7 @@ class KsefService extends CommonObject
         dol_include_once('/ksef/class/ksef_submission.class.php');
         $this->db = $db;
 
-        $this->client = new KsefClient($db, $conf->global->KSEF_ENVIRONMENT ?? 'TEST');
+        $this->client = new KsefClient($db, getDolGlobalString('KSEF_ENVIRONMENT', 'TEST'));
         $this->builder = new FA3Builder($db);
     }
 
