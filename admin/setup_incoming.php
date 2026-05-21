@@ -109,7 +109,7 @@ print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_IMPORTING
 
 // Auto-create suppliers
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help')) . '</td>';
 print '<td>';
 print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" id="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" value="1" ' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', '1') === '1' ? 'checked' : '') . '>';
 print ' <label for="KSEF_BATCH_AUTO_CREATE_SUPPLIERS">' . $langs->trans("KSEF_Enabled") . '</label>';
@@ -117,7 +117,7 @@ print '</td></tr>';
 
 // Auto-create products
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help')) . '</td>';
 print '<td>';
 print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_PRODUCTS" id="KSEF_BATCH_AUTO_CREATE_PRODUCTS" value="1" ' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_PRODUCTS', '1') === '1' ? 'checked' : '') . '>';
 print ' <label for="KSEF_BATCH_AUTO_CREATE_PRODUCTS">' . $langs->trans("KSEF_Enabled") . '</label>';
@@ -125,7 +125,7 @@ print '</td></tr>';
 
 // Use indeks as product ref
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING'), $langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING'), $langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help')) . '</td>';
 print '<td>';
 print '<input type="checkbox" name="KSEF_PRODUCT_REF_USE_INDEKS" id="KSEF_PRODUCT_REF_USE_INDEKS" value="1" ' . (getDolGlobalString('KSEF_PRODUCT_REF_USE_INDEKS', '1') === '1' ? 'checked' : '') . '>';
 print ' <label for="KSEF_PRODUCT_REF_USE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';

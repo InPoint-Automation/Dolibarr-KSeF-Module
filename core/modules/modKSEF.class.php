@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.3.7';
+        $this->version = '1.4.0';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -68,8 +68,13 @@ class modKSEF extends DolibarrModules
                 'invoicenote',
                 'invoicesuppliercard',
                 'completeTabsHead',
+                'pdfgeneration',
                 'afterPDFTotalTable',
                 'thirdpartycard',
+                'sellsjournal',
+                'recapcomptacard',
+                'externalbalance',
+                'customersupplierreportlist',
             ),
             'moduleforexternal' => 0,
         );
@@ -310,12 +315,14 @@ class modKSEF extends DolibarrModules
             'KSEF_COMPANY_KRS'       => '',
             'KSEF_COMPANY_REGON'     => '',
             'KSEF_COMPANY_BDO'       => '',
+            'KSEF_COMPANY_EORI'      => '',
 
             // Field Mapping
             'KSEF_FIELD_NIP'         => 'idprof1',
             'KSEF_FIELD_KRS'         => 'idprof2',
             'KSEF_FIELD_REGON'       => 'idprof3',
             'KSEF_FIELD_BDO'         => 'idprof4',
+            'KSEF_FIELD_EORI'        => 'idprof5',
             'KSEF_ENVIRONMENT'       => 'DEMO',
             'KSEF_TIMEOUT'           => '5',
 
@@ -332,6 +339,14 @@ class modKSEF extends DolibarrModules
             'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM' => '',
             'KSEF_FA3_SALE_DATE_SOURCE'      => 'delivery_date',
             'KSEF_NBP_RATE_MODE'           => 'keep_base',
+
+            'KSEF_DEFAULT_CORRECTION_REASON' => '',
+            'KSEF_DEFAULT_CORRECTION_TYPE'   => '',
+            'KSEF_KOR_LINE_METHOD'           => 'stanprzed',
+            'KSEF_IDNABYWCY_SOURCE'          => 'disabled',
+            'KSEF_NREORI_BUYER_SOURCE'       => 'disabled',
+            'KSEF_FA3_INCLUDE_FP'            => '0',
+            'KSEF_TP_SOURCE'                 => 'disabled',
         );
 
         foreach ($persistentDefaults as $name => $defaultValue) {
@@ -371,7 +386,7 @@ class modKSEF extends DolibarrModules
                 'langfile' => 'ksef@ksef',
                 'enabled' => '$conf->ksef->enabled',
                 'totalizable' => 0,
-                'printable' => 0,
+                'printable' => 2,
             ),
             'ksef_status' => array(
                 'label' => 'KSEF_ExtraFieldStatus',
@@ -438,7 +453,7 @@ class modKSEF extends DolibarrModules
                 'langfile' => 'ksef@ksef',
                 'enabled' => 'isModEnabled("multicurrency") && isModEnabled("ksef")',
                 'totalizable' => 0,
-                'printable' => 0,
+                'printable' => 2,
             ),
             'ksef_sale_date' => array(
                 'label' => 'KSEF_ExtraFieldSaleDate',
@@ -458,7 +473,7 @@ class modKSEF extends DolibarrModules
                 'langfile' => 'ksef@ksef',
                 'enabled' => '$conf->ksef->enabled',
                 'totalizable' => 0,
-                'printable' => 0,
+                'printable' => 2,
             ),
             'ksef_dodatkowy_opis_mode' => array(
                 'label' => 'KSEF_ExtraFieldDodatkowyOpisMode',
@@ -479,6 +494,199 @@ class modKSEF extends DolibarrModules
                 'perms' => '',
                 'list' => '0',
                 'help' => 'KSEF_ExtraFieldDodatkowyOpisModeHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_reason' => array(
+                'label' => 'KSEF_ExtraFieldCorrectionReason',
+                'type' => 'varchar',
+                'pos' => 106,
+                'size' => '256',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '0',
+                'help' => 'KSEF_CorrectionReasonHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_type' => array(
+                'label' => 'KSEF_ExtraFieldCorrectionType',
+                'type' => 'select',
+                'pos' => 107,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => array('options' => array(
+                    '1' => 'KSEF_CorrectionType1',
+                    '2' => 'KSEF_CorrectionType2',
+                    '3' => 'KSEF_CorrectionType3',
+                )),
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_original_ht' => array(
+                'label' => 'KSEF_CorrectionOriginalHT',
+                'type' => 'double',
+                'pos' => 108,
+                'size' => '24,8',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_original_tva' => array(
+                'label' => 'KSEF_CorrectionOriginalTVA',
+                'type' => 'double',
+                'pos' => 109,
+                'size' => '24,8',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_original_ttc' => array(
+                'label' => 'KSEF_CorrectionOriginalTTC',
+                'type' => 'double',
+                'pos' => 113,
+                'size' => '24,8',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_original_discount_ids' => array(
+                'label' => 'KSEF_CorrectionOriginalDiscountIds',
+                'type' => 'varchar',
+                'pos' => 112,
+                'size' => '255',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_discount_id' => array(
+                'label' => 'KSEF_CorrectionDiscountId',
+                'type' => 'int',
+                'pos' => 111,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_settled_amount' => array(
+                'label' => 'KSEF_CorrectionSettledAmount',
+                'type' => 'double',
+                'pos' => 114,
+                'size' => '24,8',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_correction_settled_amount_mc' => array(
+                'label' => 'KSEF_CorrectionSettledAmountMC',
+                'type' => 'double',
+                'pos' => 115,
+                'size' => '24,8',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
                 'computed' => '',
                 'entity' => '',
                 'langfile' => 'ksef@ksef',
@@ -548,10 +756,71 @@ class modKSEF extends DolibarrModules
                         $def['langfile'],
                         $def['enabled'],
                         $def['totalizable'],
-                        $def['printable']
+                        $def['printable'],
+                        array()
                     );
                     if ($result > 0) {
                         dol_syslog("modKSEF::init - Updated extrafield '$fieldName' for $elementType", LOG_INFO);
+                    }
+                }
+            }
+        }
+
+        // Invoice line extrafields
+        $lineExtraFieldDefs = array(
+            'ksef_uu_id' => array(
+                'label' => 'KSEF_ExtraFieldUUID',
+                'type' => 'varchar',
+                'pos' => 200,
+                'size' => '36',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 0,
+                'perms' => '',
+                'list' => '0',
+                'help' => '',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+        );
+
+        $lineElementTypes = array('facturedet', 'facture_fourn_det');
+        foreach ($lineElementTypes as $lineElementType) {
+            $existingLineFields = $extrafields->fetch_name_optionals_label($lineElementType);
+
+            foreach ($lineExtraFieldDefs as $fieldName => $def) {
+                if (!isset($existingLineFields[$fieldName])) {
+                    $result = $extrafields->addExtraField(
+                        $fieldName,
+                        $def['label'],
+                        $def['type'],
+                        $def['pos'],
+                        $def['size'],
+                        $lineElementType,
+                        $def['unique'],
+                        $def['required'],
+                        $def['default_value'],
+                        $def['param'],
+                        $def['alwayseditable'],
+                        $def['perms'],
+                        $def['list'],
+                        $def['help'],
+                        $def['computed'],
+                        $def['entity'],
+                        $def['langfile'],
+                        $def['enabled'],
+                        $def['totalizable'],
+                        $def['printable']
+                    );
+                    if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
+                        $this->error = $extrafields->error;
+                        return -1;
                     }
                 }
             }
@@ -870,6 +1139,18 @@ class modKSEF extends DolibarrModules
                     dol_syslog("modKSEF::migration 1.3.7 - Per-environment auth key migration complete (env=$env)", LOG_INFO);
                 },
             ),
+            '1.4.0' => array(
+                // Add invoice_type column to submissions
+                function () use ($db) {
+                    $sql_check = "SHOW COLUMNS FROM " . MAIN_DB_PREFIX . "ksef_submissions LIKE 'invoice_type'";
+                    $resql = $db->query($sql_check);
+                    if ($resql && $db->num_rows($resql) == 0) {
+                        $db->query("ALTER TABLE " . MAIN_DB_PREFIX . "ksef_submissions ADD COLUMN invoice_type VARCHAR(10) DEFAULT NULL");
+                        $db->query("CREATE INDEX idx_ksef_submissions_invoice_type ON " . MAIN_DB_PREFIX . "ksef_submissions (invoice_type)");
+                        dol_syslog("modKSEF::migration 1.4.0 - Added invoice_type column and index to submissions", LOG_INFO);
+                    }
+                },
+            ),
         );
 
         $lastMigration = getDolGlobalString('KSEF_MIGRATION_VERSION', '');
@@ -1013,6 +1294,24 @@ class modKSEF extends DolibarrModules
                 'KSEF_FA3_PLACE_OF_ISSUE_CUSTOM',
                 'KSEF_FA3_SALE_DATE_SOURCE',
                 'KSEF_NBP_RATE_MODE',
+
+                // Correction Invoices
+                'KSEF_DEFAULT_CORRECTION_REASON',
+                'KSEF_DEFAULT_CORRECTION_TYPE',
+                'KSEF_KOR_LINE_METHOD',
+
+                // Entity Fields
+                'KSEF_IDNABYWCY_SOURCE',
+                'KSEF_NREORI_BUYER_SOURCE',
+
+                // Company Identifiers
+                'KSEF_COMPANY_EORI',
+                'KSEF_FIELD_EORI',
+
+                // Invoice Flags
+                'KSEF_FA3_INCLUDE_FP',
+                'KSEF_TP_SOURCE',
+
                 'KSEF_MIGRATION_VERSION',
             );
 

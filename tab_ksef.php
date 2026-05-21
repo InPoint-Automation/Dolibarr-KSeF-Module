@@ -52,6 +52,7 @@ if (!$user->rights->facture->lire) accessforbidden();
 
 $object = new Facture($db);
 if ($object->fetch($id) <= 0) accessforbidden();
+$object->fetch_optionals();
 
 $langs->load("bills");
 $langs->load("ksef@ksef");

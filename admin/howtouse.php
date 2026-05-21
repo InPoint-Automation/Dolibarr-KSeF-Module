@@ -422,6 +422,28 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <li><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2_3"); ?></li>
                 </ol>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSteps_S2Outro"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_AdvancedFields"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_AdvancedFields_Intro"); ?></p>
+
+                <p><b><?php echo $langs->trans("KSEF_HowTo_EntityFields"); ?></b></p>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_EntityFields_IDNabywcy"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_EntityFields_EORI"); ?></li>
+                </ul>
+
+                <p><b><?php echo $langs->trans("KSEF_HowTo_LineFields"); ?></b></p>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_LineFields_GTU"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_LineFields_Procedura"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_LineFields_UUID"); ?></li>
+                </ul>
+
+                <p><b><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags"); ?></b></p>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_FP"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_TP"); ?></li>
+                </ul>
             </td>
         </tr>
     </table>
@@ -485,6 +507,48 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <p><?php echo $langs->trans("KSEF_CheckingStatusDesc"); ?>
                     <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_SubmissionStatus"); ?></a>
                 </p>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
+            <th><span class="fas fa-exchange-alt paddingright"></span><?php echo $langs->trans("KSEF_HowTo_Corrections"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Intro"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_WhenTitle"); ?></h4>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Corrections_CreditNote"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Corrections_Replacement"); ?></li>
+                </ul>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_CreateTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_CreateButton"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_CreateRadio"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_PaidInvoice"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_DetailsTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Reason"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Type"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_KsefTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_KsefXml"); ?></p>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Corrections_MethodDiff"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Corrections_MethodStan"); ?></li>
+                </ul>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_CreditNoteDiff"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_ChainTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Chain"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_ConfigTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Config"); ?></p>
             </td>
         </tr>
     </table>

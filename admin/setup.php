@@ -107,6 +107,13 @@ if (empty(getDolGlobalString('KSEF_COMPANY_BDO'))) {
     }
 }
 
+if (empty(getDolGlobalString('KSEF_COMPANY_EORI'))) {
+    $auto_eori = trim(ksefGetIdentifierField($mysoc, 'EORI'));
+    if (!empty($auto_eori)) {
+        dolibarr_set_const($db, 'KSEF_COMPANY_EORI', $auto_eori, 'chaine', 0, '', $conf->entity);
+    }
+}
+
 
 if ($action == 'apply_trans_overrides' || $action == 'remove_trans_overrides') {
     $langs_selected = array();
@@ -160,10 +167,14 @@ if ($action == 'update') {
     $bdo = GETPOST("KSEF_COMPANY_BDO", 'alphanohtml');
     dolibarr_set_const($db, 'KSEF_COMPANY_BDO', trim($bdo), 'chaine', 0, '', $conf->entity);
 
+    // EORI
+    $eori = GETPOST("KSEF_COMPANY_EORI", 'alphanohtml');
+    dolibarr_set_const($db, 'KSEF_COMPANY_EORI', trim($eori), 'chaine', 0, '', $conf->entity);
+
     // Field Mappings
     $validFields = array('', 'idprof1', 'idprof2', 'idprof3', 'idprof4', 'idprof5', 'idprof6', 'tva_intra');
     $fieldMappings = array();
-    foreach (array('NIP', 'KRS', 'REGON', 'BDO') as $ident) {
+    foreach (array('NIP', 'KRS', 'REGON', 'BDO', 'EORI') as $ident) {
         $fieldVal = GETPOST('KSEF_FIELD_' . $ident, 'alpha');
         if (in_array($fieldVal, $validFields)) {
             dolibarr_set_const($db, 'KSEF_FIELD_' . $ident, $fieldVal, 'chaine', 0, '', $conf->entity);
@@ -185,7 +196,7 @@ if ($action == 'update') {
     }
 
     // Re-pull identifier values
-    foreach (array('NIP' => 'KSEF_COMPANY_NIP', 'KRS' => 'KSEF_COMPANY_KRS', 'REGON' => 'KSEF_COMPANY_REGON', 'BDO' => 'KSEF_COMPANY_BDO') as $ident => $constName) {
+    foreach (array('NIP' => 'KSEF_COMPANY_NIP', 'KRS' => 'KSEF_COMPANY_KRS', 'REGON' => 'KSEF_COMPANY_REGON', 'BDO' => 'KSEF_COMPANY_BDO', 'EORI' => 'KSEF_COMPANY_EORI') as $ident => $constName) {
         $currentVal = GETPOST($constName, 'alphanohtml');
         if (empty(trim($currentVal)) && isset($fieldMappings[$ident])) {
             $autoVal = ksefGetIdentifierField($mysoc, $ident);
@@ -376,7 +387,7 @@ $fieldOptionsOptional = ksefGetFieldOptions(true);
 
 // Company NIP
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_NIP"), $langs->trans("KSEF_COMPANY_NIP_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_COMPANY_NIP"), $langs->trans("KSEF_COMPANY_NIP_Help")) . '</td>';
 print '<td>';
 print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_NIP" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_NIP', '')) . '" placeholder="1234567890"> ';
 print '<span class="small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
@@ -390,13 +401,13 @@ print '</tr>';
 
 // VAT ID
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_FIELD_VATID"), $langs->trans("KSEF_FIELD_VATID_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_FIELD_VATID"), $langs->trans("KSEF_FIELD_VATID_Help")) . '</td>';
 print '<td><span>' . $langs->trans("VATIntra") . ' (tva_intra) - ' . $langs->trans("KSEF_FIELD_VATID_ALWAYS") . '</span></td>';
 print '</tr>';
 
 // KRS
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_KRS"), $langs->trans("KSEF_COMPANY_KRS_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_COMPANY_KRS"), $langs->trans("KSEF_COMPANY_KRS_Help")) . '</td>';
 print '<td>';
 print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_KRS" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_KRS', '')) . '" placeholder="0000000000">';
 print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
@@ -407,7 +418,7 @@ print '</tr>';
 
 // REGON
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_REGON"), $langs->trans("KSEF_COMPANY_REGON_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_COMPANY_REGON"), $langs->trans("KSEF_COMPANY_REGON_Help")) . '</td>';
 print '<td>';
 print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_REGON" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_REGON', '')) . '" placeholder="000000000">';
 print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
@@ -418,7 +429,7 @@ print '</tr>';
 
 // BDO
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_COMPANY_BDO"), $langs->trans("KSEF_COMPANY_BDO_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_COMPANY_BDO"), $langs->trans("KSEF_COMPANY_BDO_Help")) . '</td>';
 print '<td>';
 print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_BDO" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_BDO', '')) . '" placeholder="000000000">';
 print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
@@ -427,9 +438,20 @@ print $form->selectarray('KSEF_FIELD_BDO', $fieldOptionsOptional, getDolGlobalSt
 print '</td>';
 print '</tr>';
 
+// EORI
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_COMPANY_EORI"), $langs->trans("KSEF_COMPANY_EORI_Help")) . '</td>';
+print '<td>';
+print '<input type="text" class="flat minwidth200" name="KSEF_COMPANY_EORI" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_COMPANY_EORI', '')) . '" placeholder="PL1234567890ABCDE">';
+print ' <span class="small">(' . $langs->trans("KSEF_Optional") . ')</span> ';
+print '<span class="small">' . $langs->trans("KSEF_FIELD_SOURCE") . ': </span>';
+print $form->selectarray('KSEF_FIELD_EORI', $fieldOptionsOptional, getDolGlobalString('KSEF_FIELD_EORI', 'idprof5'), 0, 0, 0, '', 0, 0, 0, '', 'minwidth200 small');
+print '</td>';
+print '</tr>';
+
 // Environment
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_ENVIRONMENT"), $langs->trans("KSEF_ENVIRONMENT_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_ENVIRONMENT"), $langs->trans("KSEF_ENVIRONMENT_Help")) . '</td>';
 print '<td>';
 $array_env = array(
     'TEST' => $langs->trans('KSEF_ENV_TEST') . ' (ksef-test.mf.gov.pl)',
@@ -465,7 +487,7 @@ print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_UI_CONFIG
 
 // Button color
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_BUTTON_COLOR"), $langs->trans("KSEF_BUTTON_COLOR_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_BUTTON_COLOR"), $langs->trans("KSEF_BUTTON_COLOR_Help")) . '</td>';
 print '<td>';
 $array_colors = array(
     '#dc3545' => $langs->trans('KSEF_Red') . ' (Default)',
@@ -481,7 +503,7 @@ print '</td></tr>';
 
 // Purge configuration on module disable
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_PURGE_ON_DISABLE'), $langs->trans('KSEF_PURGE_ON_DISABLE_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_PURGE_ON_DISABLE'), $langs->trans('KSEF_PURGE_ON_DISABLE_Help')) . '</td>';
 print '<td>';
 print '<input type="checkbox" name="KSEF_PURGE_ON_DISABLE" id="KSEF_PURGE_ON_DISABLE" value="1" ' . (getDolGlobalInt('KSEF_PURGE_ON_DISABLE') ? 'checked' : '') . '>';
 print ' <label for="KSEF_PURGE_ON_DISABLE">' . $langs->trans("KSEF_Enabled") . '</label>';
@@ -572,7 +594,7 @@ print '</table>';
 print '<br><table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_MULTICURRENCY_CONFIG") . '</td></tr>';
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_NBP_RATE_MODE'), $langs->trans('KSEF_NBP_RATE_MODE_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_NBP_RATE_MODE'), $langs->trans('KSEF_NBP_RATE_MODE_Help')) . '</td>';
 print '<td>';
 $nbp_modes = array(
     'keep_base' => $langs->trans('KSEF_NBP_RATE_MODE_KEEP_BASE'),

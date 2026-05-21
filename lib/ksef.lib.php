@@ -32,6 +32,8 @@ define('KSEF_QR_URL_DEMO', 'https://qr-demo.ksef.mf.gov.pl');
 define('KSEF_FA3_NAMESPACE', 'http://crd.gov.pl/wzor/2025/06/25/13775/');
 define('KSEF_FA3_SCHEMA_VERSION', '1-0E');
 
+define('KSEF_EXCESS_RECEIVED_DESCRIPTION', '(EXCESS RECEIVED)');
+
 /**
  * @brief Returns true if the module has been updated
  * @param string $currentVersion Version declared by the running module code
@@ -327,6 +329,7 @@ function ksefGetFieldName($identifier)
         'KRS'   => 'idprof2',
         'REGON' => 'idprof3',
         'BDO'   => 'idprof4',
+        'EORI'  => 'idprof5',
     );
 
     $validFields = array('idprof1', 'idprof2', 'idprof3', 'idprof4', 'idprof5', 'idprof6', 'tva_intra');
@@ -456,6 +459,7 @@ function ksefGetManagedTranslationOverrides()
         'KRS'   => 'KRS',
         'REGON' => 'REGON',
         'BDO'   => 'BDO',
+        'EORI'  => 'EORI',
     );
 
     foreach ($identifiers as $ident => $label) {
@@ -2031,7 +2035,7 @@ function ksefGetConfigWarnings()
 
     // Duplicate field mappings (general tab)
     $configuredFields = array();
-    foreach (array('NIP', 'KRS', 'REGON', 'BDO') as $ident) {
+    foreach (array('NIP', 'KRS', 'REGON', 'BDO', 'EORI') as $ident) {
         $fv = ksefGetFieldName($ident);
         if (!empty($fv)) {
             $configuredFields[$fv][] = $ident;
@@ -2177,4 +2181,58 @@ function ksefRenderConfigWarnings($warnings, $currentTab = '')
     $html .= '</div>';
 
     return $html;
+}
+
+/**
+ * @brief Build full correction chain for an invoice
+ * @param Facture $invoice Starting invoice (root or any correction in chain)
+ * @param DoliDB $db Database handler
+ * @param int $maxDepth Safety limit
+ * @return Facture[] Chain order [root, correction1, correction2, ...]
+ */
+function ksefBuildCorrectionChain($invoice, $db, $maxDepth = 20)
+{
+    // Walk backward to root
+    $current = $invoice;
+    $backChain = array($current);
+    $depth = 0;
+    while ($current->type == Facture::TYPE_REPLACEMENT
+        && !empty($current->fk_facture_source)
+        && $depth < $maxDepth) {
+        $parent = new Facture($db);
+        if ($parent->fetch((int) $current->fk_facture_source) <= 0) {
+            break;
+        }
+        array_unshift($backChain, $parent);
+        $current = $parent;
+        $depth++;
+    }
+
+    // Walk forward from root
+    $chain = array($backChain[0]);
+    $current = $backChain[0];
+    $depth = 0;
+    while ($depth < $maxDepth) {
+        $sql_next = "SELECT rowid FROM " . MAIN_DB_PREFIX . "facture"
+            . " WHERE fk_facture_source = " . ((int) $current->id)
+            . " AND type = " . Facture::TYPE_REPLACEMENT
+            . " ORDER BY fk_statut DESC, rowid DESC LIMIT 1";
+        $res_next = $db->query($sql_next);
+        $nextId = 0;
+        if ($res_next && ($obj_next = $db->fetch_object($res_next))) {
+            $nextId = (int) $obj_next->rowid;
+        }
+        if ($nextId <= 0) {
+            break;
+        }
+        $next = new Facture($db);
+        if ($next->fetch($nextId) <= 0) {
+            break;
+        }
+        $chain[] = $next;
+        $current = $next;
+        $depth++;
+    }
+
+    return $chain;
 }

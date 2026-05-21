@@ -130,10 +130,72 @@ if ($action == 'update') {
     $disable_validate_and_upload = GETPOST('KSEF_DISABLE_VALIDATE_AND_UPLOAD', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_DISABLE_VALIDATE_AND_UPLOAD', $disable_validate_and_upload, 'chaine', 0, '', $conf->entity);
 
+    // Confirmation before upload
+    $confirm_before_upload = GETPOST('KSEF_CONFIRM_BEFORE_UPLOAD', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_CONFIRM_BEFORE_UPLOAD', $confirm_before_upload, 'chaine', 0, '', $conf->entity);
+
+    // Show PDF after upload
+    $show_pdf_after_upload = GETPOST('KSEF_SHOW_PDF_AFTER_UPLOAD', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_SHOW_PDF_AFTER_UPLOAD', $show_pdf_after_upload, 'chaine', 0, '', $conf->entity);
+
+    // Confirmation PDF template
+    dolibarr_set_const($db, 'KSEF_CONFIRM_PDF_TEMPLATE', GETPOST('KSEF_CONFIRM_PDF_TEMPLATE', 'alphanohtml'), 'chaine', 0, '', $conf->entity);
+
     // Payment defaults
     dolibarr_set_const($db, 'KSEF_DEFAULT_PAYMENT_TERM_ID', GETPOST('KSEF_DEFAULT_PAYMENT_TERM_ID', 'int'), 'chaine', 0, '', $conf->entity);
     dolibarr_set_const($db, 'KSEF_DEFAULT_PAYMENT_METHOD_ID', GETPOST('KSEF_DEFAULT_PAYMENT_METHOD_ID', 'int'), 'chaine', 0, '', $conf->entity);
     dolibarr_set_const($db, 'KSEF_DEFAULT_BANK_ACCOUNT_ID', GETPOST('KSEF_DEFAULT_BANK_ACCOUNT_ID', 'int'), 'chaine', 0, '', $conf->entity);
+
+    // Correction invoices
+    $corr_reason_preset = GETPOST('KSEF_DEFAULT_CORRECTION_REASON_PRESET', 'alphanohtml');
+    if ($corr_reason_preset === 'custom') {
+        $corr_default_reason = trim(GETPOST('KSEF_DEFAULT_CORRECTION_REASON_CUSTOM', 'alphanohtml'));
+    } elseif (!empty($corr_reason_preset)) {
+        $corr_default_reason = $corr_reason_preset;
+    } else {
+        $corr_default_reason = '';
+    }
+    dolibarr_set_const($db, 'KSEF_DEFAULT_CORRECTION_REASON', $corr_default_reason, 'chaine', 0, '', $conf->entity);
+
+    $corr_default_type = GETPOST('KSEF_DEFAULT_CORRECTION_TYPE', 'int');
+    if (in_array($corr_default_type, array('1', '2', '3', ''))) {
+        dolibarr_set_const($db, 'KSEF_DEFAULT_CORRECTION_TYPE', $corr_default_type, 'chaine', 0, '', $conf->entity);
+    }
+
+    $kor_line_method = GETPOST('KSEF_KOR_LINE_METHOD', 'alpha');
+    if (in_array($kor_line_method, array('differential', 'stanprzed'))) {
+        dolibarr_set_const($db, 'KSEF_KOR_LINE_METHOD', $kor_line_method, 'chaine', 0, '', $conf->entity);
+    }
+
+    // Entity fields (Podmiot)
+    $idnabywcy_source = GETPOST('KSEF_IDNABYWCY_SOURCE', 'alphanohtml');
+    if ($idnabywcy_source === 'disabled' || $idnabywcy_source === 'code_client' || strpos($idnabywcy_source, 'thirdparty_extrafield:') === 0) {
+        dolibarr_set_const($db, 'KSEF_IDNABYWCY_SOURCE', $idnabywcy_source, 'chaine', 0, '', $conf->entity);
+    }
+
+    // GTU / Procedura sources
+    $gtu_source = GETPOST('KSEF_GTU_SOURCE', 'alphanohtml');
+    if ($gtu_source === 'disabled' || strpos($gtu_source, 'product_extrafield:') === 0) {
+        dolibarr_set_const($db, 'KSEF_GTU_SOURCE', $gtu_source, 'chaine', 0, '', $conf->entity);
+    }
+
+    $procedura_source = GETPOST('KSEF_PROCEDURA_SOURCE', 'alphanohtml');
+    if ($procedura_source === 'disabled' || strpos($procedura_source, 'product_extrafield:') === 0) {
+        dolibarr_set_const($db, 'KSEF_PROCEDURA_SOURCE', $procedura_source, 'chaine', 0, '', $conf->entity);
+    }
+
+    // UU_ID per line
+    $uu_id_val = GETPOST('KSEF_FA3_INCLUDE_UU_ID', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_UU_ID', $uu_id_val, 'chaine', 0, '', $conf->entity);
+
+    // FP / TP flags
+    $fp_val = GETPOST('KSEF_FA3_INCLUDE_FP', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_FP', $fp_val, 'chaine', 0, '', $conf->entity);
+
+    $tp_source = GETPOST('KSEF_TP_SOURCE', 'alphanohtml');
+    if ($tp_source === 'disabled' || strpos($tp_source, 'thirdparty_extrafield:') === 0 || strpos($tp_source, 'extrafield:') === 0) {
+        dolibarr_set_const($db, 'KSEF_TP_SOURCE', $tp_source, 'chaine', 0, '', $conf->entity);
+    }
 
     // Note mode
     $combined_note = GETPOST('KSEF_NOTE_COMBINED_MODE', 'alpha');
@@ -156,23 +218,42 @@ if ($action == 'update') {
     }
     dolibarr_set_const($db, 'KSEF_STOPKA_BOILERPLATE', $stopka_boilerplate, 'chaine', 0, '', $conf->entity);
 
-    // DodatkowyOpis - Extrafields
+    // Extrafields
     $ef_save = new ExtraFields($db);
     $_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
 
     // Invoice extrafields
     $ef_save->fetch_name_optionals_label('facture');
     $extrafields_val = array();
+    $facture_assign_nr_zamowienia = '';
+    $facture_assign_nr_umowy = '';
+    $facture_assign_tp = '';
     foreach (array_keys($ef_save->attributes['facture']['label'] ?? array()) as $fname) {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['facture']['type'][$fname] ?? '';
         if (in_array($_t, $_dodUnsupportedTypes)) continue;
-        if (GETPOST('KSEF_EF_' . $fname, 'alpha')) {
-            $target = GETPOST('KSEF_EF_TARGET_' . $fname, 'alpha');
-            $extrafields_val[] = $fname . ':' . ($target === 'stopka' ? 'stopka' : 'dodatkowy');
+        $assign = GETPOST('KSEF_ASSIGN_FACTURE_' . $fname, 'alphanohtml');
+        if ($assign === 'dodatkowy' || $assign === 'stopka') {
+            $extrafields_val[] = $fname . ':' . $assign;
+        } elseif ($assign === 'nr_zamowienia') {
+            $facture_assign_nr_zamowienia = $fname;
+        } elseif ($assign === 'nr_umowy') {
+            $facture_assign_nr_umowy = $fname;
+        } elseif ($assign === 'tp') {
+            $facture_assign_tp = $fname;
         }
     }
     dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $extrafields_val), 'chaine', 0, '', $conf->entity);
+    // Apply row selector overrides
+    if ($facture_assign_nr_zamowienia !== '') {
+        dolibarr_set_const($db, 'KSEF_NR_ZAMOWIENIA_SOURCE', 'extrafield:' . $facture_assign_nr_zamowienia, 'chaine', 0, '', $conf->entity);
+    }
+    if ($facture_assign_nr_umowy !== '') {
+        dolibarr_set_const($db, 'KSEF_NR_UMOWY_SOURCE', 'extrafield:' . $facture_assign_nr_umowy, 'chaine', 0, '', $conf->entity);
+    }
+    if ($facture_assign_tp !== '') {
+        dolibarr_set_const($db, 'KSEF_TP_SOURCE', 'extrafield:' . $facture_assign_tp, 'chaine', 0, '', $conf->entity);
+    }
 
     // Line extrafields
     $ef_save->fetch_name_optionals_label('facturedet');
@@ -181,7 +262,8 @@ if ($action == 'update') {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['facturedet']['type'][$fname] ?? '';
         if (in_array($_t, $_dodUnsupportedTypes)) continue;
-        if (GETPOST('KSEF_EF_DET_' . $fname, 'alpha')) {
+        $assign = GETPOST('KSEF_ASSIGN_FACTUREDET_' . $fname, 'alphanohtml');
+        if ($assign === 'dodatkowy') {
             $det_extrafields_val[] = $fname;
         }
     }
@@ -190,29 +272,68 @@ if ($action == 'update') {
     // Product extrafields
     $ef_save->fetch_name_optionals_label('product');
     $product_extrafields_val = array();
+    $product_assign_gtu = '';
+    $product_assign_procedura = '';
+    $product_assign_zwolnienie = '';
     foreach (array_keys($ef_save->attributes['product']['label'] ?? array()) as $fname) {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['product']['type'][$fname] ?? '';
         if (in_array($_t, $_dodUnsupportedTypes)) continue;
-        if (GETPOST('KSEF_EF_PROD_' . $fname, 'alpha')) {
+        $assign = GETPOST('KSEF_ASSIGN_PRODUCT_' . $fname, 'alphanohtml');
+        if ($assign === 'dodatkowy') {
             $product_extrafields_val[] = $fname;
+        } elseif ($assign === 'gtu') {
+            $product_assign_gtu = $fname;
+        } elseif ($assign === 'procedura') {
+            $product_assign_procedura = $fname;
+        } elseif ($assign === 'zwolnienie') {
+            $product_assign_zwolnienie = $fname;
         }
     }
     dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS', implode(',', $product_extrafields_val), 'chaine', 0, '', $conf->entity);
+    // Apply row selector overrides
+    if ($product_assign_gtu !== '') {
+        dolibarr_set_const($db, 'KSEF_GTU_SOURCE', 'product_extrafield:' . $product_assign_gtu, 'chaine', 0, '', $conf->entity);
+    }
+    if ($product_assign_procedura !== '') {
+        dolibarr_set_const($db, 'KSEF_PROCEDURA_SOURCE', 'product_extrafield:' . $product_assign_procedura, 'chaine', 0, '', $conf->entity);
+    }
+    if ($product_assign_zwolnienie !== '') {
+        dolibarr_set_const($db, 'KSEF_ZWOLNIENIE_PRODUCT_FIELD', $product_assign_zwolnienie, 'chaine', 0, '', $conf->entity);
+    }
 
     // Societe extrafields
     $ef_save->fetch_name_optionals_label('societe');
     $societe_extrafields_val = array();
+    $societe_assign_idnabywcy = '';
+    $societe_assign_nr_umowy = '';
+    $societe_assign_tp = '';
     foreach (array_keys($ef_save->attributes['societe']['label'] ?? array()) as $fname) {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['societe']['type'][$fname] ?? '';
         if (in_array($_t, $_dodUnsupportedTypes)) continue;
-        if (GETPOST('KSEF_EF_SOC_' . $fname, 'alpha')) {
-            $target = GETPOST('KSEF_EF_SOC_TARGET_' . $fname, 'alpha');
-            $societe_extrafields_val[] = $fname . ':' . ($target === 'stopka' ? 'stopka' : 'dodatkowy');
+        $assign = GETPOST('KSEF_ASSIGN_SOCIETE_' . $fname, 'alphanohtml');
+        if ($assign === 'dodatkowy' || $assign === 'stopka') {
+            $societe_extrafields_val[] = $fname . ':' . $assign;
+        } elseif ($assign === 'idnabywcy') {
+            $societe_assign_idnabywcy = $fname;
+        } elseif ($assign === 'nr_umowy') {
+            $societe_assign_nr_umowy = $fname;
+        } elseif ($assign === 'tp') {
+            $societe_assign_tp = $fname;
         }
     }
     dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', implode(',', $societe_extrafields_val), 'chaine', 0, '', $conf->entity);
+    // Apply row selector overrides
+    if ($societe_assign_idnabywcy !== '') {
+        dolibarr_set_const($db, 'KSEF_IDNABYWCY_SOURCE', 'thirdparty_extrafield:' . $societe_assign_idnabywcy, 'chaine', 0, '', $conf->entity);
+    }
+    if ($societe_assign_nr_umowy !== '') {
+        dolibarr_set_const($db, 'KSEF_NR_UMOWY_SOURCE', 'thirdparty_extrafield:' . $societe_assign_nr_umowy, 'chaine', 0, '', $conf->entity);
+    }
+    if ($societe_assign_tp !== '') {
+        dolibarr_set_const($db, 'KSEF_TP_SOURCE', 'thirdparty_extrafield:' . $societe_assign_tp, 'chaine', 0, '', $conf->entity);
+    }
 
     // Project extrafields
     $ef_save->fetch_name_optionals_label('projet');
@@ -221,9 +342,9 @@ if ($action == 'update') {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['projet']['type'][$fname] ?? '';
         if (in_array($_t, $_dodUnsupportedTypes)) continue;
-        if (GETPOST('KSEF_EF_PROJ_' . $fname, 'alpha')) {
-            $target = GETPOST('KSEF_EF_PROJ_TARGET_' . $fname, 'alpha');
-            $project_extrafields_val[] = $fname . ':' . ($target === 'stopka' ? 'stopka' : 'dodatkowy');
+        $assign = GETPOST('KSEF_ASSIGN_PROJET_' . $fname, 'alphanohtml');
+        if ($assign === 'dodatkowy' || $assign === 'stopka') {
+            $project_extrafields_val[] = $fname . ':' . $assign;
         }
     }
     dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', implode(',', $project_extrafields_val), 'chaine', 0, '', $conf->entity);
@@ -580,64 +701,194 @@ if (!empty($warnings)) {
     echo ksefRenderConfigWarnings($warnings, 'outgoing');
 }
 
+// Shared lookups for entity sections
+$ef_entity = new ExtraFields($db);
+$ef_entity->fetch_name_optionals_label('societe');
+$ef_entity->fetch_name_optionals_label('facture');
+$ef_entity->fetch_name_optionals_label('product');
+$ef_entity->fetch_name_optionals_label('facturedet');
+$ef_entity->fetch_name_optionals_label('projet');
+
+$_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
+
 print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
 print '<input type="hidden" name="action" value="update">';
 
-// Line Item Fields
+// Submission & PDF
 print '<table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_LINE_ITEM_FIELDS") . '</td></tr>';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_SUBMISSION_PDF_SECTION") . '</td></tr>';
 
-// NrKlienta/Customer code
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA'), $langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_ADD_QR'), $langs->trans('KSEF_ADD_QR_Help')) . '</td>';
 print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_NRKLIENTA" id="KSEF_FA3_INCLUDE_NRKLIENTA" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_NRKLIENTA') ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_NRKLIENTA">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<input type="checkbox" name="KSEF_ADD_QR" id="KSEF_ADD_QR" value="1" ' . (getDolGlobalInt('KSEF_ADD_QR') ? 'checked' : '') . '>';
+print ' <label for="KSEF_ADD_QR">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
-// Indeks/Product reference code
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_INDEKS'), $langs->trans('KSEF_FA3_INCLUDE_INDEKS_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_DISABLE_VALIDATE_AND_UPLOAD'), $langs->trans('KSEF_DISABLE_VALIDATE_AND_UPLOAD_Help')) . '</td>';
 print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_INDEKS" id="KSEF_FA3_INCLUDE_INDEKS" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_INDEKS') ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<input type="checkbox" name="KSEF_DISABLE_VALIDATE_AND_UPLOAD" id="KSEF_DISABLE_VALIDATE_AND_UPLOAD" value="1" ' . (getDolGlobalInt('KSEF_DISABLE_VALIDATE_AND_UPLOAD') ? 'checked' : '') . '>';
+print ' <label for="KSEF_DISABLE_VALIDATE_AND_UPLOAD">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
-// GTIN/Barcode/EAN
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_GTIN'), $langs->trans('KSEF_FA3_INCLUDE_GTIN_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_CONFIRM_BEFORE_UPLOAD'), $langs->trans('KSEF_CONFIRM_BEFORE_UPLOAD_Help')) . '</td>';
 print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_GTIN" id="KSEF_FA3_INCLUDE_GTIN" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_GTIN') ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_GTIN">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<input type="checkbox" name="KSEF_CONFIRM_BEFORE_UPLOAD" id="KSEF_CONFIRM_BEFORE_UPLOAD" value="1" ' . (getDolGlobalInt('KSEF_CONFIRM_BEFORE_UPLOAD', 1) ? 'checked' : '') . '>';
+print ' <label for="KSEF_CONFIRM_BEFORE_UPLOAD">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
-// P_8A/Unit of measure
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_UNIT'), $langs->trans('KSEF_FA3_INCLUDE_UNIT_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_SHOW_PDF_AFTER_UPLOAD'), $langs->trans('KSEF_SHOW_PDF_AFTER_UPLOAD_Help')) . '</td>';
 print '<td>';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_UNIT" id="KSEF_FA3_INCLUDE_UNIT" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_UNIT') ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_UNIT">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<input type="checkbox" name="KSEF_SHOW_PDF_AFTER_UPLOAD" id="KSEF_SHOW_PDF_AFTER_UPLOAD" value="1" ' . (getDolGlobalInt('KSEF_SHOW_PDF_AFTER_UPLOAD', 1) ? 'checked' : '') . '>';
+print ' <label for="KSEF_SHOW_PDF_AFTER_UPLOAD">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// Confirmation PDF template dropdown
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_CONFIRM_PDF_TEMPLATE'), $langs->trans('KSEF_CONFIRM_PDF_TEMPLATE_Help')) . '</td>';
+print '<td>';
+$current_template = getDolGlobalString('KSEF_CONFIRM_PDF_TEMPLATE', 'ksef');
+print '<select name="KSEF_CONFIRM_PDF_TEMPLATE" id="KSEF_CONFIRM_PDF_TEMPLATE">';
+print '<option value="ksef"' . ($current_template == 'ksef' ? ' selected' : '') . '>' . $langs->trans('KSEF_CONFIRM_PDF_TEMPLATE_KSEF') . '</option>';
+require_once DOL_DOCUMENT_ROOT . '/core/modules/facture/modules_facture.php';
+$dolibarr_models = ModelePDFFactures::liste_modeles($db);
+if (is_array($dolibarr_models)) {
+    foreach ($dolibarr_models as $key => $label) {
+        print '<option value="' . dol_escape_htmltag($key) . '"' . ($current_template == $key ? ' selected' : '') . '>' . dol_escape_htmltag(ucfirst($key)) . '</option>';
+    }
+}
+print '</select>';
 print '</td></tr>';
 
 print '</table>';
 
-// Invoice Header Fields
+// VAT Exemption
 print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_INVOICE_HEADER_FIELDS") . '</td></tr>';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_VAT_EXEMPTION_SECTION") . '</td></tr>';
 
-// OpisRachunku/Bank account description
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_BANK_DESC'), $langs->trans('KSEF_FA3_INCLUDE_BANK_DESC_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_ZWOLNIENIE_PODSTAWA'), $langs->trans('KSEF_ZWOLNIENIE_PODSTAWA_Help')) . '</td>';
 print '<td>';
+$zwolnienie_types = array(
+    'disabled' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_DISABLED'),
+    'P_19A' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_P19A'),
+    'P_19B' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_P19B'),
+    'P_19C' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_P19C'),
+);
+$current_zwolnienie_type = getDolGlobalString('KSEF_ZWOLNIENIE_TYPE', 'disabled');
+print $form->selectarray('KSEF_ZWOLNIENIE_TYPE', $zwolnienie_types, $current_zwolnienie_type, 0, 0, 0, 'onchange="ksefToggleZwolnienie()"', 0, 0, 0, '', 'minwidth200');
+print '<br>';
+$zwolnienie_hidden = ($current_zwolnienie_type === 'disabled') ? ' style="display:none;"' : '';
+print '<span id="ksef_zwolnienie_text_row"' . $zwolnienie_hidden . '>';
+print '<input type="text" name="KSEF_ZWOLNIENIE_PODSTAWA" class="flat minwidth400" maxlength="256" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_ZWOLNIENIE_PODSTAWA', '')) . '" placeholder="' . dol_escape_htmltag($langs->trans('KSEF_ZWOLNIENIE_PODSTAWA_Placeholder')) . '">';
+print '</span>';
+print '<script>function ksefToggleZwolnienie(){var s=document.getElementById("KSEF_ZWOLNIENIE_TYPE");var d=(s&&s.value==="disabled");document.getElementById("ksef_zwolnienie_text_row").style.display=d?"none":"";}</script>';
+print '</td></tr>';
+
+print '</table>';
+
+// Note Settings
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_NOTE_SETTINGS_SECTION") . '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_STOPKA_BOILERPLATE'), $langs->trans('KSEF_STOPKA_BOILERPLATE_Help')) . '</td>';
+print '<td>';
+print '<textarea name="KSEF_STOPKA_BOILERPLATE" class="flat minwidth300" rows="4" maxlength="3500">';
+print dol_escape_htmltag(getDolGlobalString('KSEF_STOPKA_BOILERPLATE', ''));
+print '</textarea>';
+print '<br><span class="small">' . $langs->trans('KSEF_STOPKA_BOILERPLATE_Limit') . '</span>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE'), $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_Help')) . '</td>';
+print '<td>';
+$combined_note_modes = array(
+    'simple_stopka' => $langs->trans('KSEF_NOTE_COMBINED_SIMPLE_STOPKA'),
+    'simple_dodatkowy' => $langs->trans('KSEF_NOTE_COMBINED_SIMPLE_DODATKOWY'),
+    'keyvalue_dodatkowy' => $langs->trans('KSEF_NOTE_COMBINED_KEYVALUE_DODATKOWY'),
+    'disabled' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_DISABLED'),
+);
+$_cm = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
+$_ct = getDolGlobalString('KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury');
+if ($_cm === 'disabled') {
+    $current_combined_note = 'disabled';
+} elseif ($_cm === 'keyvalue') {
+    $current_combined_note = 'keyvalue_dodatkowy';
+} elseif ($_ct === 'dodatkowy_opis') {
+    $current_combined_note = 'simple_dodatkowy';
+} else {
+    $current_combined_note = 'simple_stopka';
+}
+print $form->selectarray('KSEF_NOTE_COMBINED_MODE', $combined_note_modes, $current_combined_note, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
+print '</table>';
+
+// inline create/edit form
+function ksefPrintInlineCreateForm($entity, $langs) {
+	$token = newToken();
+	print '<tr class="oddeven"><td colspan="5">';
+	print '<details id="ksef_ef_create_details_' . $entity . '" style="padding:4px;">';
+	print '<summary style="cursor:pointer; font-weight:bold;">' . $langs->trans('KSEF_ENTITY_BOX_CREATE_FIELD') . '</summary>';
+	print '<p class="opacitymedium" style="margin-top:8px;">' . $langs->trans('KSEF_EXTRAFIELD_CREATE_EXPLANATION') . '</p>';
+	print '<div id="ksef_ef_form_area_' . $entity . '" data-mode="create" style="margin-top:8px;">';
+	print '<input type="hidden" form="ksef_ef_create_form_' . $entity . '" name="token" value="' . $token . '">';
+	print '<input type="hidden" form="ksef_ef_edit_form_' . $entity . '" name="token" value="' . $token . '">';
+	print '<input type="hidden" form="ksef_ef_create_form_' . $entity . '" name="ef_target" value="' . $entity . '">';
+	print '<input type="hidden" form="ksef_ef_edit_form_' . $entity . '" name="ef_target" value="' . $entity . '">';
+	print '<table class="noborder" style="width:100%;">';
+	// Label
+	print '<tr><td style="width:160px;"><label for="ksef_ef_label_' . $entity . '">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</label></td>';
+	print '<td><input type="text" id="ksef_ef_label_' . $entity . '" form="ksef_ef_create_form_' . $entity . '" name="ef_label" class="flat minwidth300"></td></tr>';
+	// Code (edit mode only)
+	print '<tr id="ksef_ef_code_row_' . $entity . '" style="display:none;"><td>' . $langs->trans('KSEF_DODATKOWY_OPIS_INTERNAL_CODE') . '</td>';
+	print '<td><code id="ksef_ef_code_display_' . $entity . '"></code><input type="hidden" id="ksef_ef_code_' . $entity . '" form="ksef_ef_edit_form_' . $entity . '" name="ef_code" value=""></td></tr>';
+	// Type
+	print '<tr><td><label for="ksef_ef_type_' . $entity . '">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</label></td>';
+	print '<td><select id="ksef_ef_type_' . $entity . '" form="ksef_ef_create_form_' . $entity . '" name="ef_type" onchange="ksefToggleOptions(\'' . $entity . '\')">';
+	print '<option value="varchar">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_VARCHAR') . '</option>';
+	print '<option value="text">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_TEXT') . '</option>';
+	print '<option value="int">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_INT') . '</option>';
+	print '<option value="double">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DOUBLE') . '</option>';
+	print '<option value="date">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATE') . '</option>';
+	print '<option value="datetime">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATETIME') . '</option>';
+	print '<option value="select">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_SELECT') . '</option>';
+	print '</select></td></tr>';
+	// Options (for select type)
+	print '<tr id="ksef_ef_options_row_' . $entity . '" style="display:none;"><td><label for="ksef_ef_options_' . $entity . '">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_OPTIONS') . '</label></td>';
+	print '<td><textarea id="ksef_ef_options_' . $entity . '" form="ksef_ef_create_form_' . $entity . '" name="ef_options" class="flat" rows="4" style="width:100%;"></textarea></td></tr>';
+	// Buttons
+	print '<tr><td></td><td>';
+	print '<button type="submit" id="ksef_ef_create_btn_' . $entity . '" form="ksef_ef_create_form_' . $entity . '" class="button">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUBMIT') . '</button> ';
+	print '<button type="submit" id="ksef_ef_edit_btn_' . $entity . '" form="ksef_ef_edit_form_' . $entity . '" class="button" style="display:none;">' . $langs->trans('KSEF_DODATKOWY_OPIS_EDIT_FIELD_SUBMIT') . '</button> ';
+	print '<button type="button" id="ksef_ef_cancel_btn_' . $entity . '" class="button" style="display:none;" onclick="ksefCancelEdit(\'' . $entity . '\')">' . $langs->trans('Cancel') . '</button>';
+	print '</td></tr>';
+	print '</table>';
+	print '</div>';
+	print '</details>';
+	print '</td></tr>';
+}
+
+// Invoice Fields
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_TITLE') . '</td></tr>';
+
+// Invoice settings
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_BANK_DESC'), $langs->trans('KSEF_FA3_INCLUDE_BANK_DESC_Help')) . '</td>';
+print '<td colspan="4">';
 print '<input type="checkbox" name="KSEF_FA3_INCLUDE_BANK_DESC" id="KSEF_FA3_INCLUDE_BANK_DESC" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_BANK_DESC') ? 'checked' : '') . '>';
 print ' <label for="KSEF_FA3_INCLUDE_BANK_DESC">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
-// P_1M/Place of Issue
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_PLACE_OF_ISSUE'), $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_Help')) . '</td>';
-print '<td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_PLACE_OF_ISSUE'), $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_Help')) . '</td>';
+print '<td colspan="4">';
 $place_modes = array(
     'disabled' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_DISABLED'),
     'company' => $langs->trans('KSEF_FA3_PLACE_OF_ISSUE_COMPANY'),
@@ -657,10 +908,9 @@ function togglePlaceOfIssueCustom() {
 }
 </script>';
 
-// P_6/Sale Date Source
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_FA3_SALE_DATE_SOURCE'), $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_Help')) . '</td>';
-print '<td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_SALE_DATE_SOURCE'), $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
 $sale_date_modes = array(
     'invoice_date' => $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_INVOICE'),
     'delivery_date' => $langs->trans('KSEF_FA3_SALE_DATE_SOURCE_DELIVERY'),
@@ -669,230 +919,196 @@ $current_sale_date_source = getDolGlobalString('KSEF_FA3_SALE_DATE_SOURCE', 'del
 print $form->selectarray('KSEF_FA3_SALE_DATE_SOURCE', $sale_date_modes, $current_sale_date_source, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
-// NrZamowienia source
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE'), $langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE_Help')) . '</td>';
-print '<td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_FP'), $langs->trans('KSEF_FA3_INCLUDE_FP_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_FP" id="KSEF_FA3_INCLUDE_FP" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_FP') ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_FP">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE'), $langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
 $zamowienia_options = array(
     'ref_client' => $langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE_REF_CLIENT'),
     'linked_order' => $langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE_LINKED_ORDER'),
     'disabled' => $langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE_DISABLED'),
 );
-$ef_zamowienia = new ExtraFields($db);
-$ef_zamowienia->fetch_name_optionals_label('facture');
-if (!empty($ef_zamowienia->attributes['facture']['label'])) {
-    foreach ($ef_zamowienia->attributes['facture']['label'] as $fname => $flabel) {
+if (!empty($ef_entity->attributes['facture']['label'])) {
+    foreach ($ef_entity->attributes['facture']['label'] as $fname => $flabel) {
         if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_zamowienia->attributes['facture']['type'][$fname] ?? '';
+        $ftype = $ef_entity->attributes['facture']['type'][$fname] ?? '';
         if (in_array($ftype, array('varchar', 'text', 'int'))) {
             $zamowienia_options['extrafield:' . $fname] = $langs->trans('KSEF_NR_ZAMOWIENIA_SOURCE_EXTRAFIELD') . ': ' . $langs->trans($flabel);
         }
     }
 }
 $current_zamowienia = getDolGlobalString('KSEF_NR_ZAMOWIENIA_SOURCE', 'ref_client');
-print $form->selectarray('KSEF_NR_ZAMOWIENIA_SOURCE', $zamowienia_options, $current_zamowienia, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+print $form->selectarray('KSEF_NR_ZAMOWIENIA_SOURCE', $zamowienia_options, $current_zamowienia, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'facture\', \'KSEF_NR_ZAMOWIENIA_SOURCE\', \'nr_zamowienia\', \'extrafield:\')"', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
-// NrUmowy source
+// Corrections
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans("KSEF_CorrectionInvoicesSection") . '</td></tr>';
+
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_NR_UMOWY_SOURCE'), $langs->trans('KSEF_NR_UMOWY_SOURCE_Help')) . '</td>';
-print '<td>';
-$umowy_options = array(
-    'disabled' => $langs->trans('KSEF_NR_UMOWY_SOURCE_DISABLED'),
+print '<td colspan="5">';
+print '<span class="opacitymedium">' . $langs->trans("KSEF_CorrectionInvoicesDesc") . '</span>';
+print '</td></tr>';
+
+// Default correction reason - dropdown with presets + "Other" custom input
+$corrReasonPresetsSetup = array(
+    'Zwrot towaru'          => 'KSEF_CorrectionReasonPreset_return',
+    'Błędna ilość'          => 'KSEF_CorrectionReasonPreset_qty',
+    'Błędna cena'           => 'KSEF_CorrectionReasonPreset_price',
+    'Błędna stawka VAT'     => 'KSEF_CorrectionReasonPreset_vat',
+    'Rabat potransakcyjny'  => 'KSEF_CorrectionReasonPreset_discount',
+    'Skonto'                => 'KSEF_CorrectionReasonPreset_skonto',
+    'Zwrot zaliczki'        => 'KSEF_CorrectionReasonPreset_advance',
+    'Błędne dane nabywcy'   => 'KSEF_CorrectionReasonPreset_buyer',
 );
-$ef_umowy = new ExtraFields($db);
-$ef_umowy->fetch_name_optionals_label('societe');
-if (!empty($ef_umowy->attributes['societe']['label'])) {
-    foreach ($ef_umowy->attributes['societe']['label'] as $fname => $flabel) {
-        if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_umowy->attributes['societe']['type'][$fname] ?? '';
-        if (in_array($ftype, array('varchar', 'text', 'int'))) {
-            $umowy_options['thirdparty_extrafield:' . $fname] = $langs->trans('KSEF_NR_UMOWY_SOURCE_THIRDPARTY_EXTRAFIELD') . ': ' . $langs->trans($flabel);
-        }
-    }
-}
-$ef_umowy->fetch_name_optionals_label('facture');
-if (!empty($ef_umowy->attributes['facture']['label'])) {
-    foreach ($ef_umowy->attributes['facture']['label'] as $fname => $flabel) {
-        if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_umowy->attributes['facture']['type'][$fname] ?? '';
-        if (in_array($ftype, array('varchar', 'text', 'int'))) {
-            $umowy_options['extrafield:' . $fname] = $langs->trans('KSEF_NR_UMOWY_SOURCE_EXTRAFIELD') . ': ' . $langs->trans($flabel);
-        }
-    }
-}
-$current_umowy = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
-print $form->selectarray('KSEF_NR_UMOWY_SOURCE', $umowy_options, $current_umowy, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
-if (count($umowy_options) <= 1) {
-    print '<br><span class="small">' . $langs->trans('KSEF_NR_UMOWY_NO_EXTRAFIELDS') . '</span>';
-}
-print '</td></tr>';
-
-print '</table>';
-
-// VAT Exemption
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_VAT_EXEMPTION_SECTION") . '</td></tr>';
+$currentDefaultReason = getDolGlobalString('KSEF_DEFAULT_CORRECTION_REASON', '');
+$defaultIsPreset = !empty($currentDefaultReason) && array_key_exists($currentDefaultReason, $corrReasonPresetsSetup);
+$defaultIsCustom = !empty($currentDefaultReason) && !$defaultIsPreset;
 
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_ZWOLNIENIE_PODSTAWA'), $langs->trans('KSEF_ZWOLNIENIE_PODSTAWA_Help')) . '</td>';
-print '<td>';
-$zwolnienie_types = array(
-    'disabled' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_DISABLED'),
-    'P_19A' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_P19A'),
-    'P_19B' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_P19B'),
-    'P_19C' => $langs->trans('KSEF_ZWOLNIENIE_TYPE_P19C'),
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_DefaultCorrectionReason"), $langs->trans("KSEF_DefaultCorrectionReasonHelp")) . '</td>';
+print '<td colspan="4">';
+print '<select name="KSEF_DEFAULT_CORRECTION_REASON_PRESET" id="KSEF_DEFAULT_CORRECTION_REASON_PRESET" style="min-width: 220px;">';
+print '<option value=""></option>';
+foreach ($corrReasonPresetsSetup as $plText => $langKey) {
+    $selected = ($defaultIsPreset && $currentDefaultReason === $plText) ? ' selected' : '';
+    print '<option value="' . dol_escape_htmltag($plText) . '"' . $selected . '>' . $langs->trans($langKey) . '</option>';
+}
+$otherSelected = $defaultIsCustom ? ' selected' : '';
+print '<option value="custom"' . $otherSelected . '>' . $langs->trans("KSEF_CorrectionReasonPreset_other") . '</option>';
+print '</select>';
+$customDisplay = $defaultIsCustom ? 'inline-block' : 'none';
+$customValue = $defaultIsCustom ? dol_escape_htmltag($currentDefaultReason) : '';
+print ' <input type="text" name="KSEF_DEFAULT_CORRECTION_REASON_CUSTOM" id="KSEF_DEFAULT_CORRECTION_REASON_CUSTOM"';
+print ' value="' . $customValue . '" maxlength="256" style="display: ' . $customDisplay . '; width: 300px;"';
+print ' placeholder="' . dol_escape_htmltag($langs->trans("KSEF_CorrectionReasonCustomPlaceholder")) . '">';
+print '</td></tr>';
+
+// Default correction type
+$currentDefaultType = getDolGlobalString('KSEF_DEFAULT_CORRECTION_TYPE', '');
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_DefaultCorrectionType"), $langs->trans("KSEF_DefaultCorrectionTypeHelp")) . '</td>';
+print '<td colspan="4">';
+print '<select name="KSEF_DEFAULT_CORRECTION_TYPE" style="min-width: 200px;">';
+print '<option value=""></option>';
+for ($t = 1; $t <= 3; $t++) {
+    $tSelected = ($currentDefaultType === (string) $t) ? ' selected' : '';
+    print '<option value="' . $t . '"' . $tSelected . '>' . $langs->trans("KSEF_CorrectionType" . $t) . '</option>';
+}
+print '</select>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_KOR_LINE_METHOD'), $langs->trans('KSEF_KOR_LINE_METHOD_Help')) . '</td>';
+print '<td colspan="4">';
+$kor_method_options = array(
+    'differential' => $langs->trans('KSEF_KOR_LINE_METHOD_DIFFERENTIAL'),
+    'stanprzed' => $langs->trans('KSEF_KOR_LINE_METHOD_STANPRZED'),
 );
-$current_zwolnienie_type = getDolGlobalString('KSEF_ZWOLNIENIE_TYPE', 'disabled');
-print $form->selectarray('KSEF_ZWOLNIENIE_TYPE', $zwolnienie_types, $current_zwolnienie_type, 0, 0, 0, 'onchange="ksefToggleZwolnienie()"', 0, 0, 0, '', 'minwidth200');
-print '<br>';
-$zwolnienie_hidden = ($current_zwolnienie_type === 'disabled') ? ' style="display:none;"' : '';
-print '<span id="ksef_zwolnienie_text_row"' . $zwolnienie_hidden . '>';
-print '<input type="text" name="KSEF_ZWOLNIENIE_PODSTAWA" class="flat minwidth400" maxlength="256" value="' . dol_escape_htmltag(getDolGlobalString('KSEF_ZWOLNIENIE_PODSTAWA', '')) . '" placeholder="' . dol_escape_htmltag($langs->trans('KSEF_ZWOLNIENIE_PODSTAWA_Placeholder')) . '">';
-print '</span>';
-print '<script>function ksefToggleZwolnienie(){var s=document.getElementById("KSEF_ZWOLNIENIE_TYPE");var d=(s&&s.value==="disabled");document.getElementById("ksef_zwolnienie_text_row").style.display=d?"none":"";document.getElementById("ksef_zwolnienie_product_row").style.display=d?"none":"";}</script>';
+$current_kor_method = getDolGlobalString('KSEF_KOR_LINE_METHOD', 'stanprzed');
+print $form->selectarray('KSEF_KOR_LINE_METHOD', $kor_method_options, $current_kor_method, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
-// Per-product exemption basis
-$zwolnienie_product_hidden = ($current_zwolnienie_type === 'disabled') ? ' style="display:none;"' : '';
-print '<tr class="oddeven" id="ksef_zwolnienie_product_row"' . $zwolnienie_product_hidden . '>';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_ZWOLNIENIE_PRODUCT_FIELD'), $langs->trans('KSEF_ZWOLNIENIE_PRODUCT_FIELD_Help')) . '</td>';
-print '<td>';
-$zwolnienie_field_options = array('' => $langs->trans('KSEF_ZWOLNIENIE_PRODUCT_FIELD_DISABLED'));
-$ef_product = new ExtraFields($db);
-$ef_product->fetch_name_optionals_label('product');
-if (!empty($ef_product->attributes['product']['label'])) {
-    foreach ($ef_product->attributes['product']['label'] as $fname => $flabel) {
-        $ftype = $ef_product->attributes['product']['type'][$fname] ?? '';
-        if (in_array($ftype, array('varchar', 'text', 'select'))) {
-            $zwolnienie_field_options[$fname] = $langs->trans($flabel) . ' (' . $fname . ')';
-        }
-    }
-}
-$current_zwolnienie_field = getDolGlobalString('KSEF_ZWOLNIENIE_PRODUCT_FIELD', '');
-print $form->selectarray('KSEF_ZWOLNIENIE_PRODUCT_FIELD', $zwolnienie_field_options, $current_zwolnienie_field, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
-print '</td></tr>';
+// Payment Defaults
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans("KSEF_DEFAULT_PAYMENT_CONFIG") . '</td></tr>';
 
-print '</table>';
-
-// Submission & PDF Settings
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_SUBMISSION_PDF_SECTION") . '</td></tr>';
-
-// QR Code on PDF
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_ADD_QR'), $langs->trans('KSEF_ADD_QR_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_ADD_QR" id="KSEF_ADD_QR" value="1" ' . (getDolGlobalInt('KSEF_ADD_QR') ? 'checked' : '') . '>';
-print ' <label for="KSEF_ADD_QR">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_DEFAULT_PAYMENT_TERM'), $langs->trans('KSEF_DEFAULT_PAYMENT_TERM_Help')) . '</td>';
+print '<td colspan="4">';
+print $form->getSelectConditionsPaiements(getDolGlobalInt('KSEF_DEFAULT_PAYMENT_TERM_ID', 0), 'KSEF_DEFAULT_PAYMENT_TERM_ID', -1, 1, 0, 'minwidth300');
 print '</td></tr>';
 
-// Disable Validate and Upload
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DISABLE_VALIDATE_AND_UPLOAD'), $langs->trans('KSEF_DISABLE_VALIDATE_AND_UPLOAD_Help')) . '</td>';
-print '<td>';
-print '<input type="checkbox" name="KSEF_DISABLE_VALIDATE_AND_UPLOAD" id="KSEF_DISABLE_VALIDATE_AND_UPLOAD" value="1" ' . (getDolGlobalInt('KSEF_DISABLE_VALIDATE_AND_UPLOAD') ? 'checked' : '') . '>';
-print ' <label for="KSEF_DISABLE_VALIDATE_AND_UPLOAD">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_DEFAULT_PAYMENT_METHOD'), $langs->trans('KSEF_DEFAULT_PAYMENT_METHOD_Help')) . '</td>';
+print '<td colspan="4">';
+print $form->select_types_paiements(getDolGlobalString('KSEF_DEFAULT_PAYMENT_METHOD_ID', ''), 'KSEF_DEFAULT_PAYMENT_METHOD_ID', '', 0, 1, 0, 0, 1, 'minwidth300', 1);
 print '</td></tr>';
 
-print '</table>';
-
-// Invoice Notes & Custom Fields
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_DODATKOWY_OPIS_SECTION") . '</td></tr>';
-
-// StopkaFaktury boilerplate
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_STOPKA_BOILERPLATE'), $langs->trans('KSEF_STOPKA_BOILERPLATE_Help')) . '</td>';
-print '<td>';
-print '<textarea name="KSEF_STOPKA_BOILERPLATE" class="flat minwidth300" rows="4" maxlength="3500">';
-print dol_escape_htmltag(getDolGlobalString('KSEF_STOPKA_BOILERPLATE', ''));
-print '</textarea>';
-print '<br><span class="small">' . $langs->trans('KSEF_STOPKA_BOILERPLATE_Limit') . '</span>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_DEFAULT_BANK_ACCOUNT'), $langs->trans('KSEF_DEFAULT_BANK_ACCOUNT_Help')) . '</td>';
+print '<td colspan="4">';
+print $form->select_comptes(getDolGlobalString('KSEF_DEFAULT_BANK_ACCOUNT_ID', ''), 'KSEF_DEFAULT_BANK_ACCOUNT_ID', 0, '', 1, '', 0, 'minwidth300', 1);
 print '</td></tr>';
 
-// Note mode
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE'), $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_Help')) . '</td>';
-print '<td>';
-$combined_note_modes = array(
-    'simple_stopka' => $langs->trans('KSEF_NOTE_COMBINED_SIMPLE_STOPKA'),
-    'simple_dodatkowy' => $langs->trans('KSEF_NOTE_COMBINED_SIMPLE_DODATKOWY'),
-    'keyvalue_dodatkowy' => $langs->trans('KSEF_NOTE_COMBINED_KEYVALUE_DODATKOWY'),
-    'disabled' => $langs->trans('KSEF_DODATKOWY_OPIS_NOTE_MODE_DISABLED'),
-);
-// Construct combined value from DB keys
-$_cm = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
-$_ct = getDolGlobalString('KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury');
-if ($_cm === 'disabled') {
-    $current_combined_note = 'disabled';
-} elseif ($_cm === 'keyvalue') {
-    $current_combined_note = 'keyvalue_dodatkowy';
-} elseif ($_ct === 'dodatkowy_opis') {
-    $current_combined_note = 'simple_dodatkowy';
-} else {
-    $current_combined_note = 'simple_stopka';
-}
-print $form->selectarray('KSEF_NOTE_COMBINED_MODE', $combined_note_modes, $current_combined_note, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
-print '</td></tr>';
+// Extrafields
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_ENTITY_BOX_EXTRAFIELDS_INVOICE') . '</td></tr>';
 
-// Extrafields listing
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DODATKOWY_OPIS_EXTRAFIELDS'), $langs->trans('KSEF_DODATKOWY_OPIS_EXTRAFIELDS_Help')) . '</td>';
-print '<td>';
-$ef_display = new ExtraFields($db);
-$_dodUnsupportedTypes = ksefDodatkowyOpisUnsupportedTypes();
+print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_SUBTITLE') . '</span></td></tr>';
 
-// Invoice extrafields
-print '<div style="margin-bottom:16px; padding:15px; border:1px solid #ddd; border-radius:4px; background:#f8f9fa;">';
-print '<strong>' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_TITLE') . '</strong><br>';
-print '<span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_SUBTITLE') . '</span>';
-
-$ef_display->fetch_name_optionals_label('facture');
+// Determine current assignment
 $current_ef_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
 $enabled_fields = ksefParseEfConfig($current_ef_config);
+$_nrZamSrc = getDolGlobalString('KSEF_NR_ZAMOWIENIA_SOURCE', 'ref_client');
+$_nrUmowySrc = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
+$_tpSrc = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
+$facture_field_assigns = array(); // fname => assignment value
+if (strpos($_nrZamSrc, 'extrafield:') === 0) $facture_field_assigns[substr($_nrZamSrc, 11)] = 'nr_zamowienia';
+if (strpos($_nrUmowySrc, 'extrafield:') === 0) $facture_field_assigns[substr($_nrUmowySrc, 11)] = 'nr_umowy';
+if (strpos($_tpSrc, 'extrafield:') === 0) $facture_field_assigns[substr($_tpSrc, 11)] = 'tp';
+
 $has_facture_fields = false;
 
-if (!empty($ef_display->attributes['facture']['label'])) {
-    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
-    print '<tr class="liste_titre">';
-    print '<td style="width:28px;"></td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_COLUMN') . '</td>';
-    print '<td style="text-align:right; width:120px;"></td>';
-    print '</tr>';
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
+print '<td>' . $langs->trans('KSEF_ASSIGN_COLUMN') . '</td>';
+print '<td style="text-align:right; width:120px;"></td>';
+print '</tr>';
 
-    foreach ($ef_display->attributes['facture']['label'] as $fname => $flabel) {
+if (!empty($ef_entity->attributes['facture']['label'])) {
+    foreach ($ef_entity->attributes['facture']['label'] as $fname => $flabel) {
         if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_display->attributes['facture']['type'][$fname] ?? '';
+        $ftype = $ef_entity->attributes['facture']['type'][$fname] ?? '';
         if (in_array($ftype, $_dodUnsupportedTypes)) continue;
         $has_facture_fields = true;
-        $checked = isset($enabled_fields[$fname]) ? ' checked' : '';
-        $currentTarget = isset($enabled_fields[$fname]) ? $enabled_fields[$fname] : 'dodatkowy';
         $translatedLabel = $langs->trans($flabel);
 
+        // Determine current assignment
+        $currentAssign = '';
+        if (isset($facture_field_assigns[$fname])) {
+            $currentAssign = $facture_field_assigns[$fname];
+        } elseif (isset($enabled_fields[$fname])) {
+            $currentAssign = $enabled_fields[$fname]; // 'dodatkowy' or 'stopka'
+        }
+
+        // Build assignment options based on field type
+        $assignOptions = array('' => $langs->trans('KSEF_ASSIGN_NONE'));
+        $assignOptions['dodatkowy'] = $langs->trans('KSEF_ASSIGN_DODATKOWY');
+        $assignOptions['stopka'] = $langs->trans('KSEF_ASSIGN_STOPKA');
+        if (in_array($ftype, array('varchar', 'text', 'int'))) {
+            $assignOptions['nr_zamowienia'] = $langs->trans('KSEF_ASSIGN_NR_ZAMOWIENIA');
+            $assignOptions['nr_umowy'] = $langs->trans('KSEF_ASSIGN_NR_UMOWY');
+        }
+        if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
+            $assignOptions['tp'] = $langs->trans('KSEF_ASSIGN_TP');
+        }
+
         $optsText = '';
-        if ($ftype === 'select' && !empty($ef_display->attributes['facture']['param'][$fname]['options'])) {
+        if ($ftype === 'select' && !empty($ef_entity->attributes['facture']['param'][$fname]['options'])) {
             $optLines = array();
-            foreach ($ef_display->attributes['facture']['param'][$fname]['options'] as $ocode => $olabel) {
+            foreach ($ef_entity->attributes['facture']['param'][$fname]['options'] as $ocode => $olabel) {
                 $optLines[] = $ocode . '|' . $olabel;
             }
             $optsText = implode("\n", $optLines);
         }
 
-        $isModuleField = (($ef_display->attributes['facture']['langfile'][$fname] ?? '') === 'ksef@ksef');
+        $isModuleField = (($ef_entity->attributes['facture']['langfile'][$fname] ?? '') === 'ksef@ksef');
         $externalBadge = $isModuleField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
 
         print '<tr class="oddeven">';
-        print '<td><input type="checkbox" name="KSEF_EF_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
         print '<td>' . dol_escape_htmltag($translatedLabel) . $externalBadge . '</td>';
         print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
         print '<td>' . dol_escape_htmltag($ftype) . '</td>';
-        print '<td><select name="KSEF_EF_TARGET_' . dol_escape_htmltag($fname) . '" class="flat">';
-        print '<option value="dodatkowy"' . ($currentTarget === 'dodatkowy' ? ' selected' : '') . '>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_DODATKOWY') . '</option>';
-        print '<option value="stopka"' . ($currentTarget === 'stopka' ? ' selected' : '') . '>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_STOPKA') . '</option>';
+        print '<td><select name="KSEF_ASSIGN_FACTURE_' . dol_escape_htmltag($fname) . '" class="flat ksef-assign-facture" data-field="' . dol_escape_htmltag($fname) . '" onchange="ksefSyncFromRow(\'facture\', this)">';
+        foreach ($assignOptions as $aval => $alabel) {
+            print '<option value="' . dol_escape_htmltag($aval) . '"' . ($currentAssign === $aval ? ' selected' : '') . '>' . $alabel . '</option>';
+        }
         print '</select></td>';
         print '<td style="text-align:right;">';
         print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
@@ -901,205 +1117,177 @@ if (!empty($ef_display->attributes['facture']['label'])) {
         print ' data-type="' . dol_escape_htmltag($ftype) . '"';
         print ' data-options="' . dol_escape_htmltag($optsText) . '"';
         print ' data-target="facture">';
-        print img_edit() . '</a> ';
-        print '<a href="#" onclick="ksefDeleteExtrafield(this); return false;"';
+        print img_edit() . '</a>';
+        print '<a href="#" style="margin-left:20px;" onclick="ksefDeleteExtrafield(this); return false;"';
         print ' data-code="' . dol_escape_htmltag($fname) . '"';
         print ' data-target="facture">';
         print img_delete() . '</a>';
         print '</td>';
         print '</tr>';
     }
-    print '</table>';
 }
 if (!$has_facture_fields) {
-    print '<br><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_NO_EXTRAFIELDS') . '</span>';
+    print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_NO_EXTRAFIELDS') . '</span></td></tr>';
 }
-print '</div>';
 
-// Line extrafields
-print '<div style="margin-bottom:16px; padding:15px; border:1px solid #ddd; border-radius:4px; background:#f8f9fa;">';
-print '<strong>' . $langs->trans('KSEF_DODATKOWY_OPIS_DET_TITLE') . '</strong><br>';
-print '<span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_DET_SUBTITLE') . '</span>';
+ksefPrintInlineCreateForm('facture', $langs);
+print '</table>';
 
-$ef_display->fetch_name_optionals_label('facturedet');
-$current_det_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_DET_EXTRAFIELDS', '');
-$enabled_det_fields = array_filter(array_map('trim', explode(',', $current_det_config)));
-$has_det_fields = false;
+// Third Party fields
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_DODATKOWY_OPIS_SOCIETE_TITLE') . '</td></tr>';
 
-if (!empty($ef_display->attributes['facturedet']['label'])) {
-    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
-    print '<tr class="liste_titre">';
-    print '<td style="width:28px;"></td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
-    print '<td style="text-align:right; width:120px;"></td>';
-    print '</tr>';
-
-    foreach ($ef_display->attributes['facturedet']['label'] as $fname => $flabel) {
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_IDNABYWCY_SOURCE'), $langs->trans('KSEF_IDNABYWCY_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
+$idnabywcy_options = array(
+    'disabled' => $langs->trans('KSEF_IDNABYWCY_SOURCE_DISABLED'),
+    'code_client' => $langs->trans('KSEF_IDNABYWCY_SOURCE_CODE_CLIENT'),
+);
+if (!empty($ef_entity->attributes['societe']['label'])) {
+    foreach ($ef_entity->attributes['societe']['label'] as $fname => $flabel) {
         if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_display->attributes['facturedet']['type'][$fname] ?? '';
-        if (in_array($ftype, $_dodUnsupportedTypes)) continue;
-        $has_det_fields = true;
-        $checked = in_array($fname, $enabled_det_fields) ? ' checked' : '';
-        $translatedLabel = $langs->trans($flabel);
-
-        $detOptsText = '';
-        if ($ftype === 'select' && !empty($ef_display->attributes['facturedet']['param'][$fname]['options'])) {
-            $detOptLines = array();
-            foreach ($ef_display->attributes['facturedet']['param'][$fname]['options'] as $ocode => $olabel) {
-                $detOptLines[] = $ocode . '|' . $olabel;
-            }
-            $detOptsText = implode("\n", $detOptLines);
+        $ftype = $ef_entity->attributes['societe']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'text', 'int'))) {
+            $idnabywcy_options['thirdparty_extrafield:' . $fname] = $langs->trans('KSEF_IDNABYWCY_SOURCE_EXTRAFIELD') . ': ' . $langs->trans($flabel);
         }
-
-        $isModuleDetField = (($ef_display->attributes['facturedet']['langfile'][$fname] ?? '') === 'ksef@ksef');
-        $detExternalBadge = $isModuleDetField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
-
-        print '<tr class="oddeven">';
-        print '<td><input type="checkbox" name="KSEF_EF_DET_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
-        print '<td>' . dol_escape_htmltag($translatedLabel) . $detExternalBadge . '</td>';
-        print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
-        print '<td>' . dol_escape_htmltag($ftype) . '</td>';
-        print '<td style="text-align:right;">';
-        print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
-        print ' data-code="' . dol_escape_htmltag($fname) . '"';
-        print ' data-label="' . dol_escape_htmltag($translatedLabel) . '"';
-        print ' data-type="' . dol_escape_htmltag($ftype) . '"';
-        print ' data-options="' . dol_escape_htmltag($detOptsText) . '"';
-        print ' data-target="facturedet">';
-        print img_edit() . '</a> ';
-        print '<a href="#" onclick="ksefDeleteExtrafield(this); return false;"';
-        print ' data-code="' . dol_escape_htmltag($fname) . '"';
-        print ' data-target="facturedet">';
-        print img_delete() . '</a>';
-        print '</td>';
-        print '</tr>';
     }
-    print '</table>';
 }
-if (!$has_det_fields) {
-    print '<br><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_DET_NO_EXTRAFIELDS') . '</span>';
-}
-print '</div>';
+$current_idnabywcy = getDolGlobalString('KSEF_IDNABYWCY_SOURCE', 'disabled');
+print $form->selectarray('KSEF_IDNABYWCY_SOURCE', $idnabywcy_options, $current_idnabywcy, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'societe\', \'KSEF_IDNABYWCY_SOURCE\', \'idnabywcy\', \'thirdparty_extrafield:\')"', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
 
-// Product extrafields
-print '<div style="margin-bottom:16px; padding:15px; border:1px solid #ddd; border-radius:4px; background:#f8f9fa;">';
-print '<strong>' . $langs->trans('KSEF_DODATKOWY_OPIS_PRODUCT_TITLE') . '</strong><br>';
-print '<span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PRODUCT_SUBTITLE') . '</span>';
-
-$ef_display->fetch_name_optionals_label('product');
-$current_prod_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS', '');
-$enabled_prod_fields = array_filter(array_map('trim', explode(',', $current_prod_config)));
-$has_prod_fields = false;
-
-if (!empty($ef_display->attributes['product']['label'])) {
-    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
-    print '<tr class="liste_titre">';
-    print '<td style="width:28px;"></td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
-    print '<td style="text-align:right; width:120px;"></td>';
-    print '</tr>';
-
-    foreach ($ef_display->attributes['product']['label'] as $fname => $flabel) {
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_NR_UMOWY_SOURCE'), $langs->trans('KSEF_NR_UMOWY_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
+$umowy_options = array(
+    'disabled' => $langs->trans('KSEF_NR_UMOWY_SOURCE_DISABLED'),
+);
+if (!empty($ef_entity->attributes['societe']['label'])) {
+    foreach ($ef_entity->attributes['societe']['label'] as $fname => $flabel) {
         if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_display->attributes['product']['type'][$fname] ?? '';
-        if (in_array($ftype, $_dodUnsupportedTypes)) continue;
-        $has_prod_fields = true;
-        $checked = in_array($fname, $enabled_prod_fields) ? ' checked' : '';
-        $translatedLabel = $langs->trans($flabel);
-
-        $prodOptsText = '';
-        if ($ftype === 'select' && !empty($ef_display->attributes['product']['param'][$fname]['options'])) {
-            $prodOptLines = array();
-            foreach ($ef_display->attributes['product']['param'][$fname]['options'] as $ocode => $olabel) {
-                $prodOptLines[] = $ocode . '|' . $olabel;
-            }
-            $prodOptsText = implode("\n", $prodOptLines);
+        $ftype = $ef_entity->attributes['societe']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'text', 'int'))) {
+            $umowy_options['thirdparty_extrafield:' . $fname] = $langs->trans('KSEF_NR_UMOWY_SOURCE_THIRDPARTY_EXTRAFIELD') . ': ' . $langs->trans($flabel);
         }
-
-        $isModuleProdField = (($ef_display->attributes['product']['langfile'][$fname] ?? '') === 'ksef@ksef');
-        $prodExternalBadge = $isModuleProdField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
-
-        print '<tr class="oddeven">';
-        print '<td><input type="checkbox" name="KSEF_EF_PROD_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
-        print '<td>' . dol_escape_htmltag($translatedLabel) . $prodExternalBadge . '</td>';
-        print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
-        print '<td>' . dol_escape_htmltag($ftype) . '</td>';
-        print '<td style="text-align:right;">';
-        print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
-        print ' data-code="' . dol_escape_htmltag($fname) . '"';
-        print ' data-label="' . dol_escape_htmltag($translatedLabel) . '"';
-        print ' data-type="' . dol_escape_htmltag($ftype) . '"';
-        print ' data-options="' . dol_escape_htmltag($prodOptsText) . '"';
-        print ' data-target="product">';
-        print img_edit() . '</a> ';
-        print '<a href="#" onclick="ksefDeleteExtrafield(this); return false;"';
-        print ' data-code="' . dol_escape_htmltag($fname) . '"';
-        print ' data-target="product">';
-        print img_delete() . '</a>';
-        print '</td>';
-        print '</tr>';
     }
-    print '</table>';
 }
-if (!$has_prod_fields) {
-    print '<br><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PRODUCT_NO_EXTRAFIELDS') . '</span>';
+if (!empty($ef_entity->attributes['facture']['label'])) {
+    foreach ($ef_entity->attributes['facture']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['facture']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'text', 'int'))) {
+            $umowy_options['extrafield:' . $fname] = $langs->trans('KSEF_NR_UMOWY_SOURCE_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+        }
+    }
 }
-print '</div>';
+$current_umowy = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
+print $form->selectarray('KSEF_NR_UMOWY_SOURCE', $umowy_options, $current_umowy, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'societe\', \'KSEF_NR_UMOWY_SOURCE\', \'nr_umowy\', \'thirdparty_extrafield:\'); ksefSyncFromDropdown(\'facture\', \'KSEF_NR_UMOWY_SOURCE\', \'nr_umowy\', \'extrafield:\')"', 0, 0, 0, '', 'minwidth300');
+if (count($umowy_options) <= 1) {
+    print '<br><span class="small">' . $langs->trans('KSEF_NR_UMOWY_NO_EXTRAFIELDS') . '</span>';
+}
+print '</td></tr>';
 
-// Societe extrafields
-print '<div style="margin-bottom:16px; padding:15px; border:1px solid #ddd; border-radius:4px; background:#f8f9fa;">';
-print '<strong>' . $langs->trans('KSEF_DODATKOWY_OPIS_SOCIETE_TITLE') . '</strong><br>';
-print '<span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_SOCIETE_SUBTITLE') . '</span>';
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_TP_SOURCE'), $langs->trans('KSEF_TP_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
+$tp_options = array(
+    'disabled' => $langs->trans('KSEF_TP_SOURCE_DISABLED'),
+);
+if (!empty($ef_entity->attributes['societe']['label'])) {
+    foreach ($ef_entity->attributes['societe']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['societe']['type'][$fname] ?? '';
+        if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
+            $tp_options['thirdparty_extrafield:' . $fname] = $langs->trans('KSEF_TP_SOURCE_THIRDPARTY_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+        }
+    }
+}
+if (!empty($ef_entity->attributes['facture']['label'])) {
+    foreach ($ef_entity->attributes['facture']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['facture']['type'][$fname] ?? '';
+        if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
+            $tp_options['extrafield:' . $fname] = $langs->trans('KSEF_TP_SOURCE_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+        }
+    }
+}
+$current_tp = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
+print $form->selectarray('KSEF_TP_SOURCE', $tp_options, $current_tp, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'societe\', \'KSEF_TP_SOURCE\', \'tp\', \'thirdparty_extrafield:\'); ksefSyncFromDropdown(\'facture\', \'KSEF_TP_SOURCE\', \'tp\', \'extrafield:\')"', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
 
-$ef_display->fetch_name_optionals_label('societe');
+// Extrafields
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_ENTITY_BOX_EXTRAFIELDS_THIRDPARTY') . '</td></tr>';
+
+print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_SOCIETE_SUBTITLE') . '</span></td></tr>';
+
+// Determine current assignment
 $current_soc_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', '');
 $enabled_soc_fields = ksefParseEfConfig($current_soc_config);
+$_idnSrc = getDolGlobalString('KSEF_IDNABYWCY_SOURCE', 'disabled');
+$_nrUmowySrc2 = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
+$_tpSrc2 = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
+$societe_field_assigns = array();
+if (strpos($_idnSrc, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_idnSrc, 22)] = 'idnabywcy';
+if (strpos($_nrUmowySrc2, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_nrUmowySrc2, 22)] = 'nr_umowy';
+if (strpos($_tpSrc2, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_tpSrc2, 22)] = 'tp';
+
 $has_soc_fields = false;
 
-if (!empty($ef_display->attributes['societe']['label'])) {
-    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
-    print '<tr class="liste_titre">';
-    print '<td style="width:28px;"></td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_COLUMN') . '</td>';
-    print '<td style="text-align:right; width:120px;"></td>';
-    print '</tr>';
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
+print '<td>' . $langs->trans('KSEF_ASSIGN_COLUMN') . '</td>';
+print '<td style="text-align:right; width:120px;"></td>';
+print '</tr>';
 
-    foreach ($ef_display->attributes['societe']['label'] as $fname => $flabel) {
+if (!empty($ef_entity->attributes['societe']['label'])) {
+    foreach ($ef_entity->attributes['societe']['label'] as $fname => $flabel) {
         if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_display->attributes['societe']['type'][$fname] ?? '';
+        $ftype = $ef_entity->attributes['societe']['type'][$fname] ?? '';
         if (in_array($ftype, $_dodUnsupportedTypes)) continue;
         $has_soc_fields = true;
-        $checked = isset($enabled_soc_fields[$fname]) ? ' checked' : '';
-        $currentTarget = isset($enabled_soc_fields[$fname]) ? $enabled_soc_fields[$fname] : 'dodatkowy';
         $translatedLabel = $langs->trans($flabel);
 
+        $currentAssign = '';
+        if (isset($societe_field_assigns[$fname])) {
+            $currentAssign = $societe_field_assigns[$fname];
+        } elseif (isset($enabled_soc_fields[$fname])) {
+            $currentAssign = $enabled_soc_fields[$fname];
+        }
+
+        $assignOptions = array('' => $langs->trans('KSEF_ASSIGN_NONE'));
+        $assignOptions['dodatkowy'] = $langs->trans('KSEF_ASSIGN_DODATKOWY');
+        $assignOptions['stopka'] = $langs->trans('KSEF_ASSIGN_STOPKA');
+        if (in_array($ftype, array('varchar', 'text', 'int'))) {
+            $assignOptions['idnabywcy'] = $langs->trans('KSEF_ASSIGN_IDNABYWCY');
+            $assignOptions['nr_umowy'] = $langs->trans('KSEF_ASSIGN_NR_UMOWY');
+        }
+        if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
+            $assignOptions['tp'] = $langs->trans('KSEF_ASSIGN_TP');
+        }
+
         $socOptsText = '';
-        if ($ftype === 'select' && !empty($ef_display->attributes['societe']['param'][$fname]['options'])) {
+        if ($ftype === 'select' && !empty($ef_entity->attributes['societe']['param'][$fname]['options'])) {
             $socOptLines = array();
-            foreach ($ef_display->attributes['societe']['param'][$fname]['options'] as $ocode => $olabel) {
+            foreach ($ef_entity->attributes['societe']['param'][$fname]['options'] as $ocode => $olabel) {
                 $socOptLines[] = $ocode . '|' . $olabel;
             }
             $socOptsText = implode("\n", $socOptLines);
         }
 
-        $isModuleSocField = (($ef_display->attributes['societe']['langfile'][$fname] ?? '') === 'ksef@ksef');
+        $isModuleSocField = (($ef_entity->attributes['societe']['langfile'][$fname] ?? '') === 'ksef@ksef');
         $socExternalBadge = $isModuleSocField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
 
         print '<tr class="oddeven">';
-        print '<td><input type="checkbox" name="KSEF_EF_SOC_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
         print '<td>' . dol_escape_htmltag($translatedLabel) . $socExternalBadge . '</td>';
         print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
         print '<td>' . dol_escape_htmltag($ftype) . '</td>';
-        print '<td><select name="KSEF_EF_SOC_TARGET_' . dol_escape_htmltag($fname) . '" class="flat">';
-        print '<option value="dodatkowy"' . ($currentTarget === 'dodatkowy' ? ' selected' : '') . '>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_DODATKOWY') . '</option>';
-        print '<option value="stopka"' . ($currentTarget === 'stopka' ? ' selected' : '') . '>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_STOPKA') . '</option>';
+        print '<td><select name="KSEF_ASSIGN_SOCIETE_' . dol_escape_htmltag($fname) . '" class="flat ksef-assign-societe" data-field="' . dol_escape_htmltag($fname) . '" onchange="ksefSyncFromRow(\'societe\', this)">';
+        foreach ($assignOptions as $aval => $alabel) {
+            print '<option value="' . dol_escape_htmltag($aval) . '"' . ($currentAssign === $aval ? ' selected' : '') . '>' . $alabel . '</option>';
+        }
         print '</select></td>';
         print '<td style="text-align:right;">';
         print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
@@ -1108,71 +1296,335 @@ if (!empty($ef_display->attributes['societe']['label'])) {
         print ' data-type="' . dol_escape_htmltag($ftype) . '"';
         print ' data-options="' . dol_escape_htmltag($socOptsText) . '"';
         print ' data-target="societe">';
-        print img_edit() . '</a> ';
-        print '<a href="#" onclick="ksefDeleteExtrafield(this); return false;"';
+        print img_edit() . '</a>';
+        print '<a href="#" style="margin-left:20px;" onclick="ksefDeleteExtrafield(this); return false;"';
         print ' data-code="' . dol_escape_htmltag($fname) . '"';
         print ' data-target="societe">';
         print img_delete() . '</a>';
         print '</td>';
         print '</tr>';
     }
-    print '</table>';
 }
 if (!$has_soc_fields) {
-    print '<br><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_SOCIETE_NO_EXTRAFIELDS') . '</span>';
+    print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_SOCIETE_NO_EXTRAFIELDS') . '</span></td></tr>';
 }
-print '</div>';
 
-// Project extrafields
-print '<div style="margin-bottom:16px; padding:15px; border:1px solid #ddd; border-radius:4px; background:#f8f9fa;">';
-print '<strong>' . $langs->trans('KSEF_DODATKOWY_OPIS_PROJECT_TITLE') . '</strong><br>';
-print '<span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PROJECT_SUBTITLE') . '</span>';
+ksefPrintInlineCreateForm('societe', $langs);
+print '</table>';
 
-$ef_display->fetch_name_optionals_label('projet');
+// Product fields
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_DODATKOWY_OPIS_PRODUCT_TITLE') . '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_GTU_SOURCE'), $langs->trans('KSEF_GTU_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
+$gtu_options = array(
+    'disabled' => $langs->trans('KSEF_GTU_SOURCE_DISABLED'),
+);
+if (!empty($ef_entity->attributes['product']['label'])) {
+    foreach ($ef_entity->attributes['product']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['product']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'select', 'text'))) {
+            $gtu_options['product_extrafield:' . $fname] = $langs->trans('KSEF_GTU_SOURCE_PRODUCT_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+        }
+    }
+}
+$current_gtu = getDolGlobalString('KSEF_GTU_SOURCE', 'disabled');
+print $form->selectarray('KSEF_GTU_SOURCE', $gtu_options, $current_gtu, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'product\', \'KSEF_GTU_SOURCE\', \'gtu\', \'product_extrafield:\')"', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_PROCEDURA_SOURCE'), $langs->trans('KSEF_PROCEDURA_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
+$procedura_options = array(
+    'disabled' => $langs->trans('KSEF_PROCEDURA_SOURCE_DISABLED'),
+);
+if (!empty($ef_entity->attributes['product']['label'])) {
+    foreach ($ef_entity->attributes['product']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['product']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'select', 'text'))) {
+            $procedura_options['product_extrafield:' . $fname] = $langs->trans('KSEF_PROCEDURA_SOURCE_PRODUCT_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+        }
+    }
+}
+$current_procedura = getDolGlobalString('KSEF_PROCEDURA_SOURCE', 'disabled');
+print $form->selectarray('KSEF_PROCEDURA_SOURCE', $procedura_options, $current_procedura, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'product\', \'KSEF_PROCEDURA_SOURCE\', \'procedura\', \'product_extrafield:\')"', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
+// Per-product VAT exemption basis
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_ZWOLNIENIE_PRODUCT_FIELD'), $langs->trans('KSEF_ZWOLNIENIE_PRODUCT_FIELD_Help')) . '</td>';
+print '<td colspan="4">';
+$zwolnienie_field_options = array('' => $langs->trans('KSEF_ZWOLNIENIE_PRODUCT_FIELD_DISABLED'));
+if (!empty($ef_entity->attributes['product']['label'])) {
+    foreach ($ef_entity->attributes['product']['label'] as $fname => $flabel) {
+        $ftype = $ef_entity->attributes['product']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'text', 'select'))) {
+            $zwolnienie_field_options[$fname] = $langs->trans($flabel) . ' (' . $fname . ')';
+        }
+    }
+}
+$current_zwolnienie_field = getDolGlobalString('KSEF_ZWOLNIENIE_PRODUCT_FIELD', '');
+print $form->selectarray('KSEF_ZWOLNIENIE_PRODUCT_FIELD', $zwolnienie_field_options, $current_zwolnienie_field, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'product\', \'KSEF_ZWOLNIENIE_PRODUCT_FIELD\', \'zwolnienie\', \'\')"', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
+// Extrafields
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_ENTITY_BOX_EXTRAFIELDS_PRODUCT') . '</td></tr>';
+
+print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PRODUCT_SUBTITLE') . '</span></td></tr>';
+
+// Determine current assignment
+$current_prod_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS', '');
+$enabled_prod_fields = array_filter(array_map('trim', explode(',', $current_prod_config)));
+$_gtuSrc = getDolGlobalString('KSEF_GTU_SOURCE', 'disabled');
+$_procSrc = getDolGlobalString('KSEF_PROCEDURA_SOURCE', 'disabled');
+$_zwolProdField = getDolGlobalString('KSEF_ZWOLNIENIE_PRODUCT_FIELD', '');
+$product_field_assigns = array();
+if (strpos($_gtuSrc, 'product_extrafield:') === 0) $product_field_assigns[substr($_gtuSrc, 19)] = 'gtu';
+if (strpos($_procSrc, 'product_extrafield:') === 0) $product_field_assigns[substr($_procSrc, 19)] = 'procedura';
+if ($_zwolProdField !== '') $product_field_assigns[$_zwolProdField] = 'zwolnienie';
+
+$has_prod_fields = false;
+
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
+print '<td>' . $langs->trans('KSEF_ASSIGN_COLUMN') . '</td>';
+print '<td style="text-align:right; width:120px;"></td>';
+print '</tr>';
+
+if (!empty($ef_entity->attributes['product']['label'])) {
+    foreach ($ef_entity->attributes['product']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['product']['type'][$fname] ?? '';
+        if (in_array($ftype, $_dodUnsupportedTypes)) continue;
+        $has_prod_fields = true;
+        $translatedLabel = $langs->trans($flabel);
+
+        $currentAssign = '';
+        if (isset($product_field_assigns[$fname])) {
+            $currentAssign = $product_field_assigns[$fname];
+        } elseif (in_array($fname, $enabled_prod_fields)) {
+            $currentAssign = 'dodatkowy';
+        }
+
+        $assignOptions = array('' => $langs->trans('KSEF_ASSIGN_NONE'));
+        $assignOptions['dodatkowy'] = $langs->trans('KSEF_ASSIGN_DODATKOWY');
+        if (in_array($ftype, array('varchar', 'select', 'text'))) {
+            $assignOptions['gtu'] = $langs->trans('KSEF_ASSIGN_GTU');
+            $assignOptions['procedura'] = $langs->trans('KSEF_ASSIGN_PROCEDURA');
+            $assignOptions['zwolnienie'] = $langs->trans('KSEF_ASSIGN_ZWOLNIENIE');
+        }
+
+        $prodOptsText = '';
+        if ($ftype === 'select' && !empty($ef_entity->attributes['product']['param'][$fname]['options'])) {
+            $prodOptLines = array();
+            foreach ($ef_entity->attributes['product']['param'][$fname]['options'] as $ocode => $olabel) {
+                $prodOptLines[] = $ocode . '|' . $olabel;
+            }
+            $prodOptsText = implode("\n", $prodOptLines);
+        }
+
+        $isModuleProdField = (($ef_entity->attributes['product']['langfile'][$fname] ?? '') === 'ksef@ksef');
+        $prodExternalBadge = $isModuleProdField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
+
+        print '<tr class="oddeven">';
+        print '<td>' . dol_escape_htmltag($translatedLabel) . $prodExternalBadge . '</td>';
+        print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
+        print '<td>' . dol_escape_htmltag($ftype) . '</td>';
+        print '<td><select name="KSEF_ASSIGN_PRODUCT_' . dol_escape_htmltag($fname) . '" class="flat ksef-assign-product" data-field="' . dol_escape_htmltag($fname) . '" onchange="ksefSyncFromRow(\'product\', this)">';
+        foreach ($assignOptions as $aval => $alabel) {
+            print '<option value="' . dol_escape_htmltag($aval) . '"' . ($currentAssign === $aval ? ' selected' : '') . '>' . $alabel . '</option>';
+        }
+        print '</select></td>';
+        print '<td style="text-align:right;">';
+        print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
+        print ' data-code="' . dol_escape_htmltag($fname) . '"';
+        print ' data-label="' . dol_escape_htmltag($translatedLabel) . '"';
+        print ' data-type="' . dol_escape_htmltag($ftype) . '"';
+        print ' data-options="' . dol_escape_htmltag($prodOptsText) . '"';
+        print ' data-target="product">';
+        print img_edit() . '</a>';
+        print '<a href="#" style="margin-left:20px;" onclick="ksefDeleteExtrafield(this); return false;"';
+        print ' data-code="' . dol_escape_htmltag($fname) . '"';
+        print ' data-target="product">';
+        print img_delete() . '</a>';
+        print '</td>';
+        print '</tr>';
+    }
+}
+if (!$has_prod_fields) {
+    print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PRODUCT_NO_EXTRAFIELDS') . '</span></td></tr>';
+}
+
+ksefPrintInlineCreateForm('product', $langs);
+print '</table>';
+
+// Invoice lines
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_DODATKOWY_OPIS_DET_TITLE') . '</td></tr>';
+
+// Line item settings
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA'), $langs->trans('KSEF_FA3_INCLUDE_NRKLIENTA_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_NRKLIENTA" id="KSEF_FA3_INCLUDE_NRKLIENTA" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_NRKLIENTA') ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_NRKLIENTA">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_INDEKS'), $langs->trans('KSEF_FA3_INCLUDE_INDEKS_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_INDEKS" id="KSEF_FA3_INCLUDE_INDEKS" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_INDEKS') ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_INDEKS">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_GTIN'), $langs->trans('KSEF_FA3_INCLUDE_GTIN_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_GTIN" id="KSEF_FA3_INCLUDE_GTIN" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_GTIN') ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_GTIN">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_UNIT'), $langs->trans('KSEF_FA3_INCLUDE_UNIT_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_UNIT" id="KSEF_FA3_INCLUDE_UNIT" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_UNIT') ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_UNIT">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_UU_ID'), $langs->trans('KSEF_FA3_INCLUDE_UU_ID_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_UU_ID" id="KSEF_FA3_INCLUDE_UU_ID" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_UU_ID') ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_UU_ID">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// Extrafields
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_ENTITY_BOX_EXTRAFIELDS_INVOICELINE') . '</td></tr>';
+
+print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_DET_SUBTITLE') . '</span></td></tr>';
+
+$current_det_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_DET_EXTRAFIELDS', '');
+$enabled_det_fields = array_filter(array_map('trim', explode(',', $current_det_config)));
+$has_det_fields = false;
+
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
+print '<td>' . $langs->trans('KSEF_ASSIGN_COLUMN') . '</td>';
+print '<td style="text-align:right; width:120px;"></td>';
+print '</tr>';
+
+if (!empty($ef_entity->attributes['facturedet']['label'])) {
+    foreach ($ef_entity->attributes['facturedet']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['facturedet']['type'][$fname] ?? '';
+        if (in_array($ftype, $_dodUnsupportedTypes)) continue;
+        $has_det_fields = true;
+        $translatedLabel = $langs->trans($flabel);
+
+        $currentAssign = in_array($fname, $enabled_det_fields) ? 'dodatkowy' : '';
+
+        $detOptsText = '';
+        if ($ftype === 'select' && !empty($ef_entity->attributes['facturedet']['param'][$fname]['options'])) {
+            $detOptLines = array();
+            foreach ($ef_entity->attributes['facturedet']['param'][$fname]['options'] as $ocode => $olabel) {
+                $detOptLines[] = $ocode . '|' . $olabel;
+            }
+            $detOptsText = implode("\n", $detOptLines);
+        }
+
+        $isModuleDetField = (($ef_entity->attributes['facturedet']['langfile'][$fname] ?? '') === 'ksef@ksef');
+        $detExternalBadge = $isModuleDetField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
+
+        print '<tr class="oddeven">';
+        print '<td>' . dol_escape_htmltag($translatedLabel) . $detExternalBadge . '</td>';
+        print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
+        print '<td>' . dol_escape_htmltag($ftype) . '</td>';
+        print '<td><select name="KSEF_ASSIGN_FACTUREDET_' . dol_escape_htmltag($fname) . '" class="flat">';
+        print '<option value=""' . ($currentAssign === '' ? ' selected' : '') . '>' . $langs->trans('KSEF_ASSIGN_NONE') . '</option>';
+        print '<option value="dodatkowy"' . ($currentAssign === 'dodatkowy' ? ' selected' : '') . '>' . $langs->trans('KSEF_ASSIGN_DODATKOWY') . '</option>';
+        print '</select></td>';
+        print '<td style="text-align:right;">';
+        print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
+        print ' data-code="' . dol_escape_htmltag($fname) . '"';
+        print ' data-label="' . dol_escape_htmltag($translatedLabel) . '"';
+        print ' data-type="' . dol_escape_htmltag($ftype) . '"';
+        print ' data-options="' . dol_escape_htmltag($detOptsText) . '"';
+        print ' data-target="facturedet">';
+        print img_edit() . '</a>';
+        print '<a href="#" style="margin-left:20px;" onclick="ksefDeleteExtrafield(this); return false;"';
+        print ' data-code="' . dol_escape_htmltag($fname) . '"';
+        print ' data-target="facturedet">';
+        print img_delete() . '</a>';
+        print '</td>';
+        print '</tr>';
+    }
+}
+if (!$has_det_fields) {
+    print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_DET_NO_EXTRAFIELDS') . '</span></td></tr>';
+}
+
+ksefPrintInlineCreateForm('facturedet', $langs);
+print '</table>';
+
+// Project fields
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_DODATKOWY_OPIS_PROJECT_TITLE') . '</td></tr>';
+
+// Extrafields
+print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_ENTITY_BOX_EXTRAFIELDS_PROJECT') . '</td></tr>';
+
+print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PROJECT_SUBTITLE') . '</span></td></tr>';
+
 $current_proj_config = getDolGlobalString('KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', '');
 $enabled_proj_fields = ksefParseEfConfig($current_proj_config);
 $has_proj_fields = false;
 
-if (!empty($ef_display->attributes['projet']['label'])) {
-    print '<table class="noborder" style="width:100%; margin-bottom:8px;">';
-    print '<tr class="liste_titre">';
-    print '<td style="width:28px;"></td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
-    print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_COLUMN') . '</td>';
-    print '<td style="text-align:right; width:120px;"></td>';
-    print '</tr>';
+print '<tr class="liste_titre">';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_CODE') . '</td>';
+print '<td>' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</td>';
+print '<td>' . $langs->trans('KSEF_ASSIGN_COLUMN') . '</td>';
+print '<td style="text-align:right; width:120px;"></td>';
+print '</tr>';
 
-    foreach ($ef_display->attributes['projet']['label'] as $fname => $flabel) {
+if (!empty($ef_entity->attributes['projet']['label'])) {
+    foreach ($ef_entity->attributes['projet']['label'] as $fname => $flabel) {
         if (strpos($fname, 'ksef_') === 0) continue;
-        $ftype = $ef_display->attributes['projet']['type'][$fname] ?? '';
+        $ftype = $ef_entity->attributes['projet']['type'][$fname] ?? '';
         if (in_array($ftype, $_dodUnsupportedTypes)) continue;
         $has_proj_fields = true;
-        $checked = isset($enabled_proj_fields[$fname]) ? ' checked' : '';
-        $currentTarget = isset($enabled_proj_fields[$fname]) ? $enabled_proj_fields[$fname] : 'dodatkowy';
         $translatedLabel = $langs->trans($flabel);
 
+        $currentAssign = isset($enabled_proj_fields[$fname]) ? $enabled_proj_fields[$fname] : '';
+
         $projOptsText = '';
-        if ($ftype === 'select' && !empty($ef_display->attributes['projet']['param'][$fname]['options'])) {
+        if ($ftype === 'select' && !empty($ef_entity->attributes['projet']['param'][$fname]['options'])) {
             $projOptLines = array();
-            foreach ($ef_display->attributes['projet']['param'][$fname]['options'] as $ocode => $olabel) {
+            foreach ($ef_entity->attributes['projet']['param'][$fname]['options'] as $ocode => $olabel) {
                 $projOptLines[] = $ocode . '|' . $olabel;
             }
             $projOptsText = implode("\n", $projOptLines);
         }
 
-        $isModuleProjField = (($ef_display->attributes['projet']['langfile'][$fname] ?? '') === 'ksef@ksef');
+        $isModuleProjField = (($ef_entity->attributes['projet']['langfile'][$fname] ?? '') === 'ksef@ksef');
         $projExternalBadge = $isModuleProjField ? '' : ' <span class="badge badge-secondary" title="' . dol_escape_htmltag($langs->trans('KSEF_EXTRAFIELD_EXTERNAL')) . '">ext</span>';
 
         print '<tr class="oddeven">';
-        print '<td><input type="checkbox" name="KSEF_EF_PROJ_' . dol_escape_htmltag($fname) . '" value="1"' . $checked . '></td>';
         print '<td>' . dol_escape_htmltag($translatedLabel) . $projExternalBadge . '</td>';
         print '<td><code>' . dol_escape_htmltag($fname) . '</code></td>';
         print '<td>' . dol_escape_htmltag($ftype) . '</td>';
-        print '<td><select name="KSEF_EF_PROJ_TARGET_' . dol_escape_htmltag($fname) . '" class="flat">';
-        print '<option value="dodatkowy"' . ($currentTarget === 'dodatkowy' ? ' selected' : '') . '>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_DODATKOWY') . '</option>';
-        print '<option value="stopka"' . ($currentTarget === 'stopka' ? ' selected' : '') . '>' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_STOPKA') . '</option>';
+        print '<td><select name="KSEF_ASSIGN_PROJET_' . dol_escape_htmltag($fname) . '" class="flat">';
+        print '<option value=""' . ($currentAssign === '' ? ' selected' : '') . '>' . $langs->trans('KSEF_ASSIGN_NONE') . '</option>';
+        print '<option value="dodatkowy"' . ($currentAssign === 'dodatkowy' ? ' selected' : '') . '>' . $langs->trans('KSEF_ASSIGN_DODATKOWY') . '</option>';
+        print '<option value="stopka"' . ($currentAssign === 'stopka' ? ' selected' : '') . '>' . $langs->trans('KSEF_ASSIGN_STOPKA') . '</option>';
         print '</select></td>';
         print '<td style="text-align:right;">';
         print '<a href="#" onclick="ksefEditExtrafield(this); return false;"';
@@ -1181,167 +1633,200 @@ if (!empty($ef_display->attributes['projet']['label'])) {
         print ' data-type="' . dol_escape_htmltag($ftype) . '"';
         print ' data-options="' . dol_escape_htmltag($projOptsText) . '"';
         print ' data-target="projet">';
-        print img_edit() . '</a> ';
-        print '<a href="#" onclick="ksefDeleteExtrafield(this); return false;"';
+        print img_edit() . '</a>';
+        print '<a href="#" style="margin-left:20px;" onclick="ksefDeleteExtrafield(this); return false;"';
         print ' data-code="' . dol_escape_htmltag($fname) . '"';
         print ' data-target="projet">';
         print img_delete() . '</a>';
         print '</td>';
         print '</tr>';
     }
-    print '</table>';
 }
 if (!$has_proj_fields) {
-    print '<br><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PROJECT_NO_EXTRAFIELDS') . '</span>';
+    print '<tr class="oddeven"><td colspan="5"><span class="small">' . $langs->trans('KSEF_DODATKOWY_OPIS_PROJECT_NO_EXTRAFIELDS') . '</span></td></tr>';
 }
-print '</div>';
 
-// Create/Edit form area
-$createToken = newToken();
-print '<details id="ksef_ef_create_details" style="margin-top:8px; padding:8px; border:1px dashed #bbb; border-radius:4px;">';
-print '<summary style="cursor:pointer; font-weight:bold;">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD') . '</summary>';
-print '<div id="ksef_ef_form_area" data-mode="create" style="margin-top:8px;">';
-print '<input type="hidden" form="ksef_ef_create_form" name="token" value="' . $createToken . '">';
-print '<input type="hidden" form="ksef_ef_edit_form" name="token" value="' . $createToken . '">';
-print '<table class="noborder" style="width:100%;">';
-print '<tr><td style="width:160px;"><label for="ksef_ef_target">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TARGET') . '</label></td>';
-print '<td><select id="ksef_ef_target" form="ksef_ef_create_form" name="ef_target" class="flat minwidth300">';
-print '<option value="facture">' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_FACTURE') . '</option>';
-print '<option value="facturedet">' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_FACTUREDET') . '</option>';
-print '<option value="product">' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_PRODUCT') . '</option>';
-print '<option value="societe">' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_SOCIETE') . '</option>';
-print '<option value="projet">' . $langs->trans('KSEF_DODATKOWY_OPIS_TARGET_PROJECT') . '</option>';
-print '</select></td></tr>';
-print '<tr><td style="width:160px;"><label for="ksef_ef_label">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_LABEL') . '</label></td>';
-print '<td><input type="text" id="ksef_ef_label" form="ksef_ef_create_form" name="ef_label" class="flat minwidth300"></td></tr>';
-print '<tr id="ksef_ef_code_row" style="display:none;"><td>' . $langs->trans('KSEF_DODATKOWY_OPIS_INTERNAL_CODE') . '</td>';
-print '<td><code id="ksef_ef_code_display"></code><input type="hidden" id="ksef_ef_code" form="ksef_ef_edit_form" name="ef_code" value=""></td></tr>';
-print '<tr><td><label for="ksef_ef_type">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_TYPE') . '</label></td>';
-print '<td><select id="ksef_ef_type" form="ksef_ef_create_form" name="ef_type" onchange="ksefToggleOptions()">';
-print '<option value="varchar">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_VARCHAR') . '</option>';
-print '<option value="text">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_TEXT') . '</option>';
-print '<option value="int">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_INT') . '</option>';
-print '<option value="double">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DOUBLE') . '</option>';
-print '<option value="date">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATE') . '</option>';
-print '<option value="datetime">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_DATETIME') . '</option>';
-print '<option value="select">' . $langs->trans('KSEF_DODATKOWY_OPIS_TYPE_SELECT') . '</option>';
-print '</select></td></tr>';
-print '<tr id="ksef_ef_options_row" style="display:none;"><td><label for="ksef_ef_options">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_OPTIONS') . '</label></td>';
-print '<td><textarea id="ksef_ef_options" form="ksef_ef_create_form" name="ef_options" class="flat" rows="4" style="width:100%;"></textarea></td></tr>';
-print '<tr><td></td><td>';
-print '<button type="submit" id="ksef_ef_create_btn" form="ksef_ef_create_form" class="button">' . $langs->trans('KSEF_DODATKOWY_OPIS_CREATE_FIELD_SUBMIT') . '</button> ';
-print '<button type="submit" id="ksef_ef_edit_btn" form="ksef_ef_edit_form" class="button" style="display:none;">' . $langs->trans('KSEF_DODATKOWY_OPIS_EDIT_FIELD_SUBMIT') . '</button> ';
-print '<button type="button" id="ksef_ef_cancel_btn" class="button" style="display:none;" onclick="ksefCancelEdit()">' . $langs->trans('Cancel') . '</button>';
-print '</td></tr>';
-print '</table>';
-print '</div>';
-print '</details>';
-
-print '</td></tr>';
-
+ksefPrintInlineCreateForm('projet', $langs);
 print '</table>';
 
-// extrafield
 print '<script>
-function ksefToggleOptions() {
-    var typeSel = document.getElementById("ksef_ef_type");
-    document.getElementById("ksef_ef_options_row").style.display = (typeSel.value === "select") ? "" : "none";
+function ksefToggleOptions(entity) {
+    var typeSel = document.getElementById("ksef_ef_type_" + entity);
+    document.getElementById("ksef_ef_options_row_" + entity).style.display = (typeSel.value === "select") ? "" : "none";
 }
 function ksefEditExtrafield(btn) {
-    var area = document.getElementById("ksef_ef_form_area");
+    var entity = btn.dataset.target || "facture";
+    var area = document.getElementById("ksef_ef_form_area_" + entity);
     area.dataset.mode = "edit";
     var code = btn.dataset.code || "";
-    document.getElementById("ksef_ef_label").value = btn.dataset.label || "";
-    document.getElementById("ksef_ef_code").value = code;
-    document.getElementById("ksef_ef_code_display").textContent = code;
-    document.getElementById("ksef_ef_code_row").style.display = "";
-    document.getElementById("ksef_ef_type").value = btn.dataset.type || "varchar";
-    document.getElementById("ksef_ef_options").value = btn.dataset.options || "";
-    document.getElementById("ksef_ef_target").value = btn.dataset.target || "facture";
-    var inputs = ["ksef_ef_label", "ksef_ef_type", "ksef_ef_options", "ksef_ef_target"];
-    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_edit_form"); });
-    document.getElementById("ksef_ef_create_btn").style.display = "none";
-    document.getElementById("ksef_ef_edit_btn").style.display = "";
-    document.getElementById("ksef_ef_cancel_btn").style.display = "";
-    ksefToggleOptions();
-    document.getElementById("ksef_ef_create_details").open = true;
-    document.getElementById("ksef_ef_label").focus();
+    document.getElementById("ksef_ef_label_" + entity).value = btn.dataset.label || "";
+    document.getElementById("ksef_ef_code_" + entity).value = code;
+    document.getElementById("ksef_ef_code_display_" + entity).textContent = code;
+    document.getElementById("ksef_ef_code_row_" + entity).style.display = "";
+    document.getElementById("ksef_ef_type_" + entity).value = btn.dataset.type || "varchar";
+    document.getElementById("ksef_ef_options_" + entity).value = btn.dataset.options || "";
+    var inputs = ["ksef_ef_label_" + entity, "ksef_ef_type_" + entity, "ksef_ef_options_" + entity];
+    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_edit_form_" + entity); });
+    document.getElementById("ksef_ef_create_btn_" + entity).style.display = "none";
+    document.getElementById("ksef_ef_edit_btn_" + entity).style.display = "";
+    document.getElementById("ksef_ef_cancel_btn_" + entity).style.display = "";
+    ksefToggleOptions(entity);
+    document.getElementById("ksef_ef_create_details_" + entity).open = true;
+    document.getElementById("ksef_ef_label_" + entity).focus();
 }
-function ksefCancelEdit() {
-    var area = document.getElementById("ksef_ef_form_area");
+function ksefCancelEdit(entity) {
+    var area = document.getElementById("ksef_ef_form_area_" + entity);
     area.dataset.mode = "create";
-    document.getElementById("ksef_ef_label").value = "";
-    document.getElementById("ksef_ef_code").value = "";
-    document.getElementById("ksef_ef_code_display").textContent = "";
-    document.getElementById("ksef_ef_code_row").style.display = "none";
-    document.getElementById("ksef_ef_type").value = "varchar";
-    document.getElementById("ksef_ef_options").value = "";
-    document.getElementById("ksef_ef_target").value = "facture";
-    var inputs = ["ksef_ef_label", "ksef_ef_type", "ksef_ef_options", "ksef_ef_target"];
-    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_create_form"); });
-    document.getElementById("ksef_ef_create_btn").style.display = "";
-    document.getElementById("ksef_ef_edit_btn").style.display = "none";
-    document.getElementById("ksef_ef_cancel_btn").style.display = "none";
-    ksefToggleOptions();
+    document.getElementById("ksef_ef_label_" + entity).value = "";
+    document.getElementById("ksef_ef_code_" + entity).value = "";
+    document.getElementById("ksef_ef_code_display_" + entity).textContent = "";
+    document.getElementById("ksef_ef_code_row_" + entity).style.display = "none";
+    document.getElementById("ksef_ef_type_" + entity).value = "varchar";
+    document.getElementById("ksef_ef_options_" + entity).value = "";
+    var inputs = ["ksef_ef_label_" + entity, "ksef_ef_type_" + entity, "ksef_ef_options_" + entity];
+    inputs.forEach(function(id) { document.getElementById(id).setAttribute("form", "ksef_ef_create_form_" + entity); });
+    document.getElementById("ksef_ef_create_btn_" + entity).style.display = "";
+    document.getElementById("ksef_ef_edit_btn_" + entity).style.display = "none";
+    document.getElementById("ksef_ef_cancel_btn_" + entity).style.display = "none";
+    ksefToggleOptions(entity);
 }
 function ksefDeleteExtrafield(btn) {
     var code = btn.dataset.code;
-    var target = btn.dataset.target || "facture";
+    var entity = btn.dataset.target || "facture";
     var msg = "' . dol_escape_js($langs->transnoentities('KSEF_DODATKOWY_OPIS_DELETE_CONFIRM', '__CODE__')) . '".replace("__CODE__", code);
     if (confirm(msg)) {
-        document.getElementById("ksef_ef_delete_code").value = code;
-        document.getElementById("ksef_ef_delete_target").value = target;
-        document.getElementById("ksef_ef_delete_form").submit();
+        document.getElementById("ksef_ef_delete_code_" + entity).value = code;
+        document.getElementById("ksef_ef_delete_form_" + entity).submit();
     }
 }
+
+var ksefFieldSourceMap = {
+    facture: {
+        nr_zamowienia: {dropdown: "KSEF_NR_ZAMOWIENIA_SOURCE", prefix: "extrafield:"},
+        nr_umowy: {dropdown: "KSEF_NR_UMOWY_SOURCE", prefix: "extrafield:"},
+        tp: {dropdown: "KSEF_TP_SOURCE", prefix: "extrafield:"}
+    },
+    societe: {
+        idnabywcy: {dropdown: "KSEF_IDNABYWCY_SOURCE", prefix: "thirdparty_extrafield:"},
+        nr_umowy: {dropdown: "KSEF_NR_UMOWY_SOURCE", prefix: "thirdparty_extrafield:"},
+        tp: {dropdown: "KSEF_TP_SOURCE", prefix: "thirdparty_extrafield:"}
+    },
+    product: {
+        gtu: {dropdown: "KSEF_GTU_SOURCE", prefix: "product_extrafield:"},
+        procedura: {dropdown: "KSEF_PROCEDURA_SOURCE", prefix: "product_extrafield:"},
+        zwolnienie: {dropdown: "KSEF_ZWOLNIENIE_PRODUCT_FIELD", prefix: ""}
+    }
+};
+
+function ksefSyncFromRow(entity, sel) {
+    var fieldName = sel.dataset.field;
+    var assignVal = sel.value;
+    var map = ksefFieldSourceMap[entity] || {};
+
+    if (map[assignVal]) {
+        var cfg = map[assignVal];
+        var dd = document.querySelector("select[name=\"" + cfg.dropdown + "\"]");
+        if (dd) {
+            var newVal = cfg.prefix + fieldName;
+            // Add option if it does not exist
+            var found = false;
+            for (var i = 0; i < dd.options.length; i++) {
+                if (dd.options[i].value === newVal) { found = true; break; }
+            }
+            if (!found) {
+                var opt = document.createElement("option");
+                opt.value = newVal;
+                opt.text = fieldName;
+                dd.appendChild(opt);
+            }
+            dd.value = newVal;
+        }
+
+        var entityUpper = entity.charAt(0).toUpperCase() + entity.slice(1);
+        if (entity === "facture") entityUpper = "FACTURE";
+        else if (entity === "societe") entityUpper = "SOCIETE";
+        else if (entity === "product") entityUpper = "PRODUCT";
+        document.querySelectorAll("select.ksef-assign-" + entity).forEach(function(other) {
+            if (other !== sel && other.value === assignVal) {
+                other.value = "";
+            }
+        });
+    }
+
+    var noteValues = ["", "dodatkowy", "stopka"];
+    if (noteValues.indexOf(assignVal) !== -1) {
+        Object.keys(map).forEach(function(srcKey) {
+            var cfg = map[srcKey];
+            var dd = document.querySelector("select[name=\"" + cfg.dropdown + "\"]");
+            if (dd && dd.value === cfg.prefix + fieldName) {
+                dd.value = "disabled";
+            }
+        });
+    }
+}
+
+function ksefSyncFromDropdown(entity, dropdownName, assignKey, prefix) {
+    var dd = document.querySelector("select[name=\"" + dropdownName + "\"]");
+    if (!dd) return;
+    var val = dd.value;
+    var rows = document.querySelectorAll("select.ksef-assign-" + entity);
+
+    rows.forEach(function(sel) {
+        if (sel.value === assignKey) {
+            sel.value = "";
+        }
+    });
+
+    if (prefix !== "" && val.indexOf(prefix) === 0) {
+        var efName = val.substring(prefix.length);
+        rows.forEach(function(sel) {
+            if (sel.dataset.field === efName) {
+                sel.value = assignKey;
+            }
+        });
+    } else if (prefix === "" && val !== "" && val !== "disabled") {
+        rows.forEach(function(sel) {
+            if (sel.dataset.field === val) {
+                sel.value = assignKey;
+            }
+        });
+    }
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+    var presetSel = document.getElementById("KSEF_DEFAULT_CORRECTION_REASON_PRESET");
+    if (presetSel) {
+        presetSel.addEventListener("change", function() {
+            var customInput = document.getElementById("KSEF_DEFAULT_CORRECTION_REASON_CUSTOM");
+            if (this.value === "custom") {
+                customInput.style.display = "inline-block";
+                customInput.focus();
+            } else {
+                customInput.style.display = "none";
+                customInput.value = "";
+            }
+        });
+    }
+
+    Object.keys(ksefFieldSourceMap).forEach(function(entity) {
+        var map = ksefFieldSourceMap[entity];
+        Object.keys(map).forEach(function(assignKey) {
+            var cfg = map[assignKey];
+            var dd = document.querySelector("select[name=\"" + cfg.dropdown + "\"]");
+            if (dd) {
+                dd.addEventListener("change", function() {
+                    ksefSyncFromDropdown(entity, cfg.dropdown, assignKey, cfg.prefix);
+                });
+            }
+        });
+    });
+});
 </script>';
 
-// Default Payment Settings
-print '<br><table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_DEFAULT_PAYMENT_CONFIG") . '</td></tr>';
-
-// Payment terms
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DEFAULT_PAYMENT_TERM'), $langs->trans('KSEF_DEFAULT_PAYMENT_TERM_Help')) . '</td>';
-print '<td>';
-print $form->getSelectConditionsPaiements(getDolGlobalInt('KSEF_DEFAULT_PAYMENT_TERM_ID', 0), 'KSEF_DEFAULT_PAYMENT_TERM_ID', -1, 1, 0, 'minwidth300');
-print '</td></tr>';
-
-// Payment method
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DEFAULT_PAYMENT_METHOD'), $langs->trans('KSEF_DEFAULT_PAYMENT_METHOD_Help')) . '</td>';
-print '<td>';
-print $form->select_types_paiements(getDolGlobalString('KSEF_DEFAULT_PAYMENT_METHOD_ID', ''), 'KSEF_DEFAULT_PAYMENT_METHOD_ID', '', 0, 1, 0, 0, 1, 'minwidth300', 1);
-print '</td></tr>';
-
-// Bank account
-print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans('KSEF_DEFAULT_BANK_ACCOUNT'), $langs->trans('KSEF_DEFAULT_BANK_ACCOUNT_Help')) . '</td>';
-print '<td>';
-print $form->select_comptes(getDolGlobalString('KSEF_DEFAULT_BANK_ACCOUNT_ID', ''), 'KSEF_DEFAULT_BANK_ACCOUNT_ID', 0, '', 1, '', 0, 'minwidth300', 1);
-print '</td></tr>';
-
-print '</table>';
-
+// Save button
 print '<div class="center" style="margin-top: 10px;">';
 print '<input type="submit" class="button button-save" value="' . $langs->trans("Save") . '">';
 print '</div>';
-print '</form>';
-
-// extrafield create/edit/delete actions
-print '<form id="ksef_ef_create_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="action" value="create_dodatkowy_extrafield">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-print '</form>';
-print '<form id="ksef_ef_edit_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="action" value="edit_dodatkowy_extrafield">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-print '</form>';
-print '<form id="ksef_ef_delete_form" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
-print '<input type="hidden" name="action" value="delete_dodatkowy_extrafield">';
-print '<input type="hidden" name="token" value="' . newToken() . '">';
-print '<input type="hidden" id="ksef_ef_delete_code" name="ef_code" value="">';
-print '<input type="hidden" id="ksef_ef_delete_target" name="ef_target" value="facture">';
 print '</form>';
 
 // Customer Exclusions
@@ -1352,10 +1837,9 @@ print '<table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_CUSTOMER_EXCLUSIONS") . '</td></tr>';
 
 print '<tr class="oddeven">';
-print '<td>' . $form->textwithpicto($langs->trans("KSEF_EXCLUDED_CUSTOMERS"), $langs->trans("KSEF_EXCLUDED_CUSTOMERS_Help")) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans("KSEF_EXCLUDED_CUSTOMERS"), $langs->trans("KSEF_EXCLUDED_CUSTOMERS_Help")) . '</td>';
 print '<td>';
 
-// Show current exclusions
 $_excludedStr = getDolGlobalString('KSEF_EXCLUDED_CUSTOMERS', '');
 if (!empty($_excludedStr)) {
     $excluded_ids = array_filter(array_map('trim', explode(',', $_excludedStr)));
@@ -1371,7 +1855,6 @@ if (!empty($_excludedStr)) {
     print '<br><br>';
 }
 
-// Add new exclusion
 print '<select id="excluded_customer" name="socid" class="flat minwidth300">';
 print '<option value="">-- ' . $langs->trans("KSEF_SelectCustomer") . ' --</option>';
 $sql = "SELECT rowid, nom FROM " . MAIN_DB_PREFIX . "societe WHERE client IN (1, 3) AND entity = " . $conf->entity . " ORDER BY nom";
@@ -1388,6 +1871,24 @@ print '</td></tr>';
 
 print '</table>';
 print '</form>';
+
+$_efEntities = array('facture', 'societe', 'product', 'facturedet', 'projet');
+foreach ($_efEntities as $_ent) {
+	print '<form id="ksef_ef_create_form_' . $_ent . '" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+	print '<input type="hidden" name="action" value="create_dodatkowy_extrafield">';
+	print '<input type="hidden" name="token" value="' . newToken() . '">';
+	print '</form>';
+	print '<form id="ksef_ef_edit_form_' . $_ent . '" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+	print '<input type="hidden" name="action" value="edit_dodatkowy_extrafield">';
+	print '<input type="hidden" name="token" value="' . newToken() . '">';
+	print '</form>';
+	print '<form id="ksef_ef_delete_form_' . $_ent . '" method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+	print '<input type="hidden" name="action" value="delete_dodatkowy_extrafield">';
+	print '<input type="hidden" name="token" value="' . newToken() . '">';
+	print '<input type="hidden" id="ksef_ef_delete_code_' . $_ent . '" name="ef_code" value="">';
+	print '<input type="hidden" name="ef_target" value="' . $_ent . '">';
+	print '</form>';
+}
 
 print dol_get_fiche_end();
 

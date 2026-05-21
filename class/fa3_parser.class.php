@@ -94,6 +94,7 @@ class FA3Parser
                 'header' => $this->parseNaglowek($xpath),
                 'seller' => $this->parsePodmiot1($xpath),
                 'buyer' => $this->parsePodmiot2($xpath),
+                'buyer_before' => $this->parsePodmiot2K($xpath),
                 'invoice' => $invoice,
                 'vat_summary' => $this->parseVatSummary($xpath),
                 'lines' => $lineData['lines'],
@@ -275,6 +276,63 @@ class FA3Parser
 
 
     /**
+     * @brief Parse Podmiot2K (buyer) from correction invoice
+     * @param $xpath DOMXPath
+     * @return array|null Original buyer or null
+     * @called_by parse()
+     * @calls getValue()
+     */
+    private function parsePodmiot2K($xpath)
+    {
+        $node = $xpath->query('//fa:Fa/fa:Podmiot2K');
+        if ($node->length == 0) {
+            return null;
+        }
+
+        $buyer = array(
+            'nip' => '',
+            'name' => '',
+            'country' => 'PL',
+            'address' => '',
+            'kod_ue' => null,
+            'nr_vat_ue' => null,
+        );
+
+        $buyer['nip'] = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:DaneIdentyfikacyjne/fa:NIP');
+        if (empty($buyer['nip'])) {
+            $nrIdNode = $xpath->query('//fa:Fa/fa:Podmiot2K/fa:DaneIdentyfikacyjne/fa:NrID');
+            if ($nrIdNode->length > 0) {
+                $buyer['nip'] = $nrIdNode->item(0)->textContent;
+                $kodKraju = $nrIdNode->item(0)->getAttribute('kodKraju');
+                if ($kodKraju) {
+                    $buyer['country'] = $kodKraju;
+                }
+            }
+        }
+
+        $buyer['name'] = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:DaneIdentyfikacyjne/fa:Nazwa');
+
+        $kodUE = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:DaneIdentyfikacyjne/fa:KodUE', null);
+        if ($kodUE) $buyer['kod_ue'] = $kodUE;
+        $nrVatUE = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:DaneIdentyfikacyjne/fa:NrVatUE', null);
+        if ($nrVatUE) $buyer['nr_vat_ue'] = $nrVatUE;
+
+        $adresKodKraju = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:Adres/fa:KodKraju');
+        if ($adresKodKraju) {
+            $buyer['country'] = $adresKodKraju;
+        }
+
+        $buyer['address'] = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:Adres/fa:AdresL1');
+        $adresL2 = $this->getValue($xpath, '//fa:Fa/fa:Podmiot2K/fa:Adres/fa:AdresL2');
+        if ($adresL2) {
+            $buyer['address'] .= "\n" . $adresL2;
+        }
+
+        return $buyer;
+    }
+
+
+    /**
      * @brief Parse invoice data section (Fa)
      * @param $xpath DOMXPath object
      * @return array Invoice data
@@ -319,22 +377,29 @@ class FA3Parser
         $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_1');   // 23%
         $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_2');   // 8%
         $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_3');   // 5%
-        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_1'); // 0%
-        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_2'); // Exempt
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_1'); // 0% KR
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_2'); // 0% WDT
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_6_3'); // 0% export
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_7');   // zwolnione (zw)
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_8');   // nie podlega I (np I)
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_9');   // nie podlega II (np II)
+        $totalNet += $this->getDecimal($xpath, '//fa:Fa/fa:P_13_10');  // odwrotne obciążenie (oo)
 
         // VAT amounts by rate
         $totalVat += $this->getDecimal($xpath, '//fa:Fa/fa:P_14_1');   // 23%
         $totalVat += $this->getDecimal($xpath, '//fa:Fa/fa:P_14_2');   // 8%
         $totalVat += $this->getDecimal($xpath, '//fa:Fa/fa:P_14_3');   // 5%
+        $totalVat += $this->getDecimal($xpath, '//fa:Fa/fa:P_14_4');   // 4%
+        $totalVat += $this->getDecimal($xpath, '//fa:Fa/fa:P_14_5');   // 3%
 
         $invoice['total_net'] = $totalNet;
         $invoice['total_vat'] = $totalVat;
 
         // P_15: Total
         $p15raw = $this->getValue($xpath, '//fa:Fa/fa:P_15', null);
-        if ($p15raw) $invoice['total_amount'] = $p15raw;
+        if ($p15raw !== null && $p15raw !== '') $invoice['total_amount'] = $p15raw;
         $p15 = $this->getDecimal($xpath, '//fa:Fa/fa:P_15');
-        $invoice['total_gross'] = $p15 ?: ($totalNet + $totalVat);
+        $invoice['total_gross'] = ($p15 !== null && $p15 !== false) ? $p15 : ($totalNet + $totalVat);
 
         return $invoice;
     }

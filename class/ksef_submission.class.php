@@ -52,6 +52,7 @@ class KsefSubmission extends CommonObject
     public $offline_detected_reason;
     public $original_invoice_hash;
     public $fa3_creation_date;
+    public $invoice_type;
     const STATUS_PENDING = 'PENDING';
     const STATUS_SUBMITTED = 'SUBMITTED';
     const STATUS_ACCEPTED = 'ACCEPTED';
@@ -114,7 +115,8 @@ class KsefSubmission extends CommonObject
         $sql .= "offline_mode,";
         $sql .= "offline_deadline,";
         $sql .= "offline_detected_reason,";
-        $sql .= "original_invoice_hash";
+        $sql .= "original_invoice_hash,";
+        $sql .= "invoice_type";
         $sql .= ")";
         $sql .= " VALUES (";
         $sql .= " " . (int)$this->fk_facture . ",";
@@ -138,7 +140,8 @@ class KsefSubmission extends CommonObject
         $sql .= " " . ($this->offline_mode ? "'" . $this->db->escape($this->offline_mode) . "'" : "NULL") . ",";
         $sql .= " " . ($this->offline_deadline ? (int)$this->offline_deadline : "NULL") . ",";
         $sql .= " " . ($this->offline_detected_reason ? "'" . $this->db->escape($this->offline_detected_reason) . "'" : "NULL") . ",";
-        $sql .= " " . ($this->original_invoice_hash ? "'" . $this->db->escape($this->original_invoice_hash) . "'" : "NULL");
+        $sql .= " " . ($this->original_invoice_hash ? "'" . $this->db->escape($this->original_invoice_hash) . "'" : "NULL") . ",";
+        $sql .= " " . ($this->invoice_type ? "'" . $this->db->escape($this->invoice_type) . "'" : "NULL");
         $sql .= ")";
 
         dol_syslog(get_class($this) . "::create", LOG_DEBUG);
@@ -280,7 +283,8 @@ class KsefSubmission extends CommonObject
         $sql .= " t.offline_mode,";
         $sql .= " t.offline_deadline,";
         $sql .= " t.offline_detected_reason,";
-        $sql .= " t.original_invoice_hash";
+        $sql .= " t.original_invoice_hash,";
+        $sql .= " t.invoice_type";
         $sql .= " FROM " . MAIN_DB_PREFIX . $this->table_element . " as t";
 
         if ($id > 0) {
@@ -323,6 +327,7 @@ class KsefSubmission extends CommonObject
                 $this->offline_deadline = $obj->offline_deadline;
                 $this->offline_detected_reason = $obj->offline_detected_reason;
                 $this->original_invoice_hash = $obj->original_invoice_hash;
+                $this->invoice_type = $obj->invoice_type;
             }
             $this->db->free($resql);
             return 1;

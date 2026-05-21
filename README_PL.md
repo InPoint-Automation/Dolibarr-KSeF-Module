@@ -12,15 +12,21 @@ Ten moduł integruje Dolibarr (https://www.dolibarr.org/) z KSeF (Krajowy System
 
 ## Funkcje
 
-- Generowanie plików FA(3) XML
-- Podpisywanie i przesyłanie plików FA(3) XML do KSeF
-- Pobieranie UPO (Potwierdzenie przesłania)
-- Automatyczne dodawanie kodu QR do PDF faktury
-- Możliwość wykluczenia stron trzecich z KSeF (np. generyczne podmioty B2C)
-- Dodawanie pól KSeF (w tym klikalny numer KSeF i status wysyłki do weryfikacji) na głównej stronie faktury
-- Dodawanie strony z przeglądem wszystkich przesyłek, a także karty KSeF na stronie faktury
-- Pobieranie i przetwarzanie faktur przychodzących z KSeF
-- Generowanie wizualizacji faktur w stylu KSeF
+- Generowanie, podpisywanie i przesyłanie faktur FA(3) XML do KSeF (tryb online i offline)
+- Faktury korygujące (KOR) ze śledzeniem łańcucha korekt i rozliczeniem płatności
+- Pobieranie, synchronizacja i import faktur przychodzących z dopasowaniem dostawców i produktów
+- Import zbiorczy z automatycznym tworzeniem dostawców i produktów
+- Monitoring systemu KSeF przez API Latarnia/Lighthouse z ostrzeżeniami o awariach
+- Integracja kursów walut NBP dla faktur walutowych
+- Wizualizacje PDF faktur w stylu KSeF dla faktur wychodzących i przychodzących
+- Automatyczny kod QR na fakturach PDF (online + offline)
+- Obsługa zwolnień podatkowych z konfigurowalną podstawą prawną
+- Konfigurowalne notatki, pola dodatkowe oraz numery zamówień/umów w FA(3) XML
+- Uwierzytelnianie per środowisko (Test/Demo/Produkcja) tokenem lub certyfikatem
+- Endpointy REST API
+- Wykluczenie kontrahentów z KSeF (np. klienci B2C)
+- Wbudowana dokumentacja "Jak używać"
+- Zaplanowane zadania do sprawdzania statusu, synchronizacji przychodzących, ponawiania offline i monitoringu KSeF
 
 ## Dokumentacja
 Pełna dokumentacja modułu znajduje się w zakładce "Jak używać". Przygotowaliśmy jednak również bardziej szczegółową dokumentację ze zrzutami ekranów, dostępną na naszej stronie internetowej w języku angielskim i polskim. Jeśli napotkasz problemy lub uważasz, że czegoś brakuje, daj nam znać, chętnie to uzupełnimy!
@@ -31,7 +37,7 @@ https://inpointautomation.com/pl/content/modul-ksef-dla-dolibarr/
 
 ### Wymagania systemowe
 
-- Dolibarr: Na dzień 02 grudnia 2025 testowano jedynie na v22.0.3
+- Dolibarr: Przetestowano i działa na v22 i nowszych
 - PHP: 7.4 lub nowsza
 - Rozszerzenia PHP:
     - `OpenSSL`
@@ -43,7 +49,7 @@ https://inpointautomation.com/pl/content/modul-ksef-dla-dolibarr/
 
 - Ważny polski NIP (numer identyfikacyjny podatnika) skonfigurowany w ustawieniach firmy.
 - Aktywne konto KSeF z tokenem autoryzacji wygenerowanym z oficjalnego portalu KSeF dla wybranego środowiska
-  (Test lub Produkcja).
+  (Test, Demo lub Produkcja).
 
 ## Instalacja
 
@@ -63,9 +69,7 @@ Instrukcje budowania znajdują się w README dla deweloperów [DEV.md](DEV.md)
 
 ## Plan rozwoju
 
-- [X] ~~Dodaj wykluczenie KSeF do kart Stron trzecich (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)~~
-- [ ] Generator FA(3) nie jest jeszcze kompletny dla niektórych przypadków brzegowych
-- [ ] Napraw problemy php-scoper z phpseclib
+Brak bieżących elementów planu rozwoju. Zapraszamy do zgłaszania propozycji funkcji przez [GitHub Issues](https://github.com/InPoint-Automation/Dolibarr-KSeF-Module/issues).
 
 ## Licencje
 
@@ -85,11 +89,9 @@ Ten moduł zawiera obecnie następujące biblioteki stron trzecich w katalogu `l
 - [paragonie/constant_time_encoding](https://github.com/paragonie/constant_time_encoding) - Licencja MIT - Wykorzystywana
   przez phpseclib
 
-- [composer](https://github.com/composer/composer) - Licencja MIT - Pliki Composera znajdują się obecnie w katalogu
-  vendor do czasu naprawy scopingu i nie są używane w czasie działania
+- [composer](https://github.com/composer/composer) - Licencja MIT - Pliki Composera w katalogu vendor, nie są używane w czasie działania
 
-> Zależności są obecnie niescoped i dystrybuowane w stanie niezmiennym z Composera. Przyszłe wersje będą
-> używać [humbug/php-scoper](https://github.com/humbug/php-scoper) do scopingu zależności
+
 
 ## Zastrzeżenie prawne
 
@@ -109,10 +111,24 @@ możliwość nauki na podstawie ich modułu, ten projekt zajęłby znacznie wię
 Ten moduł został opracowany przez InPoint Automation Sp. z o.o.
 
 ## Changelog (In English)
+>### Version v1.4.0
+>- Dolibarr replacement invoices repurposed as full correction invoices. Supports both differential and before/after line methods, and allows for corrections to corrections.
+>- Replacement invoices support correcting partially and fully paid invoices
+>- Entire correction chain is shown on each of the invoices within that chain
+>- Hooks for simple/double-entry accounting to manage correction deltas - may not fully support cash-basis tax mode.
+>- Add confirmation (can be disabled in outgoing invoice options) with PDF preview for upload and PDF preview after completion with save/print options
+>- Add Buyer ID, EORI fields
+>- Add GTU, procedura, and UUID support for line items
+>- FP and TP invoice flag support
+>- Reorganized outgoing invoice settings page (again)
+>- Fix VAT rate buckets for export/exempt/reverse charge
+>- KSeF-style PDF fixed formatting and add page numbering
+>- Update How-To-Use page with the above changes
+
 >### Version v1.3.7
 >- Fix blank icon in settings (Issue #21)
 >- Settings page split into 4 tabs: General, Authentication, Outgoing, Incoming
->- Per-environment auth credentials — switch TEST/DEMO/PRODUCTION without re-entering tokens
+>- Per-environment auth credentials - switch TEST/DEMO/PRODUCTION without re-entering tokens
 >- Setting to disable the "Validate and Upload" button for making validate/enter payment/then upload to KSeF a bit more obvious
 >- Add default invoice payment settings to set terms, method, and account during invoice creation automagically, can be overridden by thirdparty values
 >- VAT rate code helper in General settings to enable/disable ZW/RC/NP/NP2/WDT/EX codes
@@ -122,7 +138,7 @@ Ten moduł został opracowany przez InPoint Automation Sp. z o.o.
 >- Project extrafields support
 >- Third Party extrafields support in XML output
 >- Extrafields assigned as per-line extrafields result in these fields appearing on the invoice line-items, allowing for per-item additional notes that link back to invoice line number
->- Extrafield notes now have target — each field routable to either DodatkowyOpis or StopkaFaktury
+>- Extrafield notes now have target - each field routable to either DodatkowyOpis or StopkaFaktury
 >- Fix XML build error after extrafield deletion
 >- After payment is recorded, payment status sent in FA(3) XML (Issue #24)
 >- Multiple payments status and payment detail breakdown for incoming invoices
@@ -316,11 +332,3 @@ Ten moduł został opracowany przez InPoint Automation Sp. z o.o.
 
 >### Version v0.1.0
 >Initial Release
->
->Known issues:
->- FA(3) builder is yet not complete for some edge cases
->- Offline24 mode handling is missing, and it does not generate the Offline QR Codes yet
->- php-scoper issues with phpseclib - need to rework scoping
->
->Uncompleted tasks:
->- Add KSeF exclusion to Third Party tabs (https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788/9)

@@ -57,6 +57,9 @@ CREATE TABLE llx_ksef_submissions
     tms                    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     import_key             VARCHAR(14),
 
+-- Invoice Type
+    invoice_type           VARCHAR(10)  DEFAULT NULL,
+
 -- Offline Mode
     offline_mode           VARCHAR(20)  DEFAULT NULL,
     offline_deadline       INTEGER      DEFAULT NULL,

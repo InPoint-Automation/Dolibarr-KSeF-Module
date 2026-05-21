@@ -229,7 +229,7 @@ class ActionsKSEF
     {
         dol_include_once('/ksef/lib/ksef.lib.php');
         dol_include_once('/ksef/class/ksef_submission.class.php');
-        global $langs, $conf, $user, $db;
+        global $langs, $conf, $user, $db, $form;
 
         // Validate & Add Payment
         if ($parameters['currentcontext'] == 'invoicesuppliercard' && !empty($object) && !empty($object->id)) {
@@ -339,7 +339,7 @@ class ActionsKSEF
         </style>';
 
             print '<script>
-            function ksefShowSpinner(event, button) {
+            function ksefShowSpinner(event, button, formId) {
                 event.preventDefault();
                 var overlay = document.getElementById("ksef-processing-overlay");
                 if (!overlay) {
@@ -351,7 +351,11 @@ class ActionsKSEF
                 var textEl = overlay.querySelector(".ksef-processing-text");
                 if (textEl && button.getAttribute("data-processing-text")) textEl.textContent = button.getAttribute("data-processing-text");
                 overlay.classList.add("active");
-                setTimeout(function() { window.location.href = button.href; }, 100);
+                if (formId) {
+                    setTimeout(function() { document.getElementById(formId).submit(); }, 100);
+                } else {
+                    setTimeout(function() { window.location.href = button.href; }, 100);
+                }
                 return false;
             }
         </script>';
@@ -359,7 +363,8 @@ class ActionsKSEF
         }
 
         if ($object->statut == 0 && !empty($object->lines) && !getDolGlobalString('KSEF_DISABLE_VALIDATE_AND_UPLOAD')) {
-            print '<a class="butAction" ' . $button_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_validate_and_submit&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_ValidatingAndSubmitting') . '..." onclick="return ksefShowSpinner(event, this);">' . $langs->trans('KSEF_ValidateAndUpload') . '</a>';
+            $validate_action = getDolGlobalInt('KSEF_CONFIRM_BEFORE_UPLOAD', 1) ? 'ksef_validate_and_preview' : 'ksef_validate_and_submit';
+            print '<a class="butAction" ' . $button_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=' . $validate_action . '&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_ValidatingAndSubmitting') . '..." onclick="return ksefShowSpinner(event, this);">' . $langs->trans('KSEF_ValidateAndUpload') . '</a>';
             return 0;
         }
 
@@ -376,6 +381,16 @@ class ActionsKSEF
                     });
                 });
                 </script>';
+
+                // "Create correction" button
+                if ($object->type == Facture::TYPE_STANDARD || $object->type == Facture::TYPE_REPLACEMENT) {
+                    $objectidnext = $object->getIdReplacingInvoice('validated');
+                    if (empty($objectidnext)) {
+                        print '<a class="butAction" href="' . DOL_URL_ROOT . '/compta/facture/card.php?action=create&socid=' . $object->socid . '&type=1&fac_replacement=' . $object->id . '">'
+                            . $langs->trans('KSEF_CreateCorrection') . '</a>';
+                    }
+                }
+
                 return 0;
             }
 
@@ -428,7 +443,28 @@ class ActionsKSEF
             }
 
             if (!$has_submission) {
-                print '<a class="butAction" ' . $button_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_submit&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_SubmittingToKSEF') . '..." onclick="return ksefShowSpinner(event, this);">' . $langs->trans('KSEF_UploadToKSEF') . '</a>';
+                // Modify button for correction invoices not yet submitted to KSeF
+                if ($object->type == Facture::TYPE_REPLACEMENT && $object->statut == Facture::STATUS_VALIDATED) {
+                    $usercancreate = $user->hasRight('facture', 'creer');
+                    $usercanunvalidate = (!getDolGlobalString('MAIN_USE_ADVANCED_PERMS') && !empty($usercancreate))
+                        || (getDolGlobalString('MAIN_USE_ADVANCED_PERMS') && $user->hasRight('facture', 'invoice_advance', 'unvalidate'));
+                    $objectidnext = $object->getIdReplacingInvoice('validated');
+
+                    if (empty($objectidnext)) {
+                        $modifyUrl = $_SERVER['PHP_SELF'] . '?facid=' . $object->id . '&action=modif&token=' . newToken();
+                        $params = array('attr' => array('class' => 'classfortooltip', 'title' => ''));
+                        if ($usercanunvalidate) {
+                            unset($params['attr']['title']);
+                            print dolGetButtonAction($langs->trans('Modify'), '', 'default', $modifyUrl, '', true, $params);
+                        } else {
+                            $params['attr']['title'] = $langs->trans('NotEnoughPermissions');
+                            print dolGetButtonAction($langs->trans('Modify'), '', 'default', $modifyUrl, '', false, $params);
+                        }
+                    }
+                }
+
+                $upload_action = getDolGlobalInt('KSEF_CONFIRM_BEFORE_UPLOAD', 1) ? 'ksef_pre_submit' : 'ksef_submit';
+                print '<a class="butAction" ' . $button_style . ' href="' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=' . $upload_action . '&token=' . newToken() . '" data-processing-text="' . $langs->trans('KSEF_SubmittingToKSEF') . '..." onclick="return ksefShowSpinner(event, this);">' . $langs->trans('KSEF_UploadToKSEF') . '</a>';
             }
 
             return 0;
@@ -475,6 +511,69 @@ class ActionsKSEF
                     setEventMessages($object->error ?: 'Error saving override', $object->errors, 'errors');
                 }
                 $action = '';
+            }
+        }
+
+        // Save correction reason/type
+        if ($currentcontext === 'invoicecard' && $action === 'ksef_save_correction_details') {
+            if (is_object($object) && !empty($object->id) && $object->element === 'facture'
+                && ($object->type == Facture::TYPE_CREDIT_NOTE || $object->type == Facture::TYPE_REPLACEMENT)) {
+                $langs->load("ksef@ksef");
+
+                // Block saving if invoice is already accepted or offline
+                dol_include_once('/ksef/class/ksef_submission.class.php');
+                $saveSubmission = new KsefSubmission($db);
+                $saveHasSub = ($saveSubmission->fetchByInvoice($object->id) > 0);
+                $saveIsAccepted = $saveHasSub && $saveSubmission->status == KsefSubmission::STATUS_ACCEPTED
+                    && !empty($saveSubmission->ksef_number)
+                    && strpos($saveSubmission->ksef_number, 'OFFLINE') === false
+                    && strpos($saveSubmission->ksef_number, 'PENDING') === false
+                    && strpos($saveSubmission->ksef_number, 'ERROR') === false;
+                $saveIsOffline = $saveHasSub && $saveSubmission->status == KsefSubmission::STATUS_OFFLINE
+                    && !empty($saveSubmission->fa3_xml);
+                if ($saveIsAccepted || $saveIsOffline) {
+                    setEventMessages($langs->trans('KSEF_CorrectionDetailsLocked'), null, 'warnings');
+                    $action = '';
+                    return 0;
+                }
+
+                if (!isset($object->array_options) || empty($object->array_options)) {
+                    if (method_exists($object, 'fetch_optionals')) $object->fetch_optionals();
+                }
+
+                $preset = GETPOST('ksef_correction_reason_preset', 'alphanohtml');
+                if ($preset === 'custom') {
+                    $reason = trim(GETPOST('ksef_correction_reason_custom', 'alphanohtml'));
+                } else {
+                    $reason = trim($preset);
+                }
+                $corrType = GETPOST('ksef_correction_type', 'int');
+                if (!in_array($corrType, array(1, 2, 3), false)) {
+                    $corrType = '';
+                }
+
+                $object->array_options['options_ksef_correction_reason'] = $reason;
+                $object->array_options['options_ksef_correction_type'] = $corrType;
+                $res = $object->insertExtraFields();
+                if ($res >= 0) {
+                    setEventMessages($langs->trans('KSEF_CorrectionDetailsSaved'), null, 'mesgs');
+                } else {
+                    setEventMessages($object->error ?: 'Error saving correction details', $object->errors, 'errors');
+                }
+                $action = '';
+            }
+        }
+
+        // Block reopen
+        if ($currentcontext === 'invoicecard' && $action === 'reopen' && !empty($object->id)) {
+            $objectidnext = $object->getIdReplacingInvoice('validated');
+            if ($objectidnext > 0) {
+                $langs->load("ksef@ksef");
+                $replacement = new Facture($db);
+                $replacement->fetch($objectidnext);
+                setEventMessages($langs->trans('KSEF_CorrectionChainBlocked', $replacement->ref), null, 'errors');
+                $action = '';
+                return 1;
             }
         }
 
@@ -580,6 +679,15 @@ class ActionsKSEF
             return 0;
         }
 
+        // change replacement to correction
+        $langs->load("ksef@ksef");
+        $langs->tab_translate['InvoiceReplacement'] = $langs->trans('KSEF_CorrectionInvoice');
+        $langs->tab_translate['InvoiceReplacementShort'] = $langs->trans('KSEF_CorrectionInvoice');
+        $langs->tab_translate['InvoiceReplacementAsk'] = $langs->trans('KSEF_CorrectionInvoiceAsk');
+        $langs->tab_translate['InvoiceReplacementDesc'] = $langs->trans('KSEF_CorrectionInvoiceDesc');
+        $langs->tab_translate['ReplaceInvoice'] = $langs->trans('KSEF_CorrectionInvoiceFor') . ' %s';
+        $langs->tab_translate['ReplacedByInvoice'] = $langs->trans('KSEF_ReplacedByCorrectionInvoice') . ' %s';
+
         if (($action == 'download_xml' || $action == 'download_upo') && GETPOST('id', 'int')) {
             $id = GETPOST('id', 'int');
             $submission = new KsefSubmission($db);
@@ -601,6 +709,51 @@ class ActionsKSEF
             if ($action == 'download_upo') {
                 setEventMessages($langs->trans("KSEF_UPONotAvailable"), null, 'warnings');
             }
+        }
+
+        // Serve preview PDF inline (for iframe embedding)
+        if ($action == 'ksef_serve_preview_pdf' && !empty($object->id)) {
+            $ref = dol_sanitizeFileName($object->ref);
+            $dir = $conf->invoice->multidir_output[$object->entity ?? $conf->entity] . '/' . $ref;
+            $template = GETPOST('template', 'alphanohtml');
+
+            if ($template && $template != 'ksef') {
+                // Dolibarr template: filename is {ref}.pdf
+                $filepath = $dir . '/' . $ref . '.pdf';
+            } else {
+                // KSeF template: filename is {ref}_ksef.pdf
+                $filepath = $dir . '/' . $ref . '_ksef.pdf';
+            }
+
+            if (file_exists($filepath)) {
+                header('Content-Type: application/pdf');
+                header('Content-Disposition: inline; filename="' . basename($filepath) . '"');
+                header('Content-Length: ' . filesize($filepath));
+                header('Cache-Control: private, max-age=60');
+                readfile($filepath);
+                exit;
+            }
+
+            header('HTTP/1.0 404 Not Found');
+            exit;
+        }
+
+        // Download final KSeF PDF (attachment for Save to PC)
+        if ($action == 'ksef_download_final_pdf' && !empty($object->id)) {
+            $ref = dol_sanitizeFileName($object->ref);
+            $dir = $conf->invoice->multidir_output[$object->entity ?? $conf->entity] . '/' . $ref;
+            $filepath = $dir . '/' . $ref . '_ksef.pdf';
+
+            if (file_exists($filepath)) {
+                header('Content-Type: application/pdf');
+                header('Content-Disposition: attachment; filename="' . $ref . '_ksef.pdf"');
+                header('Content-Length: ' . filesize($filepath));
+                readfile($filepath);
+                exit;
+            }
+
+            header('HTTP/1.0 404 Not Found');
+            exit;
         }
 
         // KSeF-style PDF
@@ -693,8 +846,360 @@ class ActionsKSEF
             exit;
         }
 
+        // Pre-submit confirmation: generate preview PDF then show dialog
+        if ($action == 'ksef_pre_submit' && !empty($user->rights->facture->creer)) {
+            $langs->load("ksef@ksef");
+
+            if (!in_array($object->statut, array(1, 2))) {
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            $confirm_template = getDolGlobalString('KSEF_CONFIRM_PDF_TEMPLATE', 'ksef');
+
+            if ($confirm_template == 'ksef') {
+                dol_include_once('/ksef/class/fa3_builder.class.php');
+                $builder = new FA3Builder($db);
+                $xml = $builder->buildFromInvoice($object->id);
+                if ($xml === false) {
+                    setEventMessages($langs->trans('KSEF_PreviewXMLBuildError') . ': ' . dol_escape_htmltag($builder->error), null, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+
+                $xml_warnings = array();
+                if (!$builder->validate($xml)) {
+                    $xml_warnings = $builder->errors;
+                    setEventMessages($langs->trans('KSEF_PreviewXMLValidationWarnings') . ': ' . dol_escape_htmltag(implode(', ', $builder->errors)), null, 'warnings');
+                }
+
+                $mockSubmission = new stdClass();
+                $mockSubmission->rowid = 0;
+                $mockSubmission->ksef_number = 'PODGLĄD';
+                $mockSubmission->fa3_xml = $xml;
+                $mockSubmission->environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+                $mockSubmission->offline_mode = false;
+                $mockSubmission->offline_deadline = null;
+                $mockSubmission->invoice_hash = $builder->getLastXmlHash();
+
+                $pdfData = $this->createPdfDataFromSubmission($mockSubmission, $object);
+
+                dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
+                $pdfGen = new KsefInvoicePdf($db);
+                $content = $pdfGen->generate($pdfData, '', true);
+
+                if ($content === false) {
+                    setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . dol_escape_htmltag($pdfGen->error), null, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+
+                $filename = dol_sanitizeFileName($object->ref) . '_ksef.pdf';
+                $dir = $conf->invoice->multidir_output[$object->entity ?? $conf->entity] . '/' . dol_sanitizeFileName($object->ref);
+                dol_mkdir($dir);
+                file_put_contents($dir . '/' . $filename, $content);
+
+                $_SESSION['ksef_confirm_preview'] = array(
+                    'invoice_id' => $object->id,
+                    'template' => 'ksef',
+                    'xml_warnings' => $xml_warnings,
+                );
+            } else {
+                // Dolibarr PDF template
+                $gen_result = $object->generateDocument($confirm_template, $langs);
+                if ($gen_result < 0) {
+                    setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . dol_escape_htmltag(implode(', ', $object->errors)), null, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+
+                $_SESSION['ksef_confirm_preview'] = array(
+                    'invoice_id' => $object->id,
+                    'template' => $confirm_template,
+                    'xml_warnings' => array(),
+                );
+            }
+
+            header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_upload&token=' . newToken());
+            exit;
+        }
+
+        // Validate then show preview confirmation
+        if ($action == 'ksef_validate_and_preview' && !empty($user->rights->facture->creer)) {
+            $langs->load("ksef@ksef");
+
+            if (ksefIsCustomerExcluded($object->socid)) {
+                setEventMessages($langs->trans('KSEF_CustomerExcluded'), null, 'warnings');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            // Backdating triggers offline flow directly (has its own dialog)
+            $backdate_info = ksefDetectBackdating($object->date);
+            if ($backdate_info['is_backdated']) {
+                if ($object->validate($user) > 0) {
+                    $_SESSION['ksef_offline_confirm'] = array(
+                        'invoice_id' => $object->id,
+                        'days_behind' => $backdate_info['days_behind'],
+                        'deadline' => $backdate_info['deadline'],
+                        'reason' => 'backdated',
+                        'message' => $backdate_info['reason'],
+                        'from_validate' => true
+                    );
+                    setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_offline&token=' . newToken());
+                    exit;
+                } else {
+                    setEventMessages($object->error, $object->errors, 'errors');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                    exit;
+                }
+            }
+
+            // Check NBP rate for foreign invoices
+            dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
+            $nbpChecker = new KsefNbpCurrencyRate($db);
+            if ($nbpChecker->invoiceNeedsNBPRate($object) && !$nbpChecker->invoiceHasNBPRate($object)) {
+                setEventMessages($langs->trans('KSEF_NBPRateRequired'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            if ($object->validate($user) > 0) {
+                setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
+
+                $confirm_template = getDolGlobalString('KSEF_CONFIRM_PDF_TEMPLATE', 'ksef');
+                $xml_warnings = array();
+
+                if ($confirm_template == 'ksef') {
+                    // Generate KSeF preview PDF
+                    dol_include_once('/ksef/class/fa3_builder.class.php');
+                    $builder = new FA3Builder($db);
+                    $xml = $builder->buildFromInvoice($object->id);
+                    if ($xml === false) {
+                        setEventMessages($langs->trans('KSEF_PreviewXMLBuildError') . ': ' . dol_escape_htmltag($builder->error), null, 'errors');
+                        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                        exit;
+                    }
+
+                    if (!$builder->validate($xml)) {
+                        $xml_warnings = $builder->errors;
+                        setEventMessages($langs->trans('KSEF_PreviewXMLValidationWarnings') . ': ' . dol_escape_htmltag(implode(', ', $builder->errors)), null, 'warnings');
+                    }
+
+                    $mockSubmission = new stdClass();
+                    $mockSubmission->rowid = 0;
+                    $mockSubmission->ksef_number = 'PODGLĄD';
+                    $mockSubmission->fa3_xml = $xml;
+                    $mockSubmission->environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+                    $mockSubmission->offline_mode = false;
+                    $mockSubmission->offline_deadline = null;
+                    $mockSubmission->invoice_hash = $builder->getLastXmlHash();
+
+                    $pdfData = $this->createPdfDataFromSubmission($mockSubmission, $object);
+
+                    dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
+                    $pdfGen = new KsefInvoicePdf($db);
+                    $pdfContent = $pdfGen->generate($pdfData, '', true);
+
+                    if ($pdfContent === false) {
+                        setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . dol_escape_htmltag($pdfGen->error), null, 'errors');
+                        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                        exit;
+                    }
+
+                    $filename = dol_sanitizeFileName($object->ref) . '_ksef.pdf';
+                    $dir = $conf->invoice->multidir_output[$object->entity ?? $conf->entity] . '/' . dol_sanitizeFileName($object->ref);
+                    dol_mkdir($dir);
+                    file_put_contents($dir . '/' . $filename, $pdfContent);
+                } else {
+                    // Dolibarr PDF template
+                    $gen_result = $object->generateDocument($confirm_template, $langs);
+                    if ($gen_result < 0) {
+                        setEventMessages($langs->trans('KSEF_PDFGenerationError') . ': ' . dol_escape_htmltag(implode(', ', $object->errors)), null, 'errors');
+                        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                        exit;
+                    }
+                }
+
+                $_SESSION['ksef_confirm_preview'] = array(
+                    'invoice_id' => $object->id,
+                    'template' => $confirm_template,
+                    'xml_warnings' => $xml_warnings,
+                );
+
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_upload&from_validate=1&token=' . newToken());
+                exit;
+            } else {
+                setEventMessages($object->error, $object->errors, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+        }
+
+        // Confirmation upload dialog rendering
+        if ($action == 'ksef_confirm_upload' && !empty($object->id)) {
+            $langs->load("ksef@ksef");
+
+            // Guard: invoice must be validated or closed
+            if (!in_array($object->statut, array(1, 2))) {
+                unset($_SESSION['ksef_confirm_preview']);
+                setEventMessages($langs->trans('KSEF_InvalidStatusForUpload'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            $from_validate = GETPOST('from_validate', 'int');
+
+            $title = $from_validate
+                ? $langs->trans('KSEF_ConfirmUploadValidatedTitle')
+                : $langs->trans('KSEF_ConfirmUploadTitle');
+
+            $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+            $env_badge = ksefGetEnvironmentBadge($environment);
+
+            // Session preview data
+            $confirm_data = isset($_SESSION['ksef_confirm_preview']) ? $_SESSION['ksef_confirm_preview'] : array();
+            $xml_warnings = !empty($confirm_data['xml_warnings']) ? $confirm_data['xml_warnings'] : array();
+            $confirm_template = !empty($confirm_data['template']) ? $confirm_data['template'] : 'ksef';
+
+            $pdf_url = $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_serve_preview_pdf&template=' . urlencode($confirm_template) . '&token=' . newToken();
+
+            $submit_url = $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_submit&token=' . newToken();
+            $cancel_url = $_SERVER['PHP_SELF'] . '?id=' . $object->id;
+
+            // Button colors
+            $button_color = !empty($conf->global->KSEF_BUTTON_COLOR) ? $conf->global->KSEF_BUTTON_COLOR : '#dc3545';
+
+            // Latarnia status
+            dol_include_once('/ksef/class/ksef_latarnia.class.php');
+            $latarnia_cached = KsefLatarnia::getCachedStatus();
+            $latarnia_status = $latarnia_cached['status'];
+            $latarnia_is_issue = in_array($latarnia_status, array('MAINTENANCE', 'FAILURE', 'TOTAL_FAILURE', 'UNREACHABLE'));
+
+            print '<div id="ksef-confirm-upload-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 9999; display: flex; justify-content: center; align-items: center;">';
+            print '<div style="background: white; padding: 25px; border-radius: 12px; width: 80vw; max-width: 1000px; max-height: 90vh; box-shadow: 0 8px 32px rgba(0,0,0,0.3); display: flex; flex-direction: column;">';
+
+            // Header row: title left, environment right
+            print '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
+            print '<h3 style="margin: 0; color: #333; font-size: 20px;">' . $title . '</h3>';
+            print '<div style="text-align: right;">' . $langs->trans('KSEF_ENVIRONMENT') . ': ' . $env_badge . '</div>';
+            print '</div>';
+
+            // Subtitle
+            print '<p style="margin: 0 0 5px 0; color: #555;">' . $langs->trans('KSEF_ConfirmUploadText', '<strong>' . dol_escape_htmltag($object->ref) . '</strong>') . '</p>';
+            print '<p style="margin: 0 0 15px 0; color: #888; font-size: 13px;"><i class="fas fa-info-circle"></i> ' . $langs->trans('KSEF_ConfirmUploadNote') . '</p>';
+
+            // Warnings section
+            if ($latarnia_is_issue || !empty($xml_warnings)) {
+                print '<div style="margin-bottom: 15px;">';
+
+                if ($latarnia_is_issue) {
+                    $latarnia_badge = ksefGetLatarniaStatusBadge($latarnia_status);
+                    print '<div style="background: #fff3cd; border: 1px solid #ffc107; padding: 10px 14px; border-radius: 6px; margin-bottom: 8px;">';
+                    print '<i class="fas fa-exclamation-triangle" style="color: #856404;"></i> ';
+                    print $langs->trans('KSEF_ConfirmLatarniaWarning') . ' ' . $latarnia_badge;
+                    print '</div>';
+                }
+
+                if (!empty($xml_warnings)) {
+                    print '<div style="background: #fff3cd; border: 1px solid #ffc107; padding: 10px 14px; border-radius: 6px;">';
+                    print '<i class="fas fa-exclamation-triangle" style="color: #856404;"></i> ';
+                    print $langs->trans('KSEF_ConfirmXMLWarnings') . ': ' . dol_escape_htmltag(implode(', ', $xml_warnings));
+                    print '</div>';
+                }
+
+                print '</div>';
+            }
+
+            // PDF iframe
+            print '<div id="ksef-confirm-pdf-wrap" style="flex: 1; min-height: 0; margin-bottom: 15px;">';
+            print '<iframe id="ksef-confirm-pdf" src="' . $pdf_url . '" style="width: 100%; height: 70vh; border: 1px solid #ddd; border-radius: 6px;" title="KSeF PDF Preview"></iframe>';
+            print '</div>';
+
+            // Buttons
+            print '<div style="display: flex; gap: 12px; justify-content: flex-end;">';
+            print '<a class="butAction" href="' . $cancel_url . '" onclick="var m=document.getElementById(\'ksef-confirm-upload-modal\'); if(m) m.remove(); return true;" style="padding: 10px 20px; text-decoration: none; border-radius: 6px;">' . $langs->trans('KSEF_ConfirmUploadCancel') . '</a>';
+            print '<a class="butAction" href="' . $submit_url . '" style="padding: 10px 20px; text-decoration: none; border-radius: 6px; background-color: ' . $button_color . '; color: white; font-weight: bold;" onclick="var m=document.getElementById(\'ksef-confirm-upload-modal\'); if(m) m.remove(); return ksefShowSpinner(event, this);" data-processing-text="' . $langs->trans('KSEF_SubmittingToKSEF') . '...">';
+            print '<i class="fa fa-paper-plane"></i> ' . $langs->trans('KSEF_ConfirmUploadSubmit') . '</a>';
+            print '</div>';
+
+            print '</div>';
+            print '</div>';
+
+            return 0;
+        }
+
+        // Post-upload PDF view dialog
+        if (GETPOST('ksef_post_upload', 'int') && !empty($object->id)) {
+            $langs->load("ksef@ksef");
+
+            $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'DEMO');
+            $env_badge = ksefGetEnvironmentBadge($environment);
+
+            // Fetch submission to get KSeF number
+            dol_include_once('/ksef/class/ksef_submission.class.php');
+            $submission = new KsefSubmission($db);
+            $ksef_number = '';
+            if ($submission->fetchByInvoice($object->id) > 0 && $submission->status == 'ACCEPTED') {
+                $ksef_number = $submission->ksef_number;
+            } else {
+                // No accepted submission - nothing to show, redirect to invoice
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            $pdf_url = $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_serve_preview_pdf&template=ksef&token=' . newToken();
+            $download_url = $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_download_final_pdf&token=' . newToken();
+            $close_url = $_SERVER['PHP_SELF'] . '?id=' . $object->id;
+
+            print '<div id="ksef-post-upload-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 9999; display: flex; justify-content: center; align-items: center;">';
+            print '<div style="background: white; padding: 25px; border-radius: 12px; width: 80vw; max-width: 1000px; max-height: 90vh; box-shadow: 0 8px 32px rgba(0,0,0,0.3); display: flex; flex-direction: column;">';
+
+            // Header row: title left, environment right
+            print '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
+            print '<h3 style="margin: 0; color: #333; font-size: 20px;"><i class="fas fa-check-circle" style="color: #28a745;"></i> ' . $langs->trans('KSEF_PostUploadTitle') . '</h3>';
+            print '<div style="text-align: right;">' . $langs->trans('KSEF_ENVIRONMENT') . ': ' . $env_badge . '</div>';
+            print '</div>';
+
+            // Info text
+            print '<p style="margin: 0 0 5px 0; color: #555;">' . $langs->trans('KSEF_PostUploadText', '<strong>' . dol_escape_htmltag($object->ref) . '</strong>') . '</p>';
+            if (!empty($ksef_number)) {
+                print '<p style="margin: 0 0 15px 0; color: #555;">' . $langs->trans('KSEF_PostUploadKsefNumber') . ': <strong>' . dol_escape_htmltag($ksef_number) . '</strong></p>';
+            }
+
+            // PDF iframe
+            print '<div style="flex: 1; min-height: 0; margin-bottom: 15px;">';
+            print '<iframe id="ksef-post-upload-pdf" src="' . $pdf_url . '" style="width: 100%; height: 70vh; border: 1px solid #ddd; border-radius: 6px;" title="KSeF PDF"></iframe>';
+            print '</div>';
+
+            // Buttons: Close, Save to PC, Print
+            print '<div style="display: flex; gap: 12px; justify-content: flex-end;">';
+            print '<a class="butAction" href="' . $close_url . '" style="padding: 10px 20px; text-decoration: none; border-radius: 6px;">' . $langs->trans('KSEF_PostUploadClose') . '</a>';
+            print '<a class="butAction" href="' . $download_url . '" style="padding: 10px 20px; text-decoration: none; border-radius: 6px;">';
+            print '<i class="fas fa-download"></i> ' . $langs->trans('KSEF_PostUploadSave') . '</a>';
+            print '<a class="butAction" href="#" onclick="try { document.getElementById(\'ksef-post-upload-pdf\').contentWindow.print(); } catch(e) { window.open(\'' . $pdf_url . '\', \'_blank\'); } return false;" style="padding: 10px 20px; text-decoration: none; border-radius: 6px;">';
+            print '<i class="fas fa-print"></i> ' . $langs->trans('KSEF_PostUploadPrint') . '</a>';
+            print '</div>';
+
+            print '</div>';
+            print '</div>';
+
+            return 0;
+        }
+
         if ($action == 'ksef_submit' && !empty($user->rights->facture->creer)) {
             $langs->load("ksef@ksef");
+
+            // Guard: invoice must be validated or closed
+            if (!in_array($object->statut, array(1, 2))) {
+                setEventMessages($langs->trans('KSEF_InvalidStatusForUpload'), null, 'errors');
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+                exit;
+            }
+
+            // Clean up confirmation preview session data
+            unset($_SESSION['ksef_confirm_preview']);
 
             if (ksefIsCustomerExcluded($object->socid)) {
                 setEventMessages($langs->trans('KSEF_CustomerExcluded'), null, 'warnings');
@@ -709,6 +1214,20 @@ class ActionsKSEF
                 setEventMessages($langs->trans('KSEF_NBPRateRequired'), null, 'errors');
                 header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
                 exit;
+            }
+
+            // Warn if original has no KSeF number
+            $is_kor = ($object->type == Facture::TYPE_CREDIT_NOTE || $object->type == Facture::TYPE_REPLACEMENT)
+                && !empty($object->fk_facture_source);
+            if ($is_kor) {
+                $origForCheck = new Facture($db);
+                if ($origForCheck->fetch($object->fk_facture_source) > 0) {
+                    $origForCheck->fetch_optionals();
+                    $orig_ksef_num = $origForCheck->array_options['options_ksef_number'] ?? '';
+                    if (empty($orig_ksef_num)) {
+                        setEventMessages($langs->trans('KSEF_CorrectionOriginalNoKsef'), null, 'warnings');
+                    }
+                }
             }
 
             $ksef_submission = new KsefSubmission($db);
@@ -744,22 +1263,32 @@ class ActionsKSEF
             try {
                 $ksef = new KsefService($db);
                 $result = $ksef->submitInvoice($object->id, $user, 'SYNC');
-
-                if ($result && $result['status'] == 'ACCEPTED') {
-                    setEventMessages($langs->trans('KSEF_SubmissionSuccess') . ' - ' . $result['ksef_number'], null, 'mesgs');
-                    ksefUpdateInvoiceExtrafields($this->db, $object->id, $result['ksef_number'], 'ACCEPTED', dol_now(), true);
-                } elseif ($result && $result['status'] == 'FAILED') {
-                    $error_msg = $langs->trans('KSEF_SubmissionFailed');
-                    if (!empty($result['error'])) {
-                        $error_msg .= ': ' . $result['error'];
-                    }
-                    setEventMessages($error_msg, null, 'errors');
-                } else {
-                    $this->handleSubmissionError($result, $ksef->error, $langs);
-                }
             } catch (Exception $e) {
-                setEventMessages($langs->trans('KSEF_SubmissionFailed') . ': ' . $e->getMessage(), null, 'errors');
+                $result = array('status' => 'EXCEPTION', 'error' => $e->getMessage());
                 dol_syslog("KSEF submission exception: " . $e->getMessage(), LOG_ERR);
+            }
+
+            // Re-open session
+            session_start();
+
+            if ($result && $result['status'] == 'ACCEPTED') {
+                setEventMessages($langs->trans('KSEF_SubmissionSuccess') . ' - ' . $result['ksef_number'], null, 'mesgs');
+                ksefUpdateInvoiceExtrafields($this->db, $object->id, $result['ksef_number'], 'ACCEPTED', dol_now(), true);
+
+                if (getDolGlobalInt('KSEF_SHOW_PDF_AFTER_UPLOAD', 1)) {
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&ksef_post_upload=1');
+                    exit;
+                }
+            } elseif ($result && $result['status'] == 'FAILED') {
+                $error_msg = $langs->trans('KSEF_SubmissionFailed');
+                if (!empty($result['error'])) {
+                    $error_msg .= ': ' . $result['error'];
+                }
+                setEventMessages($error_msg, null, 'errors');
+            } elseif ($result && $result['status'] == 'EXCEPTION') {
+                setEventMessages($langs->trans('KSEF_SubmissionFailed') . ': ' . $result['error'], null, 'errors');
+            } else {
+                $this->handleSubmissionError($result, $ksef->error, $langs);
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -775,32 +1304,37 @@ class ActionsKSEF
             try {
                 $ksef = new KsefService($db);
                 $result = $ksef->retrySubmission($object->id, $user);
-
-                if ($result && $result['status'] == 'ACCEPTED') {
-                    setEventMessages($langs->trans('KSEF_SubmissionSuccess') . ' - ' . $result['ksef_number'], null, 'mesgs');
-                    ksefUpdateInvoiceExtrafields($this->db, $object->id, $result['ksef_number'], 'ACCEPTED', dol_now(), true);
-                } elseif ($result && $result['status'] == 'NEEDS_OFFLINE_CONFIRMATION') {
-                    ksefSessionWrite('ksef_offline_confirm', array(
-                        'invoice_id' => $object->id,
-                        'days_behind' => $result['backdate_info']['days_behind'] ?? 0,
-                        'deadline' => $result['deadline'],
-                        'reason' => 'backdated_retry'
-                    ));
-                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_offline&token=' . newToken());
-                    exit;
-                } elseif ($result && $result['status'] == 'FAILED') {
-                    $error_msg = $langs->trans('KSEF_RetryFailed');
-                    if (!empty($result['error'])) {
-                        $error_msg .= ': ' . $result['error'];
-                    }
-                    setEventMessages($error_msg, null, 'errors');
-                } elseif ($result && $result['status'] == 'PENDING') {
-                    setEventMessages($langs->trans('KSEF_SubmissionInProgress'), null, 'warnings');
-                } else {
-                    setEventMessages($langs->trans('KSEF_RetryFailed') . ': ' . ($result['error'] ?? $ksef->error ?? 'Unknown'), null, 'errors');
-                }
             } catch (Exception $e) {
-                setEventMessages('KSEF Error: ' . $e->getMessage(), null, 'errors');
+                $result = array('status' => 'EXCEPTION', 'error' => $e->getMessage());
+            }
+
+            // Re-open session
+            session_start();
+
+            if ($result && $result['status'] == 'ACCEPTED') {
+                setEventMessages($langs->trans('KSEF_SubmissionSuccess') . ' - ' . $result['ksef_number'], null, 'mesgs');
+                ksefUpdateInvoiceExtrafields($this->db, $object->id, $result['ksef_number'], 'ACCEPTED', dol_now(), true);
+            } elseif ($result && $result['status'] == 'NEEDS_OFFLINE_CONFIRMATION') {
+                $_SESSION['ksef_offline_confirm'] = array(
+                    'invoice_id' => $object->id,
+                    'days_behind' => $result['backdate_info']['days_behind'] ?? 0,
+                    'deadline' => $result['deadline'],
+                    'reason' => 'backdated_retry'
+                );
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_offline&token=' . newToken());
+                exit;
+            } elseif ($result && $result['status'] == 'FAILED') {
+                $error_msg = $langs->trans('KSEF_RetryFailed');
+                if (!empty($result['error'])) {
+                    $error_msg .= ': ' . $result['error'];
+                }
+                setEventMessages($error_msg, null, 'errors');
+            } elseif ($result && $result['status'] == 'PENDING') {
+                setEventMessages($langs->trans('KSEF_SubmissionInProgress'), null, 'warnings');
+            } elseif ($result && $result['status'] == 'EXCEPTION') {
+                setEventMessages('KSEF Error: ' . $result['error'], null, 'errors');
+            } else {
+                setEventMessages($langs->trans('KSEF_RetryFailed') . ': ' . ($result['error'] ?? $ksef->error ?? 'Unknown'), null, 'errors');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -836,25 +1370,28 @@ class ActionsKSEF
             try {
                 $ksef = new KsefService($db);
                 $result = $ksef->submitInvoiceOffline($object->id, $user, 'failed_submission');
-
-                if ($result && $result['status'] == 'OFFLINE') {
-                    $msg = $langs->trans('KSEF_OfflineInvoiceCreated');
-                    if (!empty($result['ksef_number'])) {
-                        $msg .= ': ' . $result['ksef_number'];
-                    }
-                    if (!empty($result['offline_deadline'])) {
-                        $msg .= '<br><small>' . $langs->trans('KSEF_OfflineDeadline') . ': ' . dol_print_date($result['offline_deadline'], 'dayhour') . '</small>';
-                    }
-                    setEventMessages($msg, null, 'mesgs');
-                } else {
-                    $error_msg = $langs->trans('KSEF_OfflineCreationFailed');
-                    if (!empty($result['error'])) {
-                        $error_msg .= ': ' . $result['error'];
-                    }
-                    setEventMessages($error_msg, null, 'errors');
-                }
             } catch (Exception $e) {
-                setEventMessages('KSEF Error: ' . $e->getMessage(), null, 'errors');
+                $result = array('status' => 'EXCEPTION', 'error' => $e->getMessage());
+            }
+
+            // Re-open session
+            session_start();
+
+            if ($result && $result['status'] == 'OFFLINE') {
+                $msg = $langs->trans('KSEF_OfflineInvoiceCreated');
+                if (!empty($result['ksef_number'])) {
+                    $msg .= ': ' . $result['ksef_number'];
+                }
+                if (!empty($result['offline_deadline'])) {
+                    $msg .= '<br><small>' . $langs->trans('KSEF_OfflineDeadline') . ': ' . dol_print_date($result['offline_deadline'], 'dayhour') . '</small>';
+                }
+                setEventMessages($msg, null, 'mesgs');
+            } else {
+                $error_msg = ($result && $result['status'] == 'EXCEPTION') ? 'KSEF Error: ' . $result['error'] : $langs->trans('KSEF_OfflineCreationFailed');
+                if (!empty($result['error']) && $result['status'] != 'EXCEPTION') {
+                    $error_msg .= ': ' . $result['error'];
+                }
+                setEventMessages($error_msg, null, 'errors');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1039,18 +1576,21 @@ class ActionsKSEF
                 } else {
                     $result = $ksef->submitInvoice($object->id, $user, 'SYNC');
                 }
-
-                if ($result && $result['status'] == 'ACCEPTED' &&
-                    strpos($result['ksef_number'], 'OFFLINE') === false) {
-                    setEventMessages($langs->trans('KSEF_OnlineSubmissionSuccess') . ' - ' . $result['ksef_number'], null, 'mesgs');
-                    ksefUpdateInvoiceExtrafields($this->db, $object->id, $result['ksef_number'], 'ACCEPTED', dol_now(), true);
-                } elseif ($result && $result['status'] == 'FAILED') {
-                    setEventMessages($langs->trans('KSEF_OnlineRetryFailed') . ': ' . ($result['error'] ?? ''), null, 'errors');
-                } else {
-                    setEventMessages($langs->trans('KSEF_SubmissionStatus') . ': ' . ($result['status'] ?? 'Unknown'), null, 'mesgs');
-                }
             } catch (Exception $e) {
-                setEventMessages('KSEF Error: ' . $e->getMessage(), null, 'errors');
+                $result = array('status' => 'EXCEPTION', 'error' => $e->getMessage());
+            }
+
+            // Re-open session
+            session_start();
+
+            if ($result && $result['status'] == 'ACCEPTED' &&
+                strpos($result['ksef_number'], 'OFFLINE') === false) {
+                setEventMessages($langs->trans('KSEF_OnlineSubmissionSuccess') . ' - ' . $result['ksef_number'], null, 'mesgs');
+                ksefUpdateInvoiceExtrafields($this->db, $object->id, $result['ksef_number'], 'ACCEPTED', dol_now(), true);
+            } elseif ($result && ($result['status'] == 'FAILED' || $result['status'] == 'EXCEPTION')) {
+                setEventMessages($langs->trans('KSEF_OnlineRetryFailed') . ': ' . ($result['error'] ?? ''), null, 'errors');
+            } else {
+                setEventMessages($langs->trans('KSEF_SubmissionStatus') . ': ' . ($result['status'] ?? 'Unknown'), null, 'mesgs');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1135,28 +1675,30 @@ class ActionsKSEF
 
             try {
                 $ksef = new KsefService($db);
-
                 $result = $ksef->submitInvoiceOffline($object->id, $user, $offline_reason);
-
-                if ($result && $result['status'] == 'OFFLINE') {
-                    $msg = $langs->trans('KSEF_OfflineInvoiceCreated');
-                    if (!empty($result['ksef_number'])) {
-                        $msg .= ' - ' . $result['ksef_number'];
-                    }
-                    $msg .= ' <span class="badge badge-warning">' . $langs->trans('KSEF_OfflineMode') . '</span>';
-                    if (!empty($result['offline_deadline'])) {
-                        $msg .= '<br><small>' . $langs->trans('KSEF_OfflineDeadline') . ': ' . dol_print_date($result['offline_deadline'], 'dayhour') . '</small>';
-                    }
-                    setEventMessages($msg, null, 'mesgs');
-                } else {
-                    $error_msg = $langs->trans('KSEF_OfflineCreationFailed');
-                    if (!empty($result['error'])) {
-                        $error_msg .= ': ' . $result['error'];
-                    }
-                    setEventMessages($error_msg, null, 'errors');
-                }
             } catch (Exception $e) {
-                setEventMessages('KSEF Error: ' . $e->getMessage(), null, 'errors');
+                $result = array('status' => 'EXCEPTION', 'error' => $e->getMessage());
+            }
+
+            // Re-open session
+            session_start();
+
+            if ($result && $result['status'] == 'OFFLINE') {
+                $msg = $langs->trans('KSEF_OfflineInvoiceCreated');
+                if (!empty($result['ksef_number'])) {
+                    $msg .= ' - ' . $result['ksef_number'];
+                }
+                $msg .= ' <span class="badge badge-warning">' . $langs->trans('KSEF_OfflineMode') . '</span>';
+                if (!empty($result['offline_deadline'])) {
+                    $msg .= '<br><small>' . $langs->trans('KSEF_OfflineDeadline') . ': ' . dol_print_date($result['offline_deadline'], 'dayhour') . '</small>';
+                }
+                setEventMessages($msg, null, 'mesgs');
+            } else {
+                $error_msg = ($result && $result['status'] == 'EXCEPTION') ? 'KSEF Error: ' . $result['error'] : $langs->trans('KSEF_OfflineCreationFailed');
+                if (!empty($result['error']) && $result['status'] != 'EXCEPTION') {
+                    $error_msg .= ': ' . $result['error'];
+                }
+                setEventMessages($error_msg, null, 'errors');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1173,14 +1715,17 @@ class ActionsKSEF
             try {
                 $ksef = new KsefService($db);
                 $result = $ksef->submitTechnicalCorrection($object->id, $submission_id, $user);
-
-                if ($result && $result['status'] != 'ERROR') {
-                    setEventMessages($langs->trans('KSEF_TechnicalCorrectionSubmitted'), null, 'mesgs');
-                } else {
-                    setEventMessages($langs->trans('KSEF_TechnicalCorrectionFailed') . ': ' . ($result['error'] ?? $ksef->error), null, 'errors');
-                }
             } catch (Exception $e) {
-                setEventMessages('KSEF Error: ' . $e->getMessage(), null, 'errors');
+                $result = array('status' => 'ERROR', 'error' => $e->getMessage());
+            }
+
+            // Re-open session
+            session_start();
+
+            if ($result && $result['status'] != 'ERROR') {
+                setEventMessages($langs->trans('KSEF_TechnicalCorrectionSubmitted'), null, 'mesgs');
+            } else {
+                setEventMessages($langs->trans('KSEF_TechnicalCorrectionFailed') . ': ' . ($result['error'] ?? (isset($ksef) ? $ksef->error : '') ?? ''), null, 'errors');
             }
 
             header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
@@ -1234,60 +1779,71 @@ class ActionsKSEF
                 try {
                     $ksef = new KsefService($db);
                     $submit_result = $ksef->submitInvoice($object->id, $user, 'SYNC');
-
-                    if ($submit_result && $submit_result['status'] == 'NEEDS_CONFIRMATION') {
-                        $backdate_info = $submit_result['backdate_info'];
-                        ksefSessionWrite('ksef_offline_confirm', array(
-                            'invoice_id' => $object->id,
-                            'days_behind' => $backdate_info['days_behind'] ?? 0,
-                            'deadline' => $submit_result['deadline'],
-                            'reason' => $backdate_info['reason'] ?? 'connection_error',
-                            'from_validate' => true
-                        ));
-                        setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
-                        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_offline&token=' . newToken());
-                        exit;
-                    }
-
-                    if ($submit_result && $submit_result['status'] == 'ACCEPTED') {
-                        $msg = $langs->trans('InvoiceValidated') . ' - ' . $langs->trans('KSEF_SubmissionSuccess') . ' - ' . $submit_result['ksef_number'];
-                        if (!empty($submit_result['offline_mode'])) {
-                            $msg .= ' (' . $langs->trans('KSEF_OfflineMode') . ')';
-                        }
-                        setEventMessages($msg, null, 'mesgs');
-                        ksefUpdateInvoiceExtrafields($this->db, $object->id, $submit_result['ksef_number'], 'ACCEPTED', dol_now(), true);
-
-                    } elseif ($submit_result && $submit_result['status'] == 'FAILED') {
-                        setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
-
-                        ksefSessionWrite('ksef_failed_confirm', array(
-                            'invoice_id' => $object->id,
-                            'error' => $submit_result['error'] ?? 'Unknown error',
-                            'error_code' => $submit_result['error_code'] ?? null,
-                            'submission_id' => $submit_result['submission_id'] ?? null
-                        ));
-                        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_show_failure_dialog&token=' . newToken());
-                        exit;
-
-                    } else {
-                        $error_msg = $langs->trans('InvoiceValidated') . ' - ' . $langs->trans('KSEF_SubmissionFailed');
-                        if (!empty($submit_result['error'])) {
-                            $error_msg .= ': ' . $submit_result['error'];
-                        }
-                        setEventMessages($error_msg, null, 'warnings');
-                    }
-
                 } catch (Exception $e) {
+                    $submit_result = array('status' => 'EXCEPTION', 'error' => $e->getMessage());
+                    dol_syslog("KSEF submission exception: " . $e->getMessage(), LOG_ERR);
+                }
+
+                // Re-open session
+                session_start();
+
+                if ($submit_result && $submit_result['status'] == 'NEEDS_CONFIRMATION') {
+                    $backdate_info = $submit_result['backdate_info'];
+                    $_SESSION['ksef_offline_confirm'] = array(
+                        'invoice_id' => $object->id,
+                        'days_behind' => $backdate_info['days_behind'] ?? 0,
+                        'deadline' => $submit_result['deadline'],
+                        'reason' => $backdate_info['reason'] ?? 'connection_error',
+                        'from_validate' => true
+                    );
+                    setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_confirm_offline&token=' . newToken());
+                    exit;
+                }
+
+                if ($submit_result && $submit_result['status'] == 'ACCEPTED') {
+                    $msg = $langs->trans('InvoiceValidated') . ' - ' . $langs->trans('KSEF_SubmissionSuccess') . ' - ' . $submit_result['ksef_number'];
+                    if (!empty($submit_result['offline_mode'])) {
+                        $msg .= ' (' . $langs->trans('KSEF_OfflineMode') . ')';
+                    }
+                    setEventMessages($msg, null, 'mesgs');
+                    ksefUpdateInvoiceExtrafields($this->db, $object->id, $submit_result['ksef_number'], 'ACCEPTED', dol_now(), true);
+
+                    if (getDolGlobalInt('KSEF_SHOW_PDF_AFTER_UPLOAD', 1)) {
+                        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&ksef_post_upload=1');
+                        exit;
+                    }
+
+                } elseif ($submit_result && $submit_result['status'] == 'FAILED') {
                     setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
 
-                    ksefSessionWrite('ksef_failed_confirm', array(
+                    $_SESSION['ksef_failed_confirm'] = array(
                         'invoice_id' => $object->id,
-                        'error' => $e->getMessage(),
-                        'error_code' => null,
-                        'submission_id' => null,
-                    ));
+                        'error' => $submit_result['error'] ?? 'Unknown error',
+                        'error_code' => $submit_result['error_code'] ?? null,
+                        'submission_id' => $submit_result['submission_id'] ?? null
+                    );
                     header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_show_failure_dialog&token=' . newToken());
                     exit;
+
+                } elseif ($submit_result && $submit_result['status'] == 'EXCEPTION') {
+                    setEventMessages($langs->trans('InvoiceValidated'), null, 'mesgs');
+
+                    $_SESSION['ksef_failed_confirm'] = array(
+                        'invoice_id' => $object->id,
+                        'error' => $submit_result['error'],
+                        'error_code' => null,
+                        'submission_id' => null,
+                    );
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id . '&action=ksef_show_failure_dialog&token=' . newToken());
+                    exit;
+
+                } else {
+                    $error_msg = $langs->trans('InvoiceValidated') . ' - ' . $langs->trans('KSEF_SubmissionFailed');
+                    if (!empty($submit_result['error'])) {
+                        $error_msg .= ': ' . $submit_result['error'];
+                    }
+                    setEventMessages($error_msg, null, 'warnings');
                 }
 
             } else {
@@ -1639,13 +2195,15 @@ jQuery(document).ready(function() {
      */
     public function formObjectOptions($parameters, &$object, &$action, $hookmanager)
     {
-        global $langs, $db, $conf;
+        global $langs, $db, $conf, $form;
         dol_include_once('/ksef/lib/ksef.lib.php');
 
         $currentcontext = $parameters['currentcontext'] ?? '';
         if ($currentcontext == 'invoicecard') {
             if (empty($object) || empty($object->id)) {
-                return 0;
+                if (GETPOST('action', 'aZ09') != 'create') {
+                    return 0;
+                }
             }
 
             dol_include_once('/ksef/class/ksef_submission.class.php');
@@ -1653,16 +2211,20 @@ jQuery(document).ready(function() {
             dol_include_once('/ksef/class/ksef_client.class.php');
 
             print '<style>tr:has(.facture_extras_ksef_number), tr:has(.facture_extras_ksef_status), tr:has(.facture_extras_ksef_submission_date) { display: none !important; }</style>';
+            print '<style>tr:has(.facture_extras_ksef_correction_original_ht), tr:has(.facture_extras_ksef_correction_original_tva), tr:has(.facture_extras_ksef_correction_original_ttc), tr:has(.facture_extras_ksef_correction_discount_id), tr:has(.facture_extras_ksef_correction_original_discount_ids) { display: none !important; }</style>';
+            print '<style>tr:has(.facture_extras_ksef_correction_reason), tr:has(.facture_extras_ksef_correction_type) { display: none !important; }</style>';
 
             // Hide DodatkowyOpis mode override row unless feature is configured
-            $_dodActiveCheck_noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
-            $_dodActiveCheck_efConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
-            if ((!isset($object->array_options) || empty($object->array_options)) && method_exists($object, 'fetch_optionals')) {
-                $object->fetch_optionals();
-            }
-            $_dodActiveCheck_override = isset($object->array_options['options_ksef_dodatkowy_opis_mode']) ? trim((string) $object->array_options['options_ksef_dodatkowy_opis_mode']) : '';
-            if ($_dodActiveCheck_noteMode === 'disabled' && empty($_dodActiveCheck_efConf) && $_dodActiveCheck_override === '') {
-                print '<style>tr:has(.facture_extras_ksef_dodatkowy_opis_mode) { display: none !important; }</style>';
+            if (!empty($object) && !empty($object->id)) {
+                $_dodActiveCheck_noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
+                $_dodActiveCheck_efConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
+                if ((!isset($object->array_options) || empty($object->array_options)) && method_exists($object, 'fetch_optionals')) {
+                    $object->fetch_optionals();
+                }
+                $_dodActiveCheck_override = isset($object->array_options['options_ksef_dodatkowy_opis_mode']) ? trim((string) $object->array_options['options_ksef_dodatkowy_opis_mode']) : '';
+                if ($_dodActiveCheck_noteMode === 'disabled' && empty($_dodActiveCheck_efConf) && $_dodActiveCheck_override === '') {
+                    print '<style>tr:has(.facture_extras_ksef_dodatkowy_opis_mode) { display: none !important; }</style>';
+                }
             }
 
             // Relocate ksef_sale_date below the invoice date field
@@ -1685,8 +2247,358 @@ jQuery(document).ready(function() {
 });
 </script>';
 
+            // Chain-based correction display
+            $isInChain = false;
+            if (!empty($object) && !empty($object->id)) {
+                if ($object->type == Facture::TYPE_REPLACEMENT && !empty($object->fk_facture_source)) {
+                    $isInChain = true;
+                } else {
+                    // Check for TYPE_REPLACEMENT child
+                    $sql_has_replacement = "SELECT rowid FROM " . MAIN_DB_PREFIX . "facture"
+                        . " WHERE fk_facture_source = " . ((int) $object->id)
+                        . " AND type = " . Facture::TYPE_REPLACEMENT
+                        . " AND fk_statut > 0 LIMIT 1";
+                    $res_has_replacement = $db->query($sql_has_replacement);
+                    if ($res_has_replacement && $db->num_rows($res_has_replacement) > 0) {
+                        $isInChain = true;
+                    }
+                }
+            }
+            if ($isInChain) {
+                $langs->load("ksef@ksef");
+                dol_include_once('/ksef/lib/ksef.lib.php');
+                $chain = ksefBuildCorrectionChain($object, $db);
+
+                if (count($chain) > 1) {
+                    // Sum payments across all invoices in chain
+                    $total_paid_on_chain = 0;
+                    foreach ($chain as $chainInv) {
+                        $total_paid_on_chain += $chainInv->getSommePaiement(0);
+                    }
+
+                    // Find the last element
+                    $latestInChain = $chain[count($chain) - 1];
+                    $currentAmount = (float) $latestInChain->total_ttc;
+                    $remaining = $currentAmount - $total_paid_on_chain;
+                    $isViewingLatest = ($object->id == $latestInChain->id);
+
+                    // Build chain table HTML with context-aware header
+                    $chainNoteKey = $isViewingLatest ? 'KSEF_CorrectionChainCurrentNote' : 'KSEF_CorrectionChainCorrectedNote';
+                    $chainHtml = '<table class="border tableforfield centpercent">';
+                    $chainHtml .= '<tr class="liste_titre"><td colspan="6"><span class="fas fa-info-circle" style="margin-right: 6px;"></span>'
+                        . $langs->trans($chainNoteKey) . '</td></tr>';
+                    $chainHtml .= '<tr><td class="titlefieldmiddle"></td>';
+                    $chainHtml .= '<td class="right"><span class="opacitymedium">' . $langs->trans('KSEF_CorrectionChainExclTax') . '</span></td>';
+                    $chainHtml .= '<td class="right"><span class="opacitymedium">' . $langs->trans('KSEF_CorrectionChainTax') . '</span></td>';
+                    $chainHtml .= '<td class="right"><span class="opacitymedium">' . $langs->trans('KSEF_CorrectionChainInclTax') . '</span></td>';
+                    $chainHtml .= '<td class="right"><span class="opacitymedium">' . $langs->trans('KSEF_CorrectionChainDiff') . '</span></td>';
+                    $chainHtml .= '<td class="right"><span class="opacitymedium">' . $langs->trans('KSEF_CorrectionChainStatus') . '</span></td>';
+                    $chainHtml .= '</tr>';
+
+                    $prevTtc = null;
+                    foreach ($chain as $idx => $chainInv) {
+                        $isCurrent = ($chainInv->id == $object->id);
+                        $bold = $isCurrent ? 'font-weight: bold;' : '';
+
+                        // Invoice link
+                        $invLink = '<a href="' . DOL_URL_ROOT . '/compta/facture/card.php?facid=' . $chainInv->id . '">'
+                            . dol_escape_htmltag($chainInv->ref) . '</a>';
+
+                        // Amounts
+                        $ht = price($chainInv->total_ht, 0, $langs, 1, -1, -1, $conf->currency);
+                        $tva = price($chainInv->total_tva, 0, $langs, 1, -1, -1, $conf->currency);
+                        $ttc = price($chainInv->total_ttc, 0, $langs, 1, -1, -1, $conf->currency);
+
+                        // Diff column - first row shows its own TTC as the baseline
+                        if ($prevTtc === null) {
+                            $diffHtml = price($chainInv->total_ttc, 0, $langs, 1, -1, -1, $conf->currency);
+                        } else {
+                            $diff = (float) $chainInv->total_ttc - $prevTtc;
+                            if (abs($diff) < 0.01) {
+                                $diffColor = '#666';
+                            } elseif ($diff < 0) {
+                                $diffColor = '#dc3545';
+                            } else {
+                                $diffColor = '#28a745';
+                            }
+                            $diffPrefix = ($diff > 0.01) ? '+' : '';
+                            $diffHtml = '<span style="color:' . $diffColor . ';">' . $diffPrefix . price($diff, 0, $langs, 1, -1, -1, $conf->currency) . '</span>';
+                        }
+                        $prevTtc = (float) $chainInv->total_ttc;
+
+                        // Status badges (actual payments, not paye flag)
+                        $badges = '';
+                        $invPaid = $chainInv->getSommePaiement(0);
+                        if ($invPaid > 0 && $invPaid >= (float) $chainInv->total_ttc) {
+                            $badges .= '<span class="badge badge-status6 badge-status">' . $langs->trans('BillStatusPaid') . '</span> ';
+                        } elseif ($invPaid > 0) {
+                            $badges .= '<span class="badge badge-status7 badge-status">' . $langs->trans('BillStatusStarted') . '</span> ';
+                        } elseif ($chainInv->statut == Facture::STATUS_ABANDONED) {
+                            $badges .= '<span class="badge badge-status5 badge-status">' . $langs->trans('BillStatusCanceled') . '</span> ';
+                        } elseif ($chainInv->statut == Facture::STATUS_DRAFT) {
+                            $badges .= '<span class="badge badge-status0 badge-status">' . $langs->trans('BillStatusDraft') . '</span> ';
+                        }
+                        // Chain-specific badges
+                        $hasReplacement = ($idx < count($chain) - 1); // Not the last in chain = has been corrected
+                        if ($hasReplacement) {
+                            $badges .= '<span class="badge badge-status1 badge-status">' . $langs->trans('KSEF_CorrectionChainCorrected') . '</span> ';
+                        } elseif ($idx == count($chain) - 1) {
+                            $badges .= '<span class="badge badge-status4 badge-status">' . $langs->trans('KSEF_CorrectionChainCurrent') . '</span>';
+                        }
+
+                        $chainHtml .= '<tr style="' . $bold . '">';
+                        $chainHtml .= '<td class="nowraponall">' . $invLink . '</td>';
+                        $chainHtml .= '<td class="nowraponall right">' . $ht . '</td>';
+                        $chainHtml .= '<td class="nowraponall right">' . $tva . '</td>';
+                        $chainHtml .= '<td class="nowraponall right">' . $ttc . '</td>';
+                        $chainHtml .= '<td class="nowraponall right">' . $diffHtml . '</td>';
+                        $chainHtml .= '<td class="nowraponall right">' . $badges . '</td>';
+                        $chainHtml .= '</tr>';
+                    }
+
+                    // Chain payment summary rows
+                    $totalPaidFormatted = price($total_paid_on_chain, 0, $langs, 1, -1, -1, $conf->currency);
+                    $currentAmountFormatted = price($currentAmount, 0, $langs, 1, -1, -1, $conf->currency);
+
+                    $langs->load("bills");
+                    if (abs($remaining) < 0.01) {
+                        $remainLabel = $langs->trans('KSEF_CorrectionChainSettled');
+                        $remainFormatted = price(0, 0, $langs, 1, -1, -1, $conf->currency);
+                        $remainColor = '#28a745';
+                    } elseif ($remaining < 0) {
+                        $remainLabel = $langs->trans('RemainderToPayBack');
+                        $remainFormatted = price(abs($remaining), 0, $langs, 1, -1, -1, $conf->currency);
+                        $remainColor = '#e65100';
+                    } else {
+                        $remainLabel = $langs->trans('RemainderToPay');
+                        $remainFormatted = price($remaining, 0, $langs, 1, -1, -1, $conf->currency);
+                        $remainColor = '#dc3545';
+                    }
+
+                    $chainHtml .= '</table>';
+
+                    $chainHtmlJs = dol_escape_js($chainHtml);
+
+                    // Chain summary labels/values to inject into the Dolibarr amount table
+                    $totalPaidLabelJs = dol_escape_js($langs->trans('KSEF_CorrectionChainTotalPaid'));
+                    $totalPaidValueJs = dol_escape_js($totalPaidFormatted);
+                    $currentAmountLabelJs = dol_escape_js($langs->trans('KSEF_CorrectionChainCurrentAmount'));
+                    $currentAmountValueJs = dol_escape_js($currentAmountFormatted);
+                    $remainLabelJs = dol_escape_js($remainLabel);
+                    $remainValueJs = dol_escape_js($remainFormatted);
+
+                    print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var amountTable = jQuery(".fichehalfright table.border.tableforfield.centpercent").first();
+    if (amountTable.length) {
+        amountTable.after(\'' . $chainHtmlJs . '\');
+
+        // Add chain summary as extra columns to the 3 amount rows
+        var amountRows = amountTable.find("tr").has("td.amountcard");
+        if (amountRows.length >= 3) {
+            amountRows.eq(0).append(\'<td class="opacitymedium right" style="padding-left: 12px;">' . $totalPaidLabelJs . '</td><td class="nowraponall right">' . $totalPaidValueJs . '</td>\');
+            amountRows.eq(1).append(\'<td class="opacitymedium right" style="padding-left: 12px;">' . $currentAmountLabelJs . '</td><td class="nowraponall right">' . $currentAmountValueJs . '</td>\');
+            amountRows.eq(2).append(\'<td class="opacitymedium right" style="padding-left: 12px;">' . $remainLabelJs . '</td><td class="nowraponall right" style="font-weight: bold; color: ' . $remainColor . ';">' . $remainValueJs . '</td>\');
+            // Extend currency row colspan to match
+            var currencyRow = amountTable.find("tr").first();
+            var currencyTd = currencyRow.find("td").last();
+            currencyTd.attr("colspan", 3);
+        }
+    }
+});
+</script>';
+
+                    // Override the "Remaining" row on all invoices in the chain
+                    if (!$isViewingLatest) {
+                        // Corrected invoices: show "Superseded"
+                        $overrideLabel = dol_escape_js($langs->trans('KSEF_CorrectionChainSuperseded'));
+                        $overrideCssClass = 'amountpaymentneutral';
+                        $overrideValue = '<span class="opacitymedium small">' . dol_escape_js($langs->trans('KSEF_CorrectionChainSuperseded')) . '</span>';
+                    } else {
+                        // Chain-calculated remaining
+                        $overrideLabel = dol_escape_js($remainLabel);
+                        if (abs($remaining) < 0.01) {
+                            $overrideCssClass = 'amountpaymentcomplete';
+                        } elseif ($remaining < 0) {
+                            $overrideCssClass = 'amountremaintopayback';
+                        } else {
+                            $overrideCssClass = 'amountremaintopay';
+                        }
+                        $overrideValue = dol_escape_js($remainFormatted);
+                    }
+                    $overrideLabelJs = $overrideLabel;
+
+                    print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var remainCell = jQuery("td.amountremaintopay, td.amountpaymentneutral, td.amountpaymentcomplete, td.amountremaintopayback");
+    if (!remainCell.length) return;
+    var row = remainCell.closest("tr");
+    row.find("span.opacitymedium").text(\'' . $overrideLabelJs . '\');
+    remainCell.replaceWith(\'<td class="right ' . $overrideCssClass . '">' . $overrideValue . '</td>\');
+});
+</script>';
+                }
+            }
+
+            // Correction line item hint for draft invoices
+            if (!empty($object) && !empty($object->id)
+                && ($object->type == Facture::TYPE_REPLACEMENT || $object->type == Facture::TYPE_CREDIT_NOTE)
+                && $object->statut == Facture::STATUS_DRAFT
+                && !empty($object->fk_facture_source)) {
+                $langs->load("ksef@ksef");
+                $hintKey = ($object->type == Facture::TYPE_REPLACEMENT)
+                    ? 'KSEF_CorrectionDraftHint'
+                    : 'KSEF_CreditNoteDraftHint';
+                $hintText = dol_escape_js($langs->trans($hintKey));
+                print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var lineTable = jQuery("#tablelines, table.liste");
+    if (lineTable.length) {
+        lineTable.first().before(\'<div class="info" style="margin-bottom: 8px;"><span class="fas fa-info-circle" style="margin-right: 6px;"></span>' . $hintText . '</div>\');
+    }
+});
+</script>';
+            }
+
+            // Hide Reopen on corrected originals
+            if (!empty($object) && !empty($object->id)
+                && $object->statut == Facture::STATUS_CLOSED
+                && $object->getIdReplacingInvoice('validated') > 0) {
+                print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    jQuery("a.butAction[href*=\'action=reopen\']").each(function() {
+        jQuery(this).replaceWith(\'<span class="butActionRefused classfortooltip" title="' . dol_escape_js($langs->trans('KSEF_CorrectionChainBlocked', '')) . '">\' + jQuery(this).text() + \'</span>\');
+    });
+});
+</script>';
+            }
+
+            // Correction reason/type picker
+            if (!empty($object) && !empty($object->id)
+                && ($object->type == Facture::TYPE_CREDIT_NOTE || $object->type == Facture::TYPE_REPLACEMENT)) {
+                $langs->load("ksef@ksef");
+                if (!isset($object->array_options) || empty($object->array_options)) {
+                    $object->fetch_optionals();
+                }
+
+                // Read-only check for accepted/offline invoices
+                dol_include_once('/ksef/class/ksef_submission.class.php');
+                $corrSubmission = new KsefSubmission($db);
+                $corrHasSubmission = ($corrSubmission->fetchByInvoice($object->id) > 0);
+                $corrIsAccepted = $corrHasSubmission && $corrSubmission->status == KsefSubmission::STATUS_ACCEPTED
+                    && !empty($corrSubmission->ksef_number)
+                    && strpos($corrSubmission->ksef_number, 'OFFLINE') === false
+                    && strpos($corrSubmission->ksef_number, 'PENDING') === false
+                    && strpos($corrSubmission->ksef_number, 'ERROR') === false;
+                $corrIsOffline = $corrHasSubmission && $corrSubmission->status == KsefSubmission::STATUS_OFFLINE
+                    && !empty($corrSubmission->fa3_xml);
+                $corrReadonly = $corrIsAccepted || $corrIsOffline;
+
+                $corrReasonPresets = array(
+                    'Zwrot towaru'          => 'KSEF_CorrectionReasonPreset_return',
+                    'Błędna ilość'          => 'KSEF_CorrectionReasonPreset_qty',  // @phan-suppress-current-line PhanPluginDuplicateArrayKey
+                    'Błędna cena'           => 'KSEF_CorrectionReasonPreset_price',
+                    'Błędna stawka VAT'     => 'KSEF_CorrectionReasonPreset_vat',
+                    'Rabat potransakcyjny'  => 'KSEF_CorrectionReasonPreset_discount',
+                    'Skonto'                => 'KSEF_CorrectionReasonPreset_skonto',
+                    'Zwrot zaliczki'        => 'KSEF_CorrectionReasonPreset_advance',
+                    'Błędne dane nabywcy'   => 'KSEF_CorrectionReasonPreset_buyer',
+                );
+
+                $currentReason = trim((string) ($object->array_options['options_ksef_correction_reason'] ?? ''));
+                $currentType = trim((string) ($object->array_options['options_ksef_correction_type'] ?? ''));
+
+                // Check if reason matches preset or custom
+                $isPreset = !empty($currentReason) && array_key_exists($currentReason, $corrReasonPresets);
+                $isCustom = !empty($currentReason) && !$isPreset;
+
+                // Correction Details row
+                $detailsLabel = $form->textwithpicto(
+                    $langs->trans("KSEF_CorrectionDetails"),
+                    $langs->trans("KSEF_CorrectionReasonAlwaysPolishHelp")
+                );
+                print '<tr><td class="titlefieldcreate">' . $detailsLabel . '</td><td colspan="3">';
+
+                if ($corrReadonly) {
+                    // Display as read-only text when accepted or offline
+                    print '<div style="margin-bottom: 6px;">';
+                    print $langs->trans("KSEF_CorrectionReason") . ': ';
+                    if ($isPreset) {
+                        print '<strong>' . $langs->trans($corrReasonPresets[$currentReason]) . '</strong>';
+                    } elseif ($isCustom) {
+                        print '<strong>' . dol_escape_htmltag($currentReason) . '</strong>';
+                    } else {
+                        print '<span class="opacitymedium">' . $langs->trans("KSEF_NotSet") . '</span>';
+                    }
+                    print '</div>';
+                    print '<div>';
+                    print $langs->trans("KSEF_CorrectionType") . ': ';
+                    if (!empty($currentType) && in_array($currentType, array('1', '2', '3'))) {
+                        print '<strong>' . $langs->trans("KSEF_CorrectionType" . $currentType) . '</strong>';
+                    } else {
+                        print '<span class="opacitymedium">' . $langs->trans("KSEF_NotSet") . '</span>';
+                    }
+                    print '</div>';
+                } else {
+                    // Editable form
+                    print '<form method="POST" action="' . $_SERVER['PHP_SELF'] . '?facid=' . $object->id . '">';
+                    print '<input type="hidden" name="token" value="' . newToken() . '">';
+                    print '<input type="hidden" name="action" value="ksef_save_correction_details">';
+
+                    // Line 1: Reason
+                    print '<div style="margin-bottom: 6px;">';
+                    print $langs->trans("KSEF_CorrectionReason") . ': ';
+                    print '<select name="ksef_correction_reason_preset" id="ksef_correction_reason_preset" style="min-width: 220px;">';
+                    print '<option value=""></option>';
+                    foreach ($corrReasonPresets as $plText => $langKey) {
+                        $selected = ($isPreset && $currentReason === $plText) ? ' selected' : '';
+                        print '<option value="' . dol_escape_htmltag($plText) . '"' . $selected . '>' . $langs->trans($langKey) . '</option>';
+                    }
+                    $otherSelected = $isCustom ? ' selected' : '';
+                    print '<option value="custom"' . $otherSelected . '>' . $langs->trans("KSEF_CorrectionReasonPreset_other") . '</option>';
+                    print '</select>';
+
+                    // Custom Other
+                    $customDisplay = $isCustom ? 'inline-block' : 'none';
+                    $customValue = $isCustom ? dol_escape_htmltag($currentReason) : '';
+                    print ' <input type="text" name="ksef_correction_reason_custom" id="ksef_correction_reason_custom"';
+                    print ' value="' . $customValue . '" maxlength="256" style="display: ' . $customDisplay . '; width: 300px;"';
+                    print ' placeholder="' . dol_escape_htmltag($langs->trans("KSEF_CorrectionReasonCustomPlaceholder")) . '">';
+                    print '</div>';
+
+                    // Line 2: Type + Save
+                    print '<div>';
+                    print $langs->trans("KSEF_CorrectionType") . ': ';
+                    print '<select name="ksef_correction_type" style="min-width: 200px;">';
+                    print '<option value=""></option>';
+                    for ($t = 1; $t <= 3; $t++) {
+                        $tSelected = ($currentType === (string) $t) ? ' selected' : '';
+                        print '<option value="' . $t . '"' . $tSelected . '>' . $langs->trans("KSEF_CorrectionType" . $t) . '</option>';
+                    }
+                    print '</select>';
+                    print ' <input type="submit" class="button smallpaddingimp" value="' . $langs->trans("Save") . '">';
+                    print '</div>';
+
+                    print '</form>';
+
+                    // JS: toggle custom text field visibility
+                    print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    jQuery("#ksef_correction_reason_preset").on("change", function() {
+        if (jQuery(this).val() === "custom") {
+            jQuery("#ksef_correction_reason_custom").show().focus();
+        } else {
+            jQuery("#ksef_correction_reason_custom").hide().val("");
+        }
+    });
+});
+</script>';
+                }
+                print '</td></tr>';
+            }
+
             $submission = new KsefSubmission($db);
-            $result = $submission->fetchByInvoice($object->id);
+            $result = (!empty($object) && !empty($object->id)) ? $submission->fetchByInvoice($object->id) : 0;
 
             if ($result > 0) {
                 $langs->load("ksef@ksef");
@@ -1730,7 +2642,7 @@ jQuery(document).ready(function() {
             }
 
             // DodatkowyOpis preview panel
-            $ctx = $this->ksefComputeDodatkowyOpisContext($object);
+            $ctx = (!empty($object) && !empty($object->id)) ? $this->ksefComputeDodatkowyOpisContext($object) : array('featureActive' => false);
             if ($ctx['featureActive']) {
                 // Preview panel
                 print '<tr id="ksef_dodatkowy_preview_row"><td class="titlefieldcreate">' . $langs->trans("KSEF_DODATKOWY_OPIS_PREVIEW") . '</td><td colspan="3">';
@@ -1749,6 +2661,154 @@ jQuery(document).ready(function() {
 
                 print $this->ksefRenderDodatkowyOpisHelperScript($object);
             }
+
+            if (GETPOST('action', 'aZ09') == 'create') {
+                $langs->load("ksef@ksef");
+                $hintCreditNote = dol_escape_js($langs->trans('KSEF_HintCreditNote'));
+                $hintReplacement = dol_escape_js($langs->trans('KSEF_HintReplacement'));
+                print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var hintStyle = "display: block; color: #666; font-size: 0.85em; font-style: italic; margin: 2px 0 4px 24px;";
+    var creditRadio = jQuery("#radio_creditnote");
+    if (creditRadio.length) {
+        creditRadio.closest(".listofinvoicetype").find(".classfortooltip").first()
+            .after("<div style=\"" + hintStyle + "\">' . $hintCreditNote . '</div>");
+    }
+    var replaceRadio = jQuery("#radio_replacement");
+    if (replaceRadio.length) {
+        replaceRadio.closest(".listofinvoicetype").find(".classfortooltip").first()
+            .after("<div style=\"" + hintStyle + "\">' . $hintReplacement . '</div>");
+    }
+});
+</script>';
+
+                $socid = GETPOST('socid', 'int');
+                if ($socid > 0) {
+                    $paid_invoices = array();
+                    $sql_paid = "SELECT f.rowid, f.ref, f.total_ttc, f.date_valid";
+                    $sql_paid .= " FROM " . MAIN_DB_PREFIX . "facture as f";
+                    $sql_paid .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture as ff ON f.rowid = ff.fk_facture_source AND ff.fk_statut > 0";
+                    $sql_paid .= " WHERE f.fk_soc = " . (int) $socid;
+                    $sql_paid .= " AND f.fk_statut = " . Facture::STATUS_CLOSED;
+                    $sql_paid .= " AND f.paye = 1";
+                    $sql_paid .= " AND f.entity IN (" . getEntity('invoice') . ")";
+                    $sql_paid .= " AND ff.rowid IS NULL"; // not already replaced
+                    $sql_paid .= " ORDER BY f.ref";
+
+                    $ksef_replacements = array();
+                    $sql_kor = "SELECT f.rowid, f.ref, f.total_ttc, f.date_valid";
+                    $sql_kor .= " FROM " . MAIN_DB_PREFIX . "facture as f";
+                    $sql_kor .= " INNER JOIN " . MAIN_DB_PREFIX . "facture_extrafields as fe ON fe.fk_object = f.rowid";
+                    $sql_kor .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture as ff ON f.rowid = ff.fk_facture_source AND ff.fk_statut > 0";
+                    $sql_kor .= " WHERE f.fk_soc = " . (int) $socid;
+                    $sql_kor .= " AND f.type = " . Facture::TYPE_REPLACEMENT;
+                    $sql_kor .= " AND f.fk_statut IN (" . Facture::STATUS_VALIDATED . ", " . Facture::STATUS_CLOSED . ")";
+                    $sql_kor .= " AND f.entity IN (" . getEntity('invoice') . ")";
+                    $sql_kor .= " AND fe.ksef_number IS NOT NULL AND fe.ksef_number != ''";
+                    $sql_kor .= " AND ff.rowid IS NULL"; // not already replaced by another
+                    $sql_kor .= " ORDER BY f.ref";
+                    $resql_kor = $db->query($sql_kor);
+                    if ($resql_kor) {
+                        while ($obj_kor = $db->fetch_object($resql_kor)) {
+                            $ksef_replacements[$obj_kor->rowid] = array(
+                                'id' => $obj_kor->rowid,
+                                'ref' => $obj_kor->ref,
+                                'label' => $obj_kor->ref . ' (' . $langs->trans('KSEF_KorektaOfKorekta') . ')',
+                            );
+                        }
+                        $db->free($resql_kor);
+                    }
+
+                    $resql_paid = $db->query($sql_paid);
+                    if ($resql_paid) {
+                        while ($obj_paid = $db->fetch_object($resql_paid)) {
+                            $paid_invoices[] = array(
+                                'id' => $obj_paid->rowid,
+                                'ref' => $obj_paid->ref,
+                                'label' => $obj_paid->ref . ' (' . $langs->trans('Paid') . ')',
+                            );
+                        }
+                        $db->free($resql_paid);
+                    }
+
+                    foreach ($ksef_replacements as $kor_id => $kor_inv) {
+                        $already_in = false;
+                        foreach ($paid_invoices as $pi) {
+                            if ($pi['id'] == $kor_id) { $already_in = true; break; }
+                        }
+                        if (!$already_in) {
+                            $paid_invoices[] = $kor_inv;
+                        }
+                    }
+
+                    if (!empty($paid_invoices)) {
+                        $js_invoices = json_encode($paid_invoices);
+                        print '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var paidInvoices = ' . $js_invoices . ';
+    if (!paidInvoices.length) return;
+
+    var sel = jQuery("#fac_replacement");
+    if (!sel.length) sel = jQuery("select[name=\'fac_replacement\']");
+    if (!sel.length) {
+        console.warn("KSeF: Could not find replacement invoice dropdown (#fac_replacement)");
+        return;
+    }
+
+    if (paidInvoices.length > 0) {
+        sel.find("option[value=\'-1\']").each(function() {
+            var txt = jQuery(this).text().trim();
+            if (txt !== "" && txt !== "&nbsp;") {
+                jQuery(this).remove();
+            }
+        });
+    }
+
+    for (var i = 0; i < paidInvoices.length; i++) {
+        var inv = paidInvoices[i];
+        // Skip if already in the list
+        if (sel.find("option[value=\'" + inv.id + "\']").length > 0) continue;
+        sel.append(jQuery("<option>", { value: inv.id, text: inv.label, "data-ksef-paid": "1" }));
+    }
+
+    if (!sel.find("option[value=\'-1\']").length) {
+        sel.prepend(jQuery("<option>", { value: "-1", text: " " }));
+    }
+
+    if (paidInvoices.length > 0) {
+        sel.prop("disabled", false);
+        jQuery("#radio_replacement").prop("disabled", false);
+    }
+
+    try {
+        if (sel.data("select2")) {
+            sel.select2("destroy");
+        }
+        sel.select2({
+            dir: "ltr",
+            width: "resolve",
+            minimumInputLength: 0,
+            language: (typeof select2arrayoflanguage === "undefined") ? "en" : select2arrayoflanguage,
+            theme: "default",
+            containerCssClass: ":all:",
+            selectionCssClass: ":all:",
+            dropdownCssClass: "ui-dialog"
+        });
+    } catch(e) {
+        console.warn("KSeF: Select2 refresh failed, dropdown may not be searchable: " + e.message);
+    }
+
+    var urlParams = new URLSearchParams(window.location.search);
+    var preselect = urlParams.get("fac_replacement");
+    if (preselect && sel.find("option[value=\'" + preselect + "\']").length > 0) {
+        sel.val(preselect).trigger("change");
+        jQuery("#radio_replacement").prop("checked", true).trigger("change");
+    }
+});
+</script>';
+                    }
+                }
+            }
         }
 
         if ($currentcontext == 'invoicesuppliercard') {
@@ -1766,9 +2826,7 @@ jQuery(document).ready(function() {
 jQuery(document).ready(function() {
     var saleDateRow = jQuery("tr").has(".invoice_supplier_extras_ksef_sale_date");
     if (!saleDateRow.length) return;
-    // Try edit button first (draft supplier invoices)
     var dateRow = jQuery("a[href*=\'action=editinvoicedate\']").closest("table.nobordernopadding").closest("tr");
-    // Fallback: find by label text
     if (!dateRow.length) {
         var label = ' . json_encode($langs->transnoentities("DateInvoice")) . ';
         dateRow = jQuery("table.border.tableforfield > tbody > tr, table.border.centpercent.tableforfield > tbody > tr").filter(function() {
@@ -2202,6 +3260,28 @@ jQuery(document).ready(function() {
      * @param $action Current action
      * @param $hookmanager Hook manager
      * @return int Status code
+     * @called_by Dolibarr hook: beforePDFCreation
+     */
+    public function beforePDFCreation($parameters, &$object, &$action, $hookmanager)
+    {
+        if (empty($object) || $object->element != 'facture') return 0;
+        if ($object->type != Facture::TYPE_REPLACEMENT) return 0;
+
+        // Override translation key for PDF templates
+        $outputlangs = $parameters['outputlangs'] ?? null;
+        if (!empty($outputlangs) && is_object($outputlangs)) {
+            $outputlangs->load("ksef@ksef");
+            $corrLabel = $outputlangs->transnoentities('KSEF_CorrectionInvoice');
+            if (!empty($corrLabel) && $corrLabel != 'KSEF_CorrectionInvoice') {
+                $outputlangs->tab_translate['InvoiceReplacement'] = $corrLabel;
+                $outputlangs->tab_translate['InvoiceReplacementShort'] = $corrLabel;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
      * @called_by Dolibarr hook: afterPDFTotalTable
      * @calls KsefQR::addQRToPDF()
      */
@@ -2416,6 +3496,610 @@ jQuery(document).ready(function() {
 </script>';
 
         $this->resprints .= $out;
+        return 0;
+    }
+
+    /**
+     * @brief Override status display for KSeF-corrected invoices
+     * @param array $parameters Hook parameters
+     * @param CommonInvoice $object
+     * @param string $action
+     * @param HookManager $hookmanager
+     * @return int 0 = no override, 1 = override
+     * @called_by Dolibarr hook: LibStatut
+     */
+    public function LibStatut($parameters, &$object, &$action, $hookmanager)
+    {
+        global $langs, $db, $conf;
+
+        if (empty($conf->ksef) || empty($conf->ksef->enabled)) {
+            return 0;
+        }
+
+        // Customer invoices only
+        if (!is_object($object) || $object->element !== 'facture') {
+            return 0;
+        }
+
+        if ($parameters['status'] != Facture::STATUS_ABANDONED) {
+            return 0;
+        }
+        if (empty($object->close_code) || $object->close_code != 'replaced') {
+            return 0;
+        }
+
+        // Find replacing invoice
+        $replacingId = $object->getIdReplacingInvoice('validated');
+        if ($replacingId <= 0) {
+            return 0;
+        }
+
+        $langs->load("ksef@ksef");
+
+        $mode = $parameters['mode'];
+        $labelShort = $langs->trans('KSEF_StatusCorrected');
+        $labelLong = $langs->trans('KSEF_StatusCorrectedLong');
+        $statusType = 'status4'; // info badge, distinct from status5
+
+        $this->resprints = dolGetStatus($labelLong, $labelShort, '', $statusType, $mode);
+        return 1;
+    }
+
+    // Accounting hooks
+    /**
+     * @brief Returns delta amounts for TYPE_REPLACEMENT (replacement - original)
+     * @param Facture $invoice Must have extrafields
+     * @return array|null delta_ht/tva/ttc + original_ht/tva/ttc, or null
+     * @called_by processedJournalData(), facdao(), addVatLine()
+     */
+    private function getCorrectionDelta($invoice)
+    {
+        if ($invoice->type != Facture::TYPE_REPLACEMENT) {
+            return null;
+        }
+        if (!isset($invoice->array_options['options_ksef_correction_original_ht'])) {
+            $invoice->fetch_optionals();
+        }
+        $orig_ht = $invoice->array_options['options_ksef_correction_original_ht'] ?? null;
+        $orig_tva = $invoice->array_options['options_ksef_correction_original_tva'] ?? null;
+        $orig_ttc = $invoice->array_options['options_ksef_correction_original_ttc'] ?? null;
+        if ($orig_ht === null || $orig_ht === '') {
+            return null;
+        }
+        return array(
+            'delta_ht' => $invoice->total_ht - (float) $orig_ht,
+            'delta_tva' => $invoice->total_tva - (float) $orig_tva,
+            'delta_ttc' => $invoice->total_ttc - (float) $orig_ttc,
+            'original_ht' => (float) $orig_ht,
+            'original_tva' => (float) $orig_tva,
+            'original_ttc' => (float) $orig_ttc,
+        );
+    }
+
+    /**
+     * @brief Fetch original invoice line-level breakdowns
+     * @param Facture $replacement Invoice with fk_facture_source
+     * @return array|null by_rate and by_account breakdowns, or null
+     * @called_by processedJournalData()
+     */
+    private function getOriginalLineBreakdown($replacement)
+    {
+        if (empty($replacement->fk_facture_source)) {
+            return null;
+        }
+        $original = new Facture($this->db);
+        if ($original->fetch($replacement->fk_facture_source) <= 0) {
+            return null;
+        }
+        $original->fetch_thirdparty();
+
+        // Per-rate breakdown
+        $by_rate = array();
+        foreach ($original->lines as $line) {
+            $rate_key = (string) $line->tva_tx;
+            if (!empty($line->vat_src_code)) {
+                $rate_key .= ' (' . $line->vat_src_code . ')';
+            }
+            if (!isset($by_rate[$rate_key])) {
+                $by_rate[$rate_key] = array('ht' => 0, 'tva' => 0, 'ttc' => 0);
+            }
+            $by_rate[$rate_key]['ht'] += $line->total_ht;
+            $by_rate[$rate_key]['tva'] += $line->total_tva;
+            $by_rate[$rate_key]['ttc'] += $line->total_ttc;
+        }
+
+        // Per-account breakdown
+        global $mysoc;
+        $by_account = array();
+        $by_vat_account = array();
+        $vat_account_rates = array();
+        foreach ($original->lines as $line) {
+            // Product/service account
+            $compta_prod = '';
+            if (!empty($line->fk_code_ventilation) && $line->fk_code_ventilation > 0) {
+                $sql = "SELECT account_number FROM " . MAIN_DB_PREFIX . "accounting_account"
+                    . " WHERE rowid = " . (int) $line->fk_code_ventilation;
+                $res = $this->db->query($sql);
+                if ($res) {
+                    $obj = $this->db->fetch_object($res);
+                    if ($obj) {
+                        $compta_prod = $obj->account_number;
+                    }
+                    $this->db->free($res);
+                }
+            }
+            if (empty($compta_prod)) {
+                // Fallback to defaults
+                if ($line->product_type == 0) {
+                    $compta_prod = getDolGlobalString('ACCOUNTING_PRODUCT_SOLD_ACCOUNT', 'NotDefined');
+                } else {
+                    $compta_prod = getDolGlobalString('ACCOUNTING_SERVICE_SOLD_ACCOUNT', 'NotDefined');
+                }
+            }
+            if (!isset($by_account[$compta_prod])) {
+                $by_account[$compta_prod] = 0;
+            }
+            $by_account[$compta_prod] += $line->total_ht;
+
+            // VAT account
+            $vatrate_string = $line->tva_tx;
+            if (!empty($line->vat_src_code)) {
+                $vatrate_string .= ' (' . $line->vat_src_code . ')';
+            }
+            $vatdata = getTaxesFromId($vatrate_string, null, $mysoc, 0);
+            $compta_tva = '';
+            if (is_array($vatdata) && !empty($vatdata['accountancy_code_sell'])) {
+                $compta_tva = $vatdata['accountancy_code_sell'];
+            }
+            if (!empty($compta_tva)) {
+                if (!isset($by_vat_account[$compta_tva])) {
+                    $by_vat_account[$compta_tva] = 0;
+                }
+                $by_vat_account[$compta_tva] += $line->total_tva;
+                // Map VAT account to rate string
+                $vat_account_rates[$compta_tva][$vatrate_string] = $vatrate_string;
+            }
+        }
+
+        // Customer TTC account
+        $compta_soc = '';
+        if (!empty($original->thirdparty)) {
+            $compta_soc = $original->thirdparty->code_compta_client;
+        }
+        if (empty($compta_soc)) {
+            $compta_soc = getDolGlobalString('ACCOUNTING_ACCOUNT_CUSTOMER', 'NotDefined');
+        }
+        $by_ttc_account = array($compta_soc => $original->total_ttc);
+
+        return array(
+            'by_rate' => $by_rate,
+            'by_account' => $by_account,
+            'by_vat_account' => $by_vat_account,
+            'vat_account_rates' => $vat_account_rates,
+            'by_ttc_account' => $by_ttc_account,
+            'original' => $original,
+        );
+    }
+
+    /**
+     * @brief Adjust sells journal amounts for correction deltas
+     * @param array $parameters Hook parameters
+     * @param CommonObject $object
+     * @param string $action
+     * @param HookManager $hookmanager
+     * @called_by Dolibarr hook: processedJournalData
+     */
+    public function processedJournalData($parameters, &$object, &$action, $hookmanager)
+    {
+        if (!in_array('sellsjournal', explode(':', $parameters['context'] ?? ''))) {
+            return 0;
+        }
+
+        $tabfac = &$parameters['tabfac'];
+        $tabht = &$parameters['tabht'];
+        $tabtva = &$parameters['tabtva'];
+        $tabttc = &$parameters['tabttc'];
+        $def_tva = &$parameters['def_tva'];
+
+        foreach ($tabfac as $invoice_id => $facinfo) {
+            if (($facinfo['type'] ?? -1) != Facture::TYPE_REPLACEMENT) {
+                continue;
+            }
+
+            $invoice = new Facture($this->db);
+            if ($invoice->fetch($invoice_id) <= 0) {
+                continue;
+            }
+            $delta = $this->getCorrectionDelta($invoice);
+            if ($delta === null) {
+                continue;
+            }
+
+            // Get original
+            $breakdown = $this->getOriginalLineBreakdown($invoice);
+            if ($breakdown === null) {
+                continue;
+            }
+
+            // Subtract original
+            if (isset($tabht[$invoice_id])) {
+                foreach ($breakdown['by_account'] as $account => $orig_amount) {
+                    if (isset($tabht[$invoice_id][$account])) {
+                        $tabht[$invoice_id][$account] -= $orig_amount;
+                    }
+                    // Account missing in replacement - add negative entry
+                    else {
+                        $tabht[$invoice_id][$account] = -$orig_amount;
+                    }
+                }
+            }
+
+            if (isset($tabtva[$invoice_id])) {
+                foreach ($breakdown['by_vat_account'] as $account => $orig_amount) {
+                    if (isset($tabtva[$invoice_id][$account])) {
+                        $tabtva[$invoice_id][$account] -= $orig_amount;
+                    } else {
+                        $tabtva[$invoice_id][$account] = -$orig_amount;
+                        // Populate def_tva for new VAT accounts
+                        if (!empty($breakdown['vat_account_rates'][$account]) && !isset($def_tva[$invoice_id][$account])) {
+                            $def_tva[$invoice_id][$account] = $breakdown['vat_account_rates'][$account];
+                        }
+                    }
+                }
+            }
+
+            if (isset($tabttc[$invoice_id])) {
+                foreach ($breakdown['by_ttc_account'] as $account => $orig_amount) {
+                    if (isset($tabttc[$invoice_id][$account])) {
+                        $tabttc[$invoice_id][$account] -= $orig_amount;
+                    } else {
+                        $tabttc[$invoice_id][$account] = -$orig_amount;
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * @brief Adjust customer balance for correction deltas
+     * @param array $parameters Hook parameters
+     * @param CommonObject $object
+     * @param string $action
+     * @param HookManager $hookmanager
+     * @called_by Dolibarr hook: facdao
+     */
+    public function facdao($parameters, &$object, &$action, $hookmanager)
+    {
+        if (!in_array('recapcomptacard', explode(':', $parameters['context'] ?? ''))) {
+            return 0;
+        }
+
+        $fac = $parameters['fac'];
+        $delta = $this->getCorrectionDelta($fac);
+        if ($delta === null) {
+            return 0;
+        }
+
+        $parameters['values']['amount'] = $delta['delta_ttc'];
+        return 0;
+    }
+
+    /**
+     * @brief Adjust VAT report amounts for correction deltas
+     * @param array $parameters Hook parameters
+     * @param CommonObject $object
+     * @param string $action
+     * @param HookManager $hookmanager
+     * @called_by Dolibarr hook: addVatLine
+     */
+    public function addVatLine($parameters, &$object, &$action, $hookmanager)
+    {
+        if (!in_array('externalbalance', explode(':', $parameters['context'] ?? ''))) {
+            return 0;
+        }
+
+        $modetax = $parameters['mode'] ?? 0;
+        if (!empty($modetax)) {
+            return 0;
+        }
+
+        $cache = array();
+
+        // Load delta + original breakdown
+        $loadInvoice = function ($inv_id) use (&$cache) {
+            if (isset($cache[$inv_id])) {
+                return $cache[$inv_id];
+            }
+            $inv = new Facture($this->db);
+            if ($inv->fetch($inv_id) <= 0) {
+                $cache[$inv_id] = null;
+                return null;
+            }
+            $delta = $this->getCorrectionDelta($inv);
+            if ($delta === null) {
+                $cache[$inv_id] = null;
+                return null;
+            }
+            $breakdown = $this->getOriginalLineBreakdown($inv);
+            if ($breakdown === null) {
+                $cache[$inv_id] = null;
+                return null;
+            }
+            $cache[$inv_id] = array(
+                'delta' => $delta,
+                'by_rate' => $breakdown['by_rate'],
+            );
+            return $cache[$inv_id];
+        };
+
+        $found = array();
+
+        if (is_array($object[0])) {
+            foreach ($object[0] as $rate => $rate_data) {
+                if (!isset($rate_data['detail']) || !is_array($rate_data['detail'])) continue;
+                foreach ($rate_data['detail'] as $detail) {
+                    $inv_id = $detail['id'] ?? 0;
+                    if ($inv_id <= 0 || isset($found[$inv_id])) continue;
+                    $found[$inv_id] = ($loadInvoice($inv_id) !== null);
+                }
+            }
+        }
+        if (is_array($object[2])) {
+            foreach ($object[2] as $rate => $rate_data) {
+                if (!isset($rate_data['coll']['detail']) || !is_array($rate_data['coll']['detail'])) continue;
+                foreach ($rate_data['coll']['detail'] as $detail) {
+                    $inv_id = $detail['id'] ?? 0;
+                    if ($inv_id <= 0 || isset($found[$inv_id])) continue;
+                    $found[$inv_id] = ($loadInvoice($inv_id) !== null);
+                }
+            }
+        }
+
+        $adjusted_coll = array();
+        $adjusted_both = array();
+
+        foreach ($found as $inv_id => $is_replacement) {
+            if (!$is_replacement) continue;
+            $info = $cache[$inv_id];
+
+            foreach ($info['by_rate'] as $orig_rate => $amounts) {
+                $adj_key = $inv_id . ':' . $orig_rate;
+                if (isset($adjusted_coll[$adj_key])) continue;
+                $adjusted_coll[$adj_key] = true;
+
+                if (isset($object[0][$orig_rate])) {
+                    // Adjust rate totals
+                    $object[0][$orig_rate]['totalht'] -= $amounts['ht'];
+                    $object[0][$orig_rate]['vat'] -= $amounts['tva'];
+
+                    // Adjust detail entry if replacement at same rate
+                    if (isset($object[0][$orig_rate]['detail']) && is_array($object[0][$orig_rate]['detail'])) {
+                        foreach ($object[0][$orig_rate]['detail'] as &$d) {
+                            if (($d['id'] ?? 0) == $inv_id) {
+                                if (isset($d['totalht'])) $d['totalht'] -= $amounts['ht'];
+                                if (isset($d['vat'])) $d['vat'] -= $amounts['tva'];
+                                break;
+                            }
+                        }
+                        unset($d);
+                    }
+                }
+            }
+
+            foreach ($info['by_rate'] as $orig_rate => $amounts) {
+                $adj_key = $inv_id . ':' . $orig_rate;
+                if (isset($adjusted_both[$adj_key])) continue;
+                $adjusted_both[$adj_key] = true;
+
+                if (isset($object[2][$orig_rate]['coll'])) {
+                    $object[2][$orig_rate]['coll']['totalht'] -= $amounts['ht'];
+                    $object[2][$orig_rate]['coll']['vat'] -= $amounts['tva'];
+
+                    if (isset($object[2][$orig_rate]['coll']['detail']) && is_array($object[2][$orig_rate]['coll']['detail'])) {
+                        foreach ($object[2][$orig_rate]['coll']['detail'] as &$d) {
+                            if (($d['id'] ?? 0) == $inv_id) {
+                                if (isset($d['totalht'])) $d['totalht'] -= $amounts['ht'];
+                                if (isset($d['vat'])) $d['vat'] -= $amounts['tva'];
+                                break;
+                            }
+                        }
+                        unset($d);
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * @brief Adjust P&L totals for correction deltas
+     * @param array $parameters Hook parameters
+     * @param CommonObject $object
+     * @param string $action
+     * @param HookManager $hookmanager
+     * @called_by Dolibarr hook: addReportInfo
+     */
+    public function addReportInfo($parameters, &$object, &$action, $hookmanager)
+    {
+        if (!in_array('externalbalance', explode(':', $parameters['context'] ?? ''))) {
+            return 0;
+        }
+
+        $mode = $parameters['mode'] ?? '';
+        if ($mode != 'CREANCES-DETTES') {
+            return 0;
+        }
+
+        if (empty($object[0]) || !is_array($object[0])) {
+            return 0;
+        }
+        $months = array_keys($object[0]);
+        $date_min = min($months) . '-01';
+        $date_max = date('Y-m-t', strtotime(max($months) . '-01'));
+
+        $sql = "SELECT f.datef, fe.ksef_correction_original_ht, fe.ksef_correction_original_ttc";
+        $sql .= " FROM " . MAIN_DB_PREFIX . "facture as f";
+        $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "facture_extrafields as fe ON fe.fk_object = f.rowid";
+        $sql .= " WHERE f.type = " . Facture::TYPE_REPLACEMENT;
+        $sql .= " AND f.fk_statut > 0";
+        $sql .= " AND fe.ksef_correction_original_ht IS NOT NULL";
+        $sql .= " AND fe.ksef_correction_original_ht != ''";
+        $sql .= " AND f.datef >= '" . $this->db->escape($date_min) . "'";
+        $sql .= " AND f.datef <= '" . $this->db->escape($date_max) . "'";
+        $sql .= " AND f.entity IN (" . getEntity('invoice') . ")";
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            return 0;
+        }
+
+        while ($obj = $this->db->fetch_object($resql)) {
+            $month_key = dol_print_date($this->db->jdate($obj->datef), '%Y-%m');
+            $orig_ht = (float) $obj->ksef_correction_original_ht;
+            $orig_ttc = (float) $obj->ksef_correction_original_ttc;
+
+            // Subtract original amounts from month totals
+            if (isset($object[0][$month_key])) {
+                $object[0][$month_key] -= $orig_ht;
+            }
+            if (isset($object[1][$month_key])) {
+                $object[1][$month_key] -= $orig_ttc;
+            }
+        }
+        $this->db->free($resql);
+
+        return 0;
+    }
+
+    /**
+     * @brief Adjust grand totals and per-customer rows for correction deltas
+     * @param array $parameters Hook parameters
+     * @param CommonObject $object
+     * @param string $action
+     * @param HookManager $hookmanager
+     * @called_by Dolibarr hook: addBalanceLine
+     */
+    public function addBalanceLine($parameters, &$object, &$action, $hookmanager)
+    {
+        global $langs;
+
+        if (!in_array('customersupplierreportlist', explode(':', $parameters['context'] ?? ''))) {
+            return 0;
+        }
+
+        $mode = $parameters['mode'] ?? '';
+        if ($mode != 'CREANCES-DETTES') {
+            return 0;
+        }
+
+        $date_start = $parameters['date_start'] ?? null;
+        $date_end = $parameters['date_end'] ?? null;
+
+        $sql = "SELECT f.fk_soc,";
+        $sql .= " SUM(fe.ksef_correction_original_ht) as orig_ht,";
+        $sql .= " SUM(fe.ksef_correction_original_ttc) as orig_ttc";
+        $sql .= " FROM " . MAIN_DB_PREFIX . "facture as f";
+        $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "facture_extrafields as fe ON fe.fk_object = f.rowid";
+        $sql .= " WHERE f.type = " . Facture::TYPE_REPLACEMENT;
+        $sql .= " AND f.fk_statut > 0";
+        $sql .= " AND fe.ksef_correction_original_ht IS NOT NULL";
+        $sql .= " AND fe.ksef_correction_original_ht != ''";
+        $sql .= " AND f.entity IN (" . getEntity('invoice') . ")";
+        if ($date_start) {
+            $sql .= " AND f.datef >= '" . $this->db->idate($date_start) . "'";
+        }
+        if ($date_end) {
+            $sql .= " AND f.datef <= '" . $this->db->idate($date_end) . "'";
+        }
+        $sql .= " GROUP BY f.fk_soc";
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            return 0;
+        }
+
+        $total_orig_ht = 0;
+        $total_orig_ttc = 0;
+        $per_customer = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $adj_ht = (float) $obj->orig_ht;
+            $adj_ttc = (float) $obj->orig_ttc;
+            $total_orig_ht += $adj_ht;
+            $total_orig_ttc += $adj_ttc;
+            $per_customer[(int) $obj->fk_soc] = array('ht' => $adj_ht, 'ttc' => $adj_ttc);
+        }
+        $this->db->free($resql);
+
+        // Adjust grand totals
+        if ($total_orig_ht != 0 || $total_orig_ttc != 0) {
+            $object[0] -= $total_orig_ht;
+            $object[1] -= $total_orig_ttc;
+        }
+
+        if (!empty($per_customer)) {
+            $js_adjustments = array();
+            foreach ($per_customer as $socid => $adj) {
+                $js_adjustments[] = '{socid:' . $socid . ',ht:' . $adj['ht'] . ',ttc:' . $adj['ttc'] . '}';
+            }
+            $this->resprints = '<script type="text/javascript">
+jQuery(document).ready(function() {
+    var adjs = [' . implode(',', $js_adjustments) . '];
+    adjs.forEach(function(a) {
+        jQuery("a[href*=\'socid=" + a.socid + "\']").each(function() {
+            var row = jQuery(this).closest("tr");
+            if (!row.length) return;
+            var spans = row.find("span.amount");
+            if (spans.length >= 2) {
+                // HT + TTC spans
+                var htSpan = spans.eq(0);
+                var ttcSpan = spans.eq(1);
+                adjustAmountSpan(htSpan, a.ht);
+                adjustAmountSpan(ttcSpan, a.ttc);
+            } else if (spans.length === 1) {
+                // TTC only span
+                adjustAmountSpan(spans.eq(0), a.ttc);
+            }
+        });
+    });
+    function adjustAmountSpan(span, subtract) {
+        var text = span.text().trim();
+        // Parse Dolibarr-formatted number
+        var cleaned = text.replace(/\s/g, "");
+        var val;
+        // Detect decimal format
+        var lastComma = cleaned.lastIndexOf(",");
+        var lastDot = cleaned.lastIndexOf(".");
+        if (lastComma > lastDot) {
+            // European format (comma decimal)
+            val = parseFloat(cleaned.replace(/\./g, "").replace(",", "."));
+        } else {
+            // US format (dot decimal)
+            val = parseFloat(cleaned.replace(/,/g, ""));
+        }
+        if (isNaN(val)) return;
+        var newVal = val - subtract;
+        // Re-format preserving original separator
+        var decSep = (lastComma > lastDot) ? "," : ".";
+        var thouSep = (decSep === ",") ? "." : ",";
+        // Determine decimal places
+        var decPos = (decSep === ",") ? lastComma : lastDot;
+        var decimals = (decPos >= 0) ? (cleaned.length - decPos - 1) : 2;
+        var formatted = newVal.toFixed(decimals);
+        if (decSep === ",") {
+            formatted = formatted.replace(".", ",");
+        }
+        // Add thousand separators
+        var parts = formatted.split(decSep);
+        parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, thouSep);
+        span.text(parts.join(decSep));
+    }
+});
+</script>';
+        }
+
         return 0;
     }
 

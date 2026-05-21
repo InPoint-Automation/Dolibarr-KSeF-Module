@@ -133,6 +133,7 @@ class KsefService extends CommonObject
 
             $fa3_creation_date = $this->builder->getLastCreationDate();
             $xml_hash = $this->builder->getLastXmlHash();
+            $invoice_type = $this->builder->getLastInvoiceType();
 
             if (!$this->builder->validate($fa3_xml)) {
                 dol_syslog("KSEF::submitInvoice XML validation warnings: " . implode(', ', $this->builder->errors), LOG_WARNING);
@@ -158,6 +159,7 @@ class KsefService extends CommonObject
             $submission->fa3_xml = $fa3_xml;
             $submission->fa3_creation_date = $fa3_creation_date;
             $submission->invoice_hash = $xml_hash;
+            $submission->invoice_type = $invoice_type;
             $submission->status = 'PENDING';
             $submission->environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
             $submission->date_submission = dol_now();
@@ -253,6 +255,7 @@ class KsefService extends CommonObject
                 $submission->fa3_xml = $fa3_xml;
                 $submission->fa3_creation_date = $fa3_creation_date;
                 $submission->invoice_hash = $xml_hash;
+                $submission->invoice_type = $invoice_type;
                 $submission->status = 'FAILED';
                 $submission->environment = $conf->global->KSEF_ENVIRONMENT ?? 'TEST';
                 $submission->date_submission = dol_now();
@@ -336,6 +339,7 @@ class KsefService extends CommonObject
                 }
                 $xml_hash = $this->builder->getLastXmlHash();
                 $fa3_creation_date = $this->builder->getLastCreationDate();
+                $submission->invoice_type = $this->builder->getLastInvoiceType();
             }
 
             $offline_number = 'OFFLINE-' . $invoice->ref . '-' . date('YmdHis');
@@ -718,6 +722,7 @@ class KsefService extends CommonObject
             $submission->fk_facture = $invoice_id;
             $submission->fa3_xml = $new_xml;
             $submission->invoice_hash = $new_hash;
+            $submission->invoice_type = $this->builder->getLastInvoiceType();
             $submission->original_invoice_hash = $original->invoice_hash;
             $submission->offline_mode = $original->offline_mode;
             $submission->offline_deadline = $original->offline_deadline;
