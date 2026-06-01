@@ -188,13 +188,50 @@ if ($action == 'update') {
     $uu_id_val = GETPOST('KSEF_FA3_INCLUDE_UU_ID', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_UU_ID', $uu_id_val, 'chaine', 0, '', $conf->entity);
 
-    // FP / TP flags
-    $fp_val = GETPOST('KSEF_FA3_INCLUDE_FP', 'alpha') ? '1' : '0';
-    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_FP', $fp_val, 'chaine', 0, '', $conf->entity);
-
+    // TP flag source
     $tp_source = GETPOST('KSEF_TP_SOURCE', 'alphanohtml');
     if ($tp_source === 'disabled' || strpos($tp_source, 'thirdparty_extrafield:') === 0 || strpos($tp_source, 'extrafield:') === 0) {
         dolibarr_set_const($db, 'KSEF_TP_SOURCE', $tp_source, 'chaine', 0, '', $conf->entity);
+    }
+
+    // Adnotacje flag sources
+    $ksefFlagAllowed = array(
+        'KSEF_FA3_MPP_SOURCE' => array('disabled', 'extrafield:'),
+        'KSEF_FA3_FP_SOURCE'  => array('disabled', 'extrafield:'),
+        'KSEF_P16_SOURCE'     => array('disabled', 'always_on'),
+        'KSEF_P17_SOURCE'     => array('disabled', 'extrafield:'),
+        'KSEF_P17_TP_SOURCE'  => array('disabled', 'thirdparty_extrafield:'),
+        'KSEF_P18_SOURCE'     => array('disabled', 'always_on', 'extrafield:'),
+        'KSEF_P18_TP_SOURCE'  => array('disabled', 'thirdparty_extrafield:'),
+    );
+    foreach ($ksefFlagAllowed as $_flagConst => $_allowed) {
+        $_v = GETPOST($_flagConst, 'alphanohtml');
+        $_ok = false;
+        foreach ($_allowed as $_mode) {
+            if (substr($_mode, -1) === ':') {
+                if (strpos($_v, $_mode) === 0 && strlen($_v) > strlen($_mode)) { $_ok = true; break; }
+            } elseif ($_v === $_mode) {
+                $_ok = true;
+                break;
+            }
+        }
+        if ($_ok) {
+            dolibarr_set_const($db, $_flagConst, $_v, 'chaine', 0, '', $conf->entity);
+        }
+    }
+
+    // Podmiot3
+    $p3_enable = GETPOST('KSEF_PODMIOT3_SOURCE', 'alpha') ? 'enabled' : 'disabled';
+    dolibarr_set_const($db, 'KSEF_PODMIOT3_SOURCE', $p3_enable, 'chaine', 0, '', $conf->entity);
+
+    $p3_role = GETPOST('KSEF_PODMIOT3_ROLE', 'alphanohtml');
+    if (in_array($p3_role, array('6', '2', '3', '4', '5', '7', '8', '9', '10', '11', '1'), true)) {
+        dolibarr_set_const($db, 'KSEF_PODMIOT3_ROLE', $p3_role, 'chaine', 0, '', $conf->entity);
+    }
+
+    $idwew_source = GETPOST('KSEF_IDWEW_SOURCE', 'alphanohtml');
+    if ($idwew_source === 'disabled' || strpos($idwew_source, 'thirdparty_extrafield:') === 0) {
+        dolibarr_set_const($db, 'KSEF_IDWEW_SOURCE', $idwew_source, 'chaine', 0, '', $conf->entity);
     }
 
     // Note mode
@@ -228,6 +265,10 @@ if ($action == 'update') {
     $facture_assign_nr_zamowienia = '';
     $facture_assign_nr_umowy = '';
     $facture_assign_tp = '';
+    $facture_assign_mpp = '';
+    $facture_assign_fp = '';
+    $facture_assign_p17 = '';
+    $facture_assign_p18 = '';
     foreach (array_keys($ef_save->attributes['facture']['label'] ?? array()) as $fname) {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['facture']['type'][$fname] ?? '';
@@ -241,6 +282,14 @@ if ($action == 'update') {
             $facture_assign_nr_umowy = $fname;
         } elseif ($assign === 'tp') {
             $facture_assign_tp = $fname;
+        } elseif ($assign === 'mpp') {
+            $facture_assign_mpp = $fname;
+        } elseif ($assign === 'fp') {
+            $facture_assign_fp = $fname;
+        } elseif ($assign === 'p17') {
+            $facture_assign_p17 = $fname;
+        } elseif ($assign === 'p18') {
+            $facture_assign_p18 = $fname;
         }
     }
     dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_EXTRAFIELDS', implode(',', $extrafields_val), 'chaine', 0, '', $conf->entity);
@@ -253,6 +302,18 @@ if ($action == 'update') {
     }
     if ($facture_assign_tp !== '') {
         dolibarr_set_const($db, 'KSEF_TP_SOURCE', 'extrafield:' . $facture_assign_tp, 'chaine', 0, '', $conf->entity);
+    }
+    if ($facture_assign_mpp !== '') {
+        dolibarr_set_const($db, 'KSEF_FA3_MPP_SOURCE', 'extrafield:' . $facture_assign_mpp, 'chaine', 0, '', $conf->entity);
+    }
+    if ($facture_assign_fp !== '') {
+        dolibarr_set_const($db, 'KSEF_FA3_FP_SOURCE', 'extrafield:' . $facture_assign_fp, 'chaine', 0, '', $conf->entity);
+    }
+    if ($facture_assign_p17 !== '') {
+        dolibarr_set_const($db, 'KSEF_P17_SOURCE', 'extrafield:' . $facture_assign_p17, 'chaine', 0, '', $conf->entity);
+    }
+    if ($facture_assign_p18 !== '') {
+        dolibarr_set_const($db, 'KSEF_P18_SOURCE', 'extrafield:' . $facture_assign_p18, 'chaine', 0, '', $conf->entity);
     }
 
     // Line extrafields
@@ -308,6 +369,9 @@ if ($action == 'update') {
     $societe_assign_idnabywcy = '';
     $societe_assign_nr_umowy = '';
     $societe_assign_tp = '';
+    $societe_assign_idwew = '';
+    $societe_assign_p17 = '';
+    $societe_assign_p18 = '';
     foreach (array_keys($ef_save->attributes['societe']['label'] ?? array()) as $fname) {
         if (strpos($fname, 'ksef_') === 0) continue;
         $_t = $ef_save->attributes['societe']['type'][$fname] ?? '';
@@ -321,6 +385,12 @@ if ($action == 'update') {
             $societe_assign_nr_umowy = $fname;
         } elseif ($assign === 'tp') {
             $societe_assign_tp = $fname;
+        } elseif ($assign === 'idwew') {
+            $societe_assign_idwew = $fname;
+        } elseif ($assign === 'p17') {
+            $societe_assign_p17 = $fname;
+        } elseif ($assign === 'p18') {
+            $societe_assign_p18 = $fname;
         }
     }
     dolibarr_set_const($db, 'KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', implode(',', $societe_extrafields_val), 'chaine', 0, '', $conf->entity);
@@ -333,6 +403,15 @@ if ($action == 'update') {
     }
     if ($societe_assign_tp !== '') {
         dolibarr_set_const($db, 'KSEF_TP_SOURCE', 'thirdparty_extrafield:' . $societe_assign_tp, 'chaine', 0, '', $conf->entity);
+    }
+    if ($societe_assign_idwew !== '') {
+        dolibarr_set_const($db, 'KSEF_IDWEW_SOURCE', 'thirdparty_extrafield:' . $societe_assign_idwew, 'chaine', 0, '', $conf->entity);
+    }
+    if ($societe_assign_p17 !== '') {
+        dolibarr_set_const($db, 'KSEF_P17_TP_SOURCE', 'thirdparty_extrafield:' . $societe_assign_p17, 'chaine', 0, '', $conf->entity);
+    }
+    if ($societe_assign_p18 !== '') {
+        dolibarr_set_const($db, 'KSEF_P18_TP_SOURCE', 'thirdparty_extrafield:' . $societe_assign_p18, 'chaine', 0, '', $conf->entity);
     }
 
     // Project extrafields
@@ -874,6 +953,46 @@ function ksefPrintInlineCreateForm($entity, $langs) {
 	print '</td></tr>';
 }
 
+// Render one flag source row
+function ksefRenderFlagSourceRow($fr, $form, $langs, $ef_entity) {
+	print '<tr class="oddeven">';
+	print '<td class="titlefield">' . $form->textwithpicto($langs->trans($fr['const']), $langs->trans($fr['const'] . '_Help')) . '</td>';
+	print '<td colspan="4">';
+	$flag_options = array('disabled' => $langs->trans($fr['const'] . '_DISABLED'));
+	if ($fr['always_on']) {
+		$flag_options['always_on'] = $langs->trans($fr['const'] . '_ALWAYS_ON');
+	}
+	if ($fr['fkey'] !== '' && !empty($ef_entity->attributes['facture']['label'])) {
+		foreach ($ef_entity->attributes['facture']['label'] as $fname => $flabel) {
+			if (strpos($fname, 'ksef_') === 0) continue;
+			$ftype = $ef_entity->attributes['facture']['type'][$fname] ?? '';
+			if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
+				$flag_options['extrafield:' . $fname] = $langs->trans($fr['const'] . '_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+			}
+		}
+	}
+	if ($fr['skey'] !== '' && !empty($ef_entity->attributes['societe']['label'])) {
+		foreach ($ef_entity->attributes['societe']['label'] as $fname => $flabel) {
+			if (strpos($fname, 'ksef_') === 0) continue;
+			$ftype = $ef_entity->attributes['societe']['type'][$fname] ?? '';
+			if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
+				$flag_options['thirdparty_extrafield:' . $fname] = $langs->trans($fr['const'] . '_THIRDPARTY_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+			}
+		}
+	}
+	$flag_current = getDolGlobalString($fr['const'], 'disabled');
+	$flag_sync = array();
+	if ($fr['fkey'] !== '') {
+		$flag_sync[] = 'ksefSyncFromDropdown(\'facture\', \'' . $fr['const'] . '\', \'' . $fr['fkey'] . '\', \'extrafield:\')';
+	}
+	if ($fr['skey'] !== '') {
+		$flag_sync[] = 'ksefSyncFromDropdown(\'societe\', \'' . $fr['const'] . '\', \'' . $fr['skey'] . '\', \'thirdparty_extrafield:\')';
+	}
+	$flag_onchange = $flag_sync ? 'onchange="' . implode('; ', $flag_sync) . '"' : '';
+	print $form->selectarray($fr['const'], $flag_options, $flag_current, 0, 0, 0, $flag_onchange, 0, 0, 0, '', 'minwidth300');
+	print '</td></tr>';
+}
+
 // Invoice Fields
 print '<br><table class="noborder centpercent">';
 print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_DODATKOWY_OPIS_FACTURE_TITLE') . '</td></tr>';
@@ -919,11 +1038,23 @@ $current_sale_date_source = getDolGlobalString('KSEF_FA3_SALE_DATE_SOURCE', 'del
 print $form->selectarray('KSEF_FA3_SALE_DATE_SOURCE', $sale_date_modes, $current_sale_date_source, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
+// Podmiot3
 print '<tr class="oddeven">';
-print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_FP'), $langs->trans('KSEF_FA3_INCLUDE_FP_Help')) . '</td>';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_PODMIOT3_SOURCE'), $langs->trans('KSEF_PODMIOT3_SOURCE_Help')) . '</td>';
 print '<td colspan="4">';
-print '<input type="checkbox" name="KSEF_FA3_INCLUDE_FP" id="KSEF_FA3_INCLUDE_FP" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_FP') ? 'checked' : '') . '>';
-print ' <label for="KSEF_FA3_INCLUDE_FP">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '<input type="checkbox" name="KSEF_PODMIOT3_SOURCE" id="KSEF_PODMIOT3_SOURCE" value="1" ' . (getDolGlobalString('KSEF_PODMIOT3_SOURCE', 'disabled') === 'enabled' ? 'checked' : '') . '>';
+print ' <label for="KSEF_PODMIOT3_SOURCE">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_PODMIOT3_ROLE'), $langs->trans('KSEF_PODMIOT3_ROLE_Help')) . '</td>';
+print '<td colspan="4">';
+$p3_role_options = array();
+foreach (array('6', '2', '3', '4', '5', '7', '8', '9', '10', '11', '1') as $r) {
+    $p3_role_options[$r] = $r . ' - ' . $langs->trans('KSEF_Podmiot3_Role' . $r);
+}
+$current_p3_role = getDolGlobalString('KSEF_PODMIOT3_ROLE', '6');
+print $form->selectarray('KSEF_PODMIOT3_ROLE', $p3_role_options, $current_p3_role, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
 print '<tr class="oddeven">';
@@ -946,6 +1077,18 @@ if (!empty($ef_entity->attributes['facture']['label'])) {
 $current_zamowienia = getDolGlobalString('KSEF_NR_ZAMOWIENIA_SOURCE', 'ref_client');
 print $form->selectarray('KSEF_NR_ZAMOWIENIA_SOURCE', $zamowienia_options, $current_zamowienia, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'facture\', \'KSEF_NR_ZAMOWIENIA_SOURCE\', \'nr_zamowienia\', \'extrafield:\')"', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
+
+// Adnotacje flag source
+$ksefInvoiceFlagRows = array(
+    array('const' => 'KSEF_FA3_MPP_SOURCE', 'always_on' => false, 'fkey' => 'mpp', 'skey' => ''),
+    array('const' => 'KSEF_FA3_FP_SOURCE',  'always_on' => false, 'fkey' => 'fp',  'skey' => ''),
+    array('const' => 'KSEF_P16_SOURCE',     'always_on' => true,  'fkey' => '',    'skey' => ''),
+    array('const' => 'KSEF_P17_SOURCE',     'always_on' => false, 'fkey' => 'p17', 'skey' => ''),
+    array('const' => 'KSEF_P18_SOURCE',     'always_on' => true,  'fkey' => 'p18', 'skey' => ''),
+);
+foreach ($ksefInvoiceFlagRows as $fr) {
+    ksefRenderFlagSourceRow($fr, $form, $langs, $ef_entity);
+}
 
 // Corrections
 print '<tr class="liste_titre"><td colspan="5">' . $langs->trans("KSEF_CorrectionInvoicesSection") . '</td></tr>';
@@ -1046,10 +1189,18 @@ $enabled_fields = ksefParseEfConfig($current_ef_config);
 $_nrZamSrc = getDolGlobalString('KSEF_NR_ZAMOWIENIA_SOURCE', 'ref_client');
 $_nrUmowySrc = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
 $_tpSrc = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
+$_mppSrc = getDolGlobalString('KSEF_FA3_MPP_SOURCE', 'disabled');
+$_fpSrc = getDolGlobalString('KSEF_FA3_FP_SOURCE', 'disabled');
+$_p17Src = getDolGlobalString('KSEF_P17_SOURCE', 'disabled');
+$_p18Src = getDolGlobalString('KSEF_P18_SOURCE', 'disabled');
 $facture_field_assigns = array(); // fname => assignment value
 if (strpos($_nrZamSrc, 'extrafield:') === 0) $facture_field_assigns[substr($_nrZamSrc, 11)] = 'nr_zamowienia';
 if (strpos($_nrUmowySrc, 'extrafield:') === 0) $facture_field_assigns[substr($_nrUmowySrc, 11)] = 'nr_umowy';
 if (strpos($_tpSrc, 'extrafield:') === 0) $facture_field_assigns[substr($_tpSrc, 11)] = 'tp';
+if (strpos($_mppSrc, 'extrafield:') === 0) $facture_field_assigns[substr($_mppSrc, 11)] = 'mpp';
+if (strpos($_fpSrc, 'extrafield:') === 0) $facture_field_assigns[substr($_fpSrc, 11)] = 'fp';
+if (strpos($_p17Src, 'extrafield:') === 0) $facture_field_assigns[substr($_p17Src, 11)] = 'p17';
+if (strpos($_p18Src, 'extrafield:') === 0) $facture_field_assigns[substr($_p18Src, 11)] = 'p18';
 
 $has_facture_fields = false;
 
@@ -1087,6 +1238,10 @@ if (!empty($ef_entity->attributes['facture']['label'])) {
         }
         if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
             $assignOptions['tp'] = $langs->trans('KSEF_ASSIGN_TP');
+            $assignOptions['mpp'] = $langs->trans('KSEF_ASSIGN_MPP');
+            $assignOptions['fp'] = $langs->trans('KSEF_ASSIGN_FP');
+            $assignOptions['p17'] = $langs->trans('KSEF_ASSIGN_P17');
+            $assignOptions['p18'] = $langs->trans('KSEF_ASSIGN_P18');
         }
 
         $optsText = '';
@@ -1216,6 +1371,35 @@ $current_tp = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
 print $form->selectarray('KSEF_TP_SOURCE', $tp_options, $current_tp, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'societe\', \'KSEF_TP_SOURCE\', \'tp\', \'thirdparty_extrafield:\'); ksefSyncFromDropdown(\'facture\', \'KSEF_TP_SOURCE\', \'tp\', \'extrafield:\')"', 0, 0, 0, '', 'minwidth300');
 print '</td></tr>';
 
+// P_17 P_18
+$ksefThirdpartyFlagRows = array(
+    array('const' => 'KSEF_P17_TP_SOURCE', 'always_on' => false, 'fkey' => '', 'skey' => 'p17'),
+    array('const' => 'KSEF_P18_TP_SOURCE', 'always_on' => false, 'fkey' => '', 'skey' => 'p18'),
+);
+foreach ($ksefThirdpartyFlagRows as $fr) {
+    ksefRenderFlagSourceRow($fr, $form, $langs, $ef_entity);
+}
+
+// IDWew source
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_IDWEW_SOURCE'), $langs->trans('KSEF_IDWEW_SOURCE_Help')) . '</td>';
+print '<td colspan="4">';
+$idwew_options = array(
+    'disabled' => $langs->trans('KSEF_IDWEW_SOURCE_DISABLED'),
+);
+if (!empty($ef_entity->attributes['societe']['label'])) {
+    foreach ($ef_entity->attributes['societe']['label'] as $fname => $flabel) {
+        if (strpos($fname, 'ksef_') === 0) continue;
+        $ftype = $ef_entity->attributes['societe']['type'][$fname] ?? '';
+        if (in_array($ftype, array('varchar', 'text'))) {
+            $idwew_options['thirdparty_extrafield:' . $fname] = $langs->trans('KSEF_IDWEW_SOURCE_THIRDPARTY_EXTRAFIELD') . ': ' . $langs->trans($flabel);
+        }
+    }
+}
+$current_idwew = getDolGlobalString('KSEF_IDWEW_SOURCE', 'disabled');
+print $form->selectarray('KSEF_IDWEW_SOURCE', $idwew_options, $current_idwew, 0, 0, 0, 'onchange="ksefSyncFromDropdown(\'societe\', \'KSEF_IDWEW_SOURCE\', \'idwew\', \'thirdparty_extrafield:\')"', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
 // Extrafields
 print '<tr class="liste_titre"><td colspan="5">' . $langs->trans('KSEF_ENTITY_BOX_EXTRAFIELDS_THIRDPARTY') . '</td></tr>';
 
@@ -1227,10 +1411,16 @@ $enabled_soc_fields = ksefParseEfConfig($current_soc_config);
 $_idnSrc = getDolGlobalString('KSEF_IDNABYWCY_SOURCE', 'disabled');
 $_nrUmowySrc2 = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
 $_tpSrc2 = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
+$_idwewSrc2 = getDolGlobalString('KSEF_IDWEW_SOURCE', 'disabled');
+$_p17TpSrc = getDolGlobalString('KSEF_P17_TP_SOURCE', 'disabled');
+$_p18TpSrc = getDolGlobalString('KSEF_P18_TP_SOURCE', 'disabled');
 $societe_field_assigns = array();
 if (strpos($_idnSrc, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_idnSrc, 22)] = 'idnabywcy';
 if (strpos($_nrUmowySrc2, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_nrUmowySrc2, 22)] = 'nr_umowy';
 if (strpos($_tpSrc2, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_tpSrc2, 22)] = 'tp';
+if (strpos($_idwewSrc2, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_idwewSrc2, 22)] = 'idwew';
+if (strpos($_p17TpSrc, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_p17TpSrc, 22)] = 'p17';
+if (strpos($_p18TpSrc, 'thirdparty_extrafield:') === 0) $societe_field_assigns[substr($_p18TpSrc, 22)] = 'p18';
 
 $has_soc_fields = false;
 
@@ -1264,8 +1454,13 @@ if (!empty($ef_entity->attributes['societe']['label'])) {
             $assignOptions['idnabywcy'] = $langs->trans('KSEF_ASSIGN_IDNABYWCY');
             $assignOptions['nr_umowy'] = $langs->trans('KSEF_ASSIGN_NR_UMOWY');
         }
+        if (in_array($ftype, array('varchar', 'text'))) {
+            $assignOptions['idwew'] = $langs->trans('KSEF_ASSIGN_IDWEW');
+        }
         if (in_array($ftype, array('boolean', 'select', 'varchar', 'int'))) {
             $assignOptions['tp'] = $langs->trans('KSEF_ASSIGN_TP');
+            $assignOptions['p17'] = $langs->trans('KSEF_ASSIGN_P17');   // P_17 self-billing, per-buyer default (#29)
+            $assignOptions['p18'] = $langs->trans('KSEF_ASSIGN_P18');   // P_18 reverse charge, per-buyer default (#29)
         }
 
         $socOptsText = '';
@@ -1704,12 +1899,19 @@ var ksefFieldSourceMap = {
     facture: {
         nr_zamowienia: {dropdown: "KSEF_NR_ZAMOWIENIA_SOURCE", prefix: "extrafield:"},
         nr_umowy: {dropdown: "KSEF_NR_UMOWY_SOURCE", prefix: "extrafield:"},
-        tp: {dropdown: "KSEF_TP_SOURCE", prefix: "extrafield:"}
+        tp: {dropdown: "KSEF_TP_SOURCE", prefix: "extrafield:"},
+        mpp: {dropdown: "KSEF_FA3_MPP_SOURCE", prefix: "extrafield:"},
+        fp: {dropdown: "KSEF_FA3_FP_SOURCE", prefix: "extrafield:"},
+        p17: {dropdown: "KSEF_P17_SOURCE", prefix: "extrafield:"},
+        p18: {dropdown: "KSEF_P18_SOURCE", prefix: "extrafield:"}
     },
     societe: {
         idnabywcy: {dropdown: "KSEF_IDNABYWCY_SOURCE", prefix: "thirdparty_extrafield:"},
         nr_umowy: {dropdown: "KSEF_NR_UMOWY_SOURCE", prefix: "thirdparty_extrafield:"},
-        tp: {dropdown: "KSEF_TP_SOURCE", prefix: "thirdparty_extrafield:"}
+        tp: {dropdown: "KSEF_TP_SOURCE", prefix: "thirdparty_extrafield:"},
+        idwew: {dropdown: "KSEF_IDWEW_SOURCE", prefix: "thirdparty_extrafield:"},
+        p17: {dropdown: "KSEF_P17_TP_SOURCE", prefix: "thirdparty_extrafield:"},
+        p18: {dropdown: "KSEF_P18_TP_SOURCE", prefix: "thirdparty_extrafield:"}
     },
     product: {
         gtu: {dropdown: "KSEF_GTU_SOURCE", prefix: "product_extrafield:"},

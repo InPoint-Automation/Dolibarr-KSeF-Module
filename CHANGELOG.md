@@ -1,4 +1,12 @@
 # Changelog
+### Version v1.4.1
+- Update default timeout to 7s instead of 5s and make it configurable in setup->other settings (Issue #27)
+- Add support for third entity to invoice Podmiot3 (Issue #28) Currently, supports up to 20 per invoice, with IDWew for branches too. Payer entity-to-invoice payments must be manually reconciled.
+- Per-invoice control of: MPP/split payment, FP, self-billing, cash accounting, reverse charge. Either sources from invoice/customer extrafield or always-on. Reverse charge supports per-customer default + per-invoice override. (Issue #29)
+- Fixed issue with auto-generated products/third parties with quotes or other special characters flagging WAF and not importing (issue #30)
+- More improvements to PDF visualization including to properly display above changes, fixes for multiple bank accounts and a couple header renderings
+- Fix \n symbol being added by html stripping when newlines detected when importing
+
 ### Version v1.4.0
 - Dolibarr replacement invoices repurposed as full correction invoices. Supports both differential and before/after line methods, and allows for corrections to corrections.
 - Replacement invoices support correcting partially and fully paid invoices

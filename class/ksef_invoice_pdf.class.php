@@ -158,14 +158,26 @@ class KsefInvoicePdf
             // VAT SUMMARY
             $y = $this->renderVatSummary($incoming, $y);
 
-            // ADDITIONAL INFO
-            if (!empty($this->parsed['additional_info'])) {
-                $y = $this->renderAdditionalInfo($this->parsed['additional_info'], $y);
-            }
+            // ADNOTACJE
+            $y = $this->renderAdnotacje($y);
 
-            // ADDITIONAL DESC
-            if (!empty($this->parsed['additional_desc'])) {
-                $y = $this->renderAdditionalDesc($y);
+            // ADDITIONAL INFO/DESC
+            $addInfo = $this->parsed['additional_info'] ?? array();
+            $addPrefix = array();
+            if (!empty($this->parsed['invoice']['tp_flag'])) {
+                $addPrefix[] = '- Istniejące powiązania między nabywcą a dokonującym dostawy towarów lub usługodawcą';
+            }
+            if (!empty($this->parsed['invoice']['fp_flag'])) {
+                $addPrefix[] = '- Faktura, o której mowa w art. 109 ust. 3d ustawy';
+            }
+            $addInfo = array_merge($addPrefix, $addInfo);
+
+            $hasAddDesc = !empty($this->parsed['additional_desc']);
+            if (!empty($addInfo) || $hasAddDesc) {
+                $y = $this->renderAdditionalInfo($addInfo, $y);
+                if ($hasAddDesc) {
+                    $y = $this->renderAdditionalDesc($y);
+                }
             }
 
             // PAYMENT
@@ -590,7 +602,122 @@ class KsefInvoicePdf
             $y = $this->renderBuyerCorrection($buyerBefore, $buyer, $incoming, $y);
         }
 
+        // Podmiot3
+        $thirdParties = $this->parsed['third_parties'] ?? array();
+        foreach ($thirdParties as $idx => $tp) {
+            $y = $this->renderThirdParty($idx, $tp, $y);
+        }
+
         return $y;
+    }
+
+
+    /**
+     * @brief Render a single Podmiot3 (third entity) block
+     * @param int $index 0-based position (header shows N = index + 1)
+     * @param array $tp Parsed third-party entry
+     * @param float $y Current Y position
+     * @return float New Y position
+     */
+    private function renderThirdParty($index, $tp, $y)
+    {
+        $pdf = $this->pdf;
+        $y = $this->checkPageBreak($y, 45);
+        $y = $this->drawLine($y);
+
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 5, 'Podmiot inny ' . ($index + 1), 0, 1, 'L');
+        $y += 6;
+
+        $colWidth = ($this->contentWidth - 5) / 2;
+        $leftX = $this->marginLeft;
+        $rightX = $this->marginLeft + $colWidth + 5;
+
+        // l column
+        $ly = $y;
+        if (!empty($tp['kod_ue'])) {
+            $ly = $this->renderTpField($leftX, $ly, $colWidth, 'Numer VAT-UE: ', trim($tp['kod_ue'] . ' ' . ($tp['nr_vat_ue'] ?: '')));
+        } elseif (!empty($tp['nip'])) {
+            $ly = $this->renderTpField($leftX, $ly, $colWidth, 'NIP: ', $this->formatNIP($tp['nip']));
+        }
+        if (!empty($tp['name'])) {
+            $ly = $this->renderTpField($leftX, $ly, $colWidth, 'Nazwa: ', $tp['name']);
+        }
+        if (!empty($tp['id_nabywcy'])) {
+            $ly = $this->renderTpField($leftX, $ly, $colWidth, 'Identyfikator nabywcy: ', $tp['id_nabywcy']);
+        }
+        $ly = $this->renderTpField($leftX, $ly, $colWidth, 'Rola: ', $this->thirdPartyRoleLabel($tp['role'] ?? ''));
+        if (!empty($tp['udzial'])) {
+            $ly = $this->renderTpField($leftX, $ly, $colWidth, 'Udział: ', $this->formatPercent($tp['udzial']));
+        }
+
+        // r column
+        $ry = $y;
+        $pdf->SetXY($rightX, $ry);
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+        $pdf->Cell($colWidth, 4, 'Adres', 0, 1, 'L');
+        $ry += 4;
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+        if (!empty($tp['address'])) {
+            foreach ($this->parseAddressLines($tp['address']) as $line) {
+                $pdf->SetXY($rightX, $ry);
+                $pdf->Cell($colWidth, 4, $line, 0, 1, 'L');
+                $ry += 4;
+            }
+        }
+        if (!empty($tp['country'])) {
+            $pdf->SetXY($rightX, $ry);
+            $pdf->Cell($colWidth, 4, $this->getCountryName($tp['country']), 0, 1, 'L');
+            $ry += 4;
+        }
+        if (!empty($tp['email']) || !empty($tp['phone']) || !empty($tp['nr_klienta'])) {
+            $ry += 2;
+            $pdf->SetXY($rightX, $ry);
+            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+            $pdf->Cell($colWidth, 4, 'Dane kontaktowe', 0, 1, 'L');
+            $ry += 4;
+            if (!empty($tp['email'])) $ry = $this->renderTpField($rightX, $ry, $colWidth, 'E-mail: ', $tp['email']);
+            if (!empty($tp['phone'])) $ry = $this->renderTpField($rightX, $ry, $colWidth, 'Tel.: ', $tp['phone']);
+            if (!empty($tp['nr_klienta'])) $ry = $this->renderTpField($rightX, $ry, $colWidth, 'Numer klienta: ', $tp['nr_klienta']);
+        }
+
+        return max($ly, $ry) + 2;
+    }
+
+    /**
+     * @brief Render a label + value line
+     * @called_by renderThirdParty()
+     */
+    private function renderTpField($x, $y, $w, $label, $value)
+    {
+        $pdf = $this->pdf;
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+        $html = '<b>' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</b>' . htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+        $pdf->writeHTMLCell($w, 0, $x, $y, $html, 0, 1);
+        return $pdf->GetY();
+    }
+
+    /**
+     * @brief role label for a podmio3 code
+     * @called_by renderThirdParty()
+     */
+    private function thirdPartyRoleLabel($role)
+    {
+        $map = array(
+            '1'  => 'Faktor - w przypadku, gdy na fakturze występują dane faktora',
+            '2'  => 'Odbiorca - w przypadku, gdy na fakturze występują dane jednostek wewnętrznych, oddziałów, wyodrębnionych w ramach nabywcy, które same nie stanowią nabywcy w rozumieniu ustawy',
+            '3'  => 'Podmiot pierwotny - w przypadku, gdy na fakturze występują dane podmiotu będącego w stosunku do podatnika podmiotem przejętym lub przekształconym, który dokonywał dostawy lub świadczył usługę. Z wyłączeniem przypadków, o których mowa w art. 106j ust.2 pkt 3 ustawy, gdy dane te wykazywane są w części Podmiot1K',
+            '4'  => 'Dodatkowy nabywca - w przypadku, gdy na fakturze występują dane kolejnych (innych niż wymieniony w części Podmiot2) nabywców',
+            '5'  => 'Wystawca faktury - w przypadku, gdy na fakturze występują dane podmiotu wystawiającego fakturę w imieniu podatnika. Nie dotyczy przypadku, gdy wystawcą faktury jest nabywca',
+            '6'  => 'Dokonujący płatności - w przypadku, gdy na fakturze występują dane podmiotu regulującego zobowiązanie w miejsce nabywcy',
+            '7'  => 'Jednostka samorządu terytorialnego - wystawca',
+            '8'  => 'Jednostka samorządu terytorialnego - odbiorca',
+            '9'  => 'Członek grupy VAT - wystawca',
+            '10' => 'Członek grupy VAT - odbiorca',
+            '11' => 'Pracownik',
+        );
+        return isset($map[$role]) ? $map[$role] : ('Rola ' . $role);
     }
 
 
@@ -918,8 +1045,18 @@ class KsefInvoicePdf
 
         // RIGHT COLUMN
         // Sale date / delivery date
-        if (!empty($incoming->sale_date)) {
+        $periodFrom = $this->parsed['invoice']['period_from'] ?? null;
+        $periodTo = $this->parsed['invoice']['period_to'] ?? null;
+        $saleP6 = $this->parsed['invoice']['sale_date'] ?? null;
+        $dateStr = '';
+        if (!empty($periodFrom) && !empty($periodTo)) {
+            $dateStr = 'od ' . $this->formatDatePolish($periodFrom) . ' do ' . $this->formatDatePolish($periodTo);
+        } elseif (!empty($saleP6)) {
+            $dateStr = $this->formatDatePolish($saleP6);
+        } elseif (!empty($incoming->sale_date)) {
             $dateStr = $this->formatDatePolish($incoming->sale_date);
+        }
+        if ($dateStr !== '') {
             $label = 'Data dokonania lub zakończenia dostawy towarów lub wykonania usługi: ';
 
             $pdf->SetXY($rightX, $rightY);
@@ -1435,6 +1572,96 @@ class KsefInvoicePdf
         return $y + 3;
     }
 
+    /**
+     * @brief Render the Adnotacje section
+     * @param $y Current Y position
+     * @return float New Y position
+     */
+    private function renderAdnotacje($y)
+    {
+        $inv = $this->parsed['invoice'] ?? array();
+        $entries = array();
+
+        if (!empty($inv['p_19_flag'])) {
+            $entries[] = array('label' => '', 'text' => 'Dostawa towarów lub świadczenie usług zwolnionych od podatku na podstawie art. 43 ust. 1, art. 113 ust. 1 i 9 albo przepisów wydanych na podstawie art. 82 ust. 3 lub na podstawie innych przepisów', 'balance' => true);
+            if (!empty($inv['p_19a'])) {
+                $entries[] = array('label' => 'Podstawa zwolnienia od podatku: ', 'text' => 'Przepis ustawy albo aktu wydanego na podstawie ustawy, na podstawie którego podatnik stosuje zwolnienie od podatku', 'balance' => true);
+                $entries[] = array('label' => 'Przepis ustawy albo aktu wydanego na podstawie ustawy: ', 'text' => $inv['p_19a'], 'balance' => true);
+            }
+            if (!empty($inv['p_19b'])) {
+                $entries[] = array('label' => 'Podstawa zwolnienia od podatku: ', 'text' => 'Przepis dyrektywy 2006/112/WE, który zwalnia od podatku taką dostawę towarów lub takie świadczenie usług', 'balance' => true);
+                $entries[] = array('label' => 'Przepis dyrektywy: ', 'text' => $inv['p_19b'], 'balance' => true);
+            }
+            if (!empty($inv['p_19c'])) {
+                $entries[] = array('label' => 'Podstawa zwolnienia od podatku: ', 'text' => 'Inna podstawa prawna wskazującą na to, że dostawa towarów lub świadczenie usług korzysta ze zwolnienia', 'balance' => true);
+                $entries[] = array('label' => 'Inna podstawa prawna: ', 'text' => $inv['p_19c'], 'balance' => true);
+            }
+        }
+
+        if (!empty($inv['mpp_flag']))  $entries[] = array('label' => '', 'text' => 'Mechanizm podzielonej płatności', 'balance' => false); // P_18A
+        if (!empty($inv['p_16_flag'])) $entries[] = array('label' => '', 'text' => 'Metoda kasowa', 'balance' => false);                   // P_16
+        if (!empty($inv['p_18_flag'])) $entries[] = array('label' => '', 'text' => 'Odwrotne obciążenie', 'balance' => false);             // P_18
+        if (!empty($inv['p_23_flag'])) $entries[] = array('label' => '', 'text' => 'Procedura trójstronna uproszczona', 'balance' => false); // P_23
+        if (!empty($inv['pmarzy_flag'])) {
+            $marzyTypes = array('2' => 'biura podróży', '3_1' => 'towary używane', '3_2' => 'dzieła sztuki', '3_3' => 'przedmioty kolekcjonerskie i antyki');
+            $marzyVal = isset($marzyTypes[$inv['pmarzy_subtype']]) ? $marzyTypes[$inv['pmarzy_subtype']] : '';
+            $entries[] = array('label' => 'Procedura marży: ', 'text' => $marzyVal, 'balance' => false);
+        }
+        if (!empty($inv['p_17_flag'])) $entries[] = array('label' => '', 'text' => 'Samofakturowanie', 'balance' => false);                // P_17
+
+        if (empty($entries)) {
+            return $y;
+        }
+
+        $left = array();
+        $right = array();
+        foreach ($entries as $e) {
+            if (count($left) > count($right) && $e['balance']) {
+                $right[] = $e;
+            } else {
+                $left[] = $e;
+            }
+        }
+
+        $pdf = $this->pdf;
+        $colGap = 6;
+        $colW = ($this->contentWidth - $colGap) / 2;
+
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+        $measure = function ($items) use ($pdf, $colW) {
+            $h = 0;
+            foreach ($items as $e) $h += $pdf->getStringHeight($colW, $e['label'] . $e['text']);
+            return $h;
+        };
+        $y = $this->checkPageBreak($y, 8 + max($measure($left), $measure($right)));
+
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 5, 'Adnotacje', 0, 1, 'L');
+        $y += 5;
+
+        $yLeft = $this->renderAdnotacjeColumn($left, $this->marginLeft, $colW, $y);
+        $yRight = $this->renderAdnotacjeColumn($right, $this->marginLeft + $colW + $colGap, $colW, $y);
+
+        return max($yLeft, $yRight) + 2;
+    }
+
+    /**
+     * @brief Render one column
+     * @called_by renderAdnotacje()
+     */
+    private function renderAdnotacjeColumn($items, $x, $w, $y)
+    {
+        $pdf = $this->pdf;
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+        foreach ($items as $e) {
+            $html = ($e['label'] !== '' ? '<b>' . htmlspecialchars($e['label'], ENT_QUOTES, 'UTF-8') . '</b>' : '')
+                . htmlspecialchars($e['text'], ENT_QUOTES, 'UTF-8');
+            $pdf->writeHTMLCell($w, 0, $x, $y, $html, 0, 1);
+            $y = $pdf->GetY();
+        }
+        return $y;
+    }
 
     /**
      * @brief Render additional info section (Dodatkowe informacje)
@@ -1458,7 +1685,7 @@ class KsefInvoicePdf
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
         foreach ($items as $item) {
             $pdf->SetXY($this->marginLeft, $y);
-            $pdf->Cell($this->contentWidth, 4, '- ' . $item, 0, 1, 'L');
+            $pdf->Cell($this->contentWidth, 4, $item, 0, 1, 'L');
             $y += 4;
         }
 
@@ -1589,7 +1816,7 @@ class KsefInvoicePdf
      * @param $y Current Y position
      * @return float New Y position
      * @called_by generate()
-     * @calls checkPageBreak(), drawLine(), renderLabelValue(), getPaymentMethodLabel(), renderBankAccount()
+     * @calls checkPageBreak(), drawLine(), renderLabelValue(), getPaymentMethodLabel(), renderBankAccounts()
      */
     private function renderPayment($incoming, $y)
     {
@@ -1656,9 +1883,18 @@ class KsefInvoicePdf
             $y += 6;
         }
 
-        // Bank account
+        //Bank accounts (can be multiple with faktor etc)
+        $accounts = array();
         if (!empty($payment['bank_account'])) {
-            $y = $this->renderBankAccount($payment, $y);
+            $accounts[] = array('title' => 'Numer rachunku bankowego', 'data' => $payment);
+        }
+        if (!empty($payment['factor_bank_accounts'])) {
+            foreach ($payment['factor_bank_accounts'] as $factorAcc) {
+                $accounts[] = array('title' => 'Numer rachunku bankowego faktora', 'data' => $factorAcc);
+            }
+        }
+        if (!empty($accounts)) {
+            $y = $this->renderBankAccounts($accounts, $y);
         }
 
         return $y + 2;
@@ -1734,60 +1970,125 @@ class KsefInvoicePdf
     }
 
 
-    /**
-     * @brief Render bank account details table
-     * @param $bankAccount Bank account data array
-     * @param $y Current Y position
-     * @return float New Y position
-     * @called_by renderPayment()
-     */
-    private function renderBankAccount($payment, $y)
+    /** Bank-account fields
+     *
+     *
+     * */
+    private function bankAccountFields()
     {
-        $pdf = $this->pdf;
-
-        $fields = array(
+        return array(
             array('label' => 'Pełny numer rachunku', 'key' => 'bank_account'),
             array('label' => 'Kod SWIFT', 'key' => 'bank_swift'),
             array('label' => 'Rachunek własny banku', 'key' => 'bank_own_account'),
             array('label' => 'Nazwa banku', 'key' => 'bank_name'),
             array('label' => 'Opis rachunku', 'key' => 'bank_description'),
         );
+    }
 
-        // Estimate total height
+    /** rendered height (mm)
+     *
+     *
+     * */
+    private function bankAccountHeight($data)
+    {
+        $rowCount = 0;
+        foreach ($this->bankAccountFields() as $field) {
+            if (!empty($data[$field['key']])) $rowCount++;
+        }
+        return $rowCount == 0 ? 0 : (6 + $rowCount * 5);
+    }
+
+    /**
+     * @brief Render one or more bank-account blocks
+     * @param array $accounts List of ['title' => ..., 'data' => bank-field array]
+     * @param float $y Current Y position
+     * @return float New Y position
+     * @called_by renderPayment()
+     */
+    private function renderBankAccounts($accounts, $y)
+    {
+        $count = count($accounts);
+        if ($count === 1) {
+            $y = $this->checkPageBreak($y, $this->bankAccountHeight($accounts[0]['data']) + 2);
+            return $this->renderOneBankAccount($accounts[0]['title'], $accounts[0]['data'], $this->marginLeft, $y, $this->contentWidth) + 2;
+        }
+
+        $gap = 6;
+        $colW = ($this->contentWidth - $gap) / 2;
+        $leftX = $this->marginLeft;
+        $rightX = $this->marginLeft + $colW + $gap;
+
+        for ($i = 0; $i < $count; $i += 2) {
+            $hL = $this->bankAccountHeight($accounts[$i]['data']);
+            $hR = isset($accounts[$i + 1]) ? $this->bankAccountHeight($accounts[$i + 1]['data']) : 0;
+            $y = $this->checkPageBreak($y, max($hL, $hR) + 2);
+
+            $yL = $this->renderOneBankAccount($accounts[$i]['title'], $accounts[$i]['data'], $leftX, $y, $colW);
+            $yR = $y;
+            if (isset($accounts[$i + 1])) {
+                $yR = $this->renderOneBankAccount($accounts[$i + 1]['title'], $accounts[$i + 1]['data'], $rightX, $y, $colW);
+            }
+            $y = max($yL, $yR) + 2;
+        }
+
+        return $y;
+    }
+
+    /**
+     * @brief Render a single bank-account block
+     * @return float New Y position after the block
+     * @called_by renderBankAccounts()
+     */
+    private function renderOneBankAccount($title, $data, $x, $y, $w)
+    {
+        $pdf = $this->pdf;
+        $fields = $this->bankAccountFields();
+
         $rowCount = 0;
         foreach ($fields as $field) {
-            if (!empty($payment[$field['key']])) $rowCount++;
+            if (!empty($data[$field['key']])) $rowCount++;
         }
         if ($rowCount == 0) return $y;
 
-        $y = $this->checkPageBreak($y, 5 + $rowCount * 5 + 2);
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($x, $y);
+        $pdf->Cell($w, 5, $title, 0, 1, 'L');
+        $y += 6;
 
-        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-        $pdf->SetXY($this->marginLeft, $y);
-        $pdf->Cell($this->contentWidth, 4, 'Numer rachunku bankowego', 0, 1, 'L');
-        $y += 5;
+        $labelW = min(45, round($w * 0.40));
+        $valueW = $w - $labelW;
 
-        $labelW = 45;
-        $valueW = 90;
-
-        $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
         $pdf->SetFillColorArray($this->colorHeaderBg);
         $pdf->SetDrawColorArray($this->colorBorder);
         $pdf->SetLineWidth($this->borderWidth);
 
         foreach ($fields as $field) {
-            if (empty($payment[$field['key']])) continue;
-            $y = $this->checkPageBreak($y, 5);
-            $x = $this->marginLeft;
+            if (empty($data[$field['key']])) continue;
+            $value = $data[$field['key']];
+            if ($field['key'] === 'bank_account') $value = $this->formatBankAccount($value);
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeTable);
             $pdf->Cell($labelW, 5, $field['label'], 1, 0, 'L', true);
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
-            $pdf->Cell($valueW, 5, $payment[$field['key']] ?? '', 1, 1, 'L');
+            $pdf->Cell($valueW, 5, $value, 1, 1, 'L');
             $y += 5;
         }
 
-        return $y + 2;
+        return $y;
+    }
+
+    /**
+     * @brief Format IBAN
+     * @called_by renderOneBankAccount()
+     */
+    private function formatBankAccount($acct)
+    {
+        $acct = trim((string) $acct);
+        $digits = preg_replace('/\s+/', '', $acct);
+        if (!preg_match('/^\d{26}$/', $digits)) {
+            return $acct;
+        }
+        return substr($digits, 0, 2) . ' ' . trim(chunk_split(substr($digits, 2), 4, ' '));
     }
 
 
@@ -2183,6 +2484,19 @@ class KsefInvoicePdf
 
 
     /**
+     * @brief Format a percentage with comma separator
+     * @param $value Numeric percentage (XML dot-decimal)
+     * @return string Formatted percentage string with % suffix
+     * @called_by renderThirdParty()
+     */
+    private function formatPercent($value)
+    {
+        if ($value === null || $value === '') return '';
+        return rtrim(rtrim(number_format((float) str_replace(',', '.', (string) $value), 2, ',', ''), '0'), ',') . '%';
+    }
+
+
+    /**
      * @brief Format quantity
      * @param $value Numeric value
      * @return string Formatted quantity string
@@ -2291,7 +2605,7 @@ class KsefInvoicePdf
                 '0 KR' => '0% (krajowe)',
                 '0 WDT' => '0% (WDT)',
                 '0 EX' => '0% (eksport)',
-                'zw' => 'Zwolnione',
+                'zw' => 'Zwolnione od podatku',
                 'np' => 'Niepodlegajace',
                 'np I' => 'Niepodlegajace (I)',
                 'np II' => 'Niepodlegajace (II)',
@@ -2347,11 +2661,12 @@ class KsefInvoicePdf
             'seller' => array('nip' => '', 'name' => '', 'country' => 'PL', 'address' => '', 'email' => null, 'phone' => null),
             'buyer' => array('nip' => '', 'name' => '', 'country' => 'PL', 'address' => '', 'jst' => null, 'gv' => null, 'email' => null, 'phone' => null, 'customer_number' => null, 'kod_ue' => null, 'nr_vat_ue' => null),
             'buyer_before' => null,
-            'invoice' => array('currency' => 'PLN', 'number' => '', 'type' => 'VAT', 'date' => null, 'sale_date' => null, 'total_net' => 0, 'total_vat' => 0, 'total_gross' => 0, 'place_of_issue' => null, 'fp_flag' => false, 'total_amount' => null),
+            'third_parties' => array(),
+            'invoice' => array('currency' => 'PLN', 'number' => '', 'type' => 'VAT', 'date' => null, 'sale_date' => null, 'total_net' => 0, 'total_vat' => 0, 'total_gross' => 0, 'place_of_issue' => null, 'period_from' => null, 'period_to' => null, 'fp_flag' => false, 'p_16_flag' => false, 'p_17_flag' => false, 'p_18_flag' => false, 'mpp_flag' => false, 'p_23_flag' => false, 'tp_flag' => false, 'p_19_flag' => false, 'p_19a' => null, 'p_19b' => null, 'p_19c' => null, 'pmarzy_flag' => false, 'pmarzy_subtype' => null, 'total_amount' => null),
             'vat_summary' => array(),
             'lines' => array(),
             'lines_before' => array(),
-            'payment' => array('due_date' => null, 'due_date_description' => null, 'method' => null, 'bank_account' => null, 'status' => 'unpaid', 'payment_date' => null, 'bank_swift' => null, 'bank_name' => null, 'bank_own_account' => null, 'bank_description' => null),
+            'payment' => array('due_date' => null, 'due_date_description' => null, 'method' => null, 'bank_account' => null, 'status' => 'unpaid', 'payment_date' => null, 'bank_swift' => null, 'bank_name' => null, 'bank_own_account' => null, 'bank_description' => null, 'factor_bank_accounts' => array()),
             'correction' => null,
             'registries' => array('krs' => null, 'regon' => null, 'bdo' => null, 'pelna_nazwa' => null),
             'stopka' => array(),

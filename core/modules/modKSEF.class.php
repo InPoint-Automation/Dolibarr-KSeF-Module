@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.4.0';
+        $this->version = '1.4.1';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -324,7 +324,6 @@ class modKSEF extends DolibarrModules
             'KSEF_FIELD_BDO'         => 'idprof4',
             'KSEF_FIELD_EORI'        => 'idprof5',
             'KSEF_ENVIRONMENT'       => 'DEMO',
-            'KSEF_TIMEOUT'           => '5',
 
             // Customer Exclusions
             'KSEF_EXCLUDED_CUSTOMERS' => '',
@@ -345,8 +344,20 @@ class modKSEF extends DolibarrModules
             'KSEF_KOR_LINE_METHOD'           => 'stanprzed',
             'KSEF_IDNABYWCY_SOURCE'          => 'disabled',
             'KSEF_NREORI_BUYER_SOURCE'       => 'disabled',
-            'KSEF_FA3_INCLUDE_FP'            => '0',
+            'KSEF_FA3_INCLUDE_FP'            => '0', // deleteme later
             'KSEF_TP_SOURCE'                 => 'disabled',
+
+            'KSEF_FA3_MPP_SOURCE'            => 'disabled',
+            'KSEF_FA3_FP_SOURCE'             => 'disabled',
+            'KSEF_P17_SOURCE'                => 'disabled',
+            'KSEF_P17_TP_SOURCE'             => 'disabled',
+            'KSEF_P16_SOURCE'                => 'disabled',
+            'KSEF_P18_SOURCE'                => 'disabled',
+            'KSEF_P18_TP_SOURCE'             => 'disabled',
+
+            'KSEF_PODMIOT3_SOURCE'           => 'disabled',
+            'KSEF_PODMIOT3_ROLE'             => '6',
+            'KSEF_IDWEW_SOURCE'              => 'disabled',
         );
 
         foreach ($persistentDefaults as $name => $defaultValue) {
@@ -359,6 +370,25 @@ class modKSEF extends DolibarrModules
                 if ($obj->cnt == 0) {
                     dolibarr_set_const($db, $name, $defaultValue,
                         'chaine', 0, '', $conf->entity);
+                }
+                $db->free($resql);
+            }
+        }
+
+        // Visible constants
+        $visibleDefaults = array(
+            'KSEF_TIMEOUT' => array('value' => '7', 'note' => 'KSeF API timeout in seconds'),
+        );
+        foreach ($visibleDefaults as $name => $def) {
+            $sql_check = "SELECT COUNT(*) as cnt FROM " . MAIN_DB_PREFIX . "const"
+                . " WHERE name = '" . $db->escape($name) . "'"
+                . " AND entity = " . (int) $conf->entity;
+            $resql = $db->query($sql_check);
+            if ($resql) {
+                $obj = $db->fetch_object($resql);
+                if ($obj->cnt == 0) {
+                    dolibarr_set_const($db, $name, $def['value'],
+                        'chaine', 1, $def['note'], $conf->entity);
                 }
                 $db->free($resql);
             }
@@ -515,6 +545,47 @@ class modKSEF extends DolibarrModules
                 'perms' => '',
                 'list' => '0',
                 'help' => 'KSEF_CorrectionReasonHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_podmiot3' => array(
+                'label' => 'KSEF_Podmiot3_Field',
+                'type' => 'text',
+                'pos' => 510,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '0',
+                'help' => 'KSEF_Podmiot3_Field_Help',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+                'element_types' => array('facture'),
+            ),
+            'ksef_podmiot3_role' => array(
+                'label' => 'KSEF_Podmiot3_Role_Field',
+                'type' => 'varchar',
+                'pos' => 511,
+                'size' => '2',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '0',
+                'help' => 'KSEF_Podmiot3_Role_Field_Help',
                 'computed' => '',
                 'entity' => '',
                 'langfile' => 'ksef@ksef',
@@ -1151,6 +1222,22 @@ class modKSEF extends DolibarrModules
                     }
                 },
             ),
+            '1.4.1' => array(
+                // Delete old KSEF_TIMEOUT
+                function () use ($db, $conf) {
+                    $db->query("DELETE FROM " . MAIN_DB_PREFIX . "const"
+                        . " WHERE name = 'KSEF_TIMEOUT' AND entity = " . (int) $conf->entity);
+                    dolibarr_set_const($db, 'KSEF_TIMEOUT', '7',
+                        'chaine', 1, 'KSeF API timeout in seconds', $conf->entity);
+                    dol_syslog("modKSEF::migration 1.4.1 - Recreated KSEF_TIMEOUT as visible with default 7s (#27)", LOG_INFO);
+                },
+                function () use ($db, $conf) {
+                    if (getDolGlobalInt('KSEF_FA3_INCLUDE_FP')) {
+                        dolibarr_set_const($db, 'KSEF_FA3_FP_SOURCE', 'always_on', 'chaine', 0, '', $conf->entity);
+                        dol_syslog("modKSEF::migration 1.4.1 - Migrated KSEF_FA3_INCLUDE_FP=1 to KSEF_FA3_FP_SOURCE=always_on (#29)", LOG_INFO);
+                    }
+                },
+            ),
         );
 
         $lastMigration = getDolGlobalString('KSEF_MIGRATION_VERSION', '');
@@ -1309,8 +1396,19 @@ class modKSEF extends DolibarrModules
                 'KSEF_FIELD_EORI',
 
                 // Invoice Flags
-                'KSEF_FA3_INCLUDE_FP',
+                'KSEF_FA3_INCLUDE_FP', //deleteme later
                 'KSEF_TP_SOURCE',
+                'KSEF_FA3_MPP_SOURCE',
+                'KSEF_FA3_FP_SOURCE',
+                'KSEF_P17_SOURCE',
+                'KSEF_P17_TP_SOURCE',
+                'KSEF_P16_SOURCE',
+                'KSEF_P18_SOURCE',
+                'KSEF_P18_TP_SOURCE',
+
+                'KSEF_PODMIOT3_SOURCE',
+                'KSEF_PODMIOT3_ROLE',
+                'KSEF_IDWEW_SOURCE',
 
                 'KSEF_MIGRATION_VERSION',
             );

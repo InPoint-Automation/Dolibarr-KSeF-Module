@@ -420,7 +420,14 @@ if ($selectedSocid <= 0) {
 $lines = $object->getLineItems();
 $autoMatches = $object->autoMatchLineProducts($lines);
 
-$backtopage = urlencode($_SERVER['PHP_SELF'] . '?id=' . $object->id);
+$backtopageRaw = $_SERVER['PHP_SELF'] . '?id=' . $object->id;
+
+print '<form id="ksef_create_supplier_form" method="POST" action="' . DOL_URL_ROOT . '/societe/card.php"></form>';
+if (!empty($lines)) {
+    foreach ($lines as $line) {
+        print '<form id="ksef_create_product_form_' . ((int) ($line['line_num'] ?? 0)) . '" method="POST" action="' . DOL_URL_ROOT . '/product/card.php"></form>';
+    }
+}
 
 print '<form method="POST" action="' . $_SERVER['PHP_SELF'] . '" id="import_form">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
@@ -654,32 +661,37 @@ if ($selectedSocid <= 0) {
 
 print $form->select_company($selectedSocid > 0 ? 0 : '', 'socid_select', 's.fournisseur=1', $langs->trans("SelectThirdParty"), 0, 0, array(), 0, 'minwidth300 maxwidth500');
 
-$createSupplierUrl = DOL_URL_ROOT . '/societe/card.php?action=create&type=f&backtopage=' . $backtopage;
+// Create Supplier - POST
+$sForm = 'ksef_create_supplier_form';
+print ' ';
+print '<input type="hidden" form="' . $sForm . '" name="action" value="create">';
+print '<input type="hidden" form="' . $sForm . '" name="type" value="f">';
+print '<input type="hidden" form="' . $sForm . '" name="backtopage" value="' . dol_escape_htmltag($backtopageRaw) . '">';
 if (!empty($object->seller_name)) {
-    $createSupplierUrl .= '&name=' . urlencode($object->seller_name);
+    print '<input type="hidden" form="' . $sForm . '" name="name" value="' . dol_escape_htmltag($object->seller_name) . '">';
 }
 if (!empty($object->seller_nip) && $object->seller_country == 'PL') {
     $nipField = ksefGetFieldName('NIP');
     if (!empty($nipField) && $nipField !== 'tva_intra') {
-        $createSupplierUrl .= '&' . $nipField . '=' . urlencode($object->seller_nip);
+        print '<input type="hidden" form="' . $sForm . '" name="' . dol_escape_htmltag($nipField) . '" value="' . dol_escape_htmltag($object->seller_nip) . '">';
     } elseif ($nipField === 'tva_intra') {
-        $createSupplierUrl .= '&tva_intra=' . urlencode($object->seller_nip);
+        print '<input type="hidden" form="' . $sForm . '" name="tva_intra" value="' . dol_escape_htmltag($object->seller_nip) . '">';
     }
 }
 if (!empty($object->seller_vat_id)) {
-    $createSupplierUrl .= '&tva_intra=' . urlencode($object->seller_vat_id);
+    print '<input type="hidden" form="' . $sForm . '" name="tva_intra" value="' . dol_escape_htmltag($object->seller_vat_id) . '">';
 } elseif (!empty($object->seller_nip) && $object->seller_country != 'PL') {
-    $createSupplierUrl .= '&tva_intra=' . urlencode($object->seller_nip);
+    print '<input type="hidden" form="' . $sForm . '" name="tva_intra" value="' . dol_escape_htmltag($object->seller_nip) . '">';
 }
 if (!empty($object->seller_address)) {
-    $createSupplierUrl .= '&address=' . urlencode($object->seller_address);
+    print '<input type="hidden" form="' . $sForm . '" name="address" value="' . dol_escape_htmltag($object->seller_address, 0, 1) . '">';
 }
 if (!empty($object->seller_country)) {
-    $createSupplierUrl .= '&country_code=' . urlencode($object->seller_country);
+    print '<input type="hidden" form="' . $sForm . '" name="country_code" value="' . dol_escape_htmltag($object->seller_country) . '">';
 }
-print ' <a class="btnTitle btnTitlePlus" href="' . $createSupplierUrl . '" title="' . dol_escape_htmltag($langs->trans("KSEF_CreateSupplier")) . '">';
+print '<button type="submit" form="' . $sForm . '" class="btnTitle btnTitlePlus" title="' . dol_escape_htmltag($langs->trans("KSEF_CreateSupplier")) . '">';
 print '<span class="fa fa-plus-circle valignmiddle btnTitle-icon"></span>';
-print '</a>';
+print '</button>';
 
 print '</div>';
 
@@ -888,25 +900,30 @@ if (!empty($lines)) {
             0,                                          // nooutput
             1                                           // status_purchase
         );
-        $createProductUrl = DOL_URL_ROOT . '/product/card.php?action=create&type=0&backtopage=' . $backtopage;
+        // Create Product - POST
+        $pForm = 'ksef_create_product_form_' . ((int) $lineNum);
+        print ' ';
+        print '<input type="hidden" form="' . $pForm . '" name="action" value="create">';
+        print '<input type="hidden" form="' . $pForm . '" name="type" value="0">';
+        print '<input type="hidden" form="' . $pForm . '" name="backtopage" value="' . dol_escape_htmltag($backtopageRaw) . '">';
         if (!empty($line['indeks'])) {
-            $createProductUrl .= '&ref=' . urlencode($line['indeks']);
+            print '<input type="hidden" form="' . $pForm . '" name="ref" value="' . dol_escape_htmltag($line['indeks']) . '">';
         }
         if (!empty($line['description'])) {
-            $createProductUrl .= '&label=' . urlencode($line['description']);
+            print '<input type="hidden" form="' . $pForm . '" name="label" value="' . dol_escape_htmltag($line['description']) . '">';
         }
         if (!empty($line['unit_price_net'])) {
-            $createProductUrl .= '&price=' . urlencode($line['unit_price_net']);
+            print '<input type="hidden" form="' . $pForm . '" name="price" value="' . dol_escape_htmltag($line['unit_price_net']) . '">';
         }
         if (isset($line['vat_rate']) && is_numeric($line['vat_rate'])) {
-            $createProductUrl .= '&tva_tx=' . urlencode($line['vat_rate']);
+            print '<input type="hidden" form="' . $pForm . '" name="tva_tx" value="' . dol_escape_htmltag($line['vat_rate']) . '">';
         }
         if (!empty($line['gtin'])) {
-            $createProductUrl .= '&barcode=' . urlencode($line['gtin']);
+            print '<input type="hidden" form="' . $pForm . '" name="barcode" value="' . dol_escape_htmltag($line['gtin']) . '">';
         }
-        print ' <a class="btnTitle btnTitlePlus" href="' . $createProductUrl . '" title="' . dol_escape_htmltag($langs->trans("KSEF_CreateProduct")) . '">';
+        print '<button type="submit" form="' . $pForm . '" class="btnTitle btnTitlePlus" title="' . dol_escape_htmltag($langs->trans("KSEF_CreateProduct")) . '">';
         print '<span class="fa fa-plus-circle valignmiddle paddingleft"></span>';
-        print '</a>';
+        print '</button>';
         print '</td>';
 
         print '</tr>';

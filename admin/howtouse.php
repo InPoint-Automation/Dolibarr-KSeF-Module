@@ -443,6 +443,32 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <ul>
                     <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_FP"); ?></li>
                     <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_TP"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_MPP"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_P16"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_P17"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_InvoiceFlags_P18"); ?></li>
+                </ul>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Podmiot3"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Intro"); ?></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Step3"); ?></li>
+                </ol>
+                <p><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Reconciliation"); ?></p>
+
+                <p><b><?php echo $langs->trans("KSEF_HowTo_Podmiot3_JSTGV_Title"); ?></b></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Podmiot3_JSTGV"); ?></p>
+
+                <p><b><?php echo $langs->trans("KSEF_HowTo_Podmiot3_IDWew_Title"); ?></b></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Podmiot3_IDWew_What"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Podmiot3_IDWew_How"); ?></p>
+
+                <p><b><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Limits_Title"); ?></b></p>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Faktor"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Role4"); ?></li>
                 </ul>
             </td>
         </tr>
@@ -631,7 +657,8 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <?php echo $langs->trans("KSEF_Issue_NBPMissing_Desc"); ?></p>
 
                 <p><strong><?php echo $langs->trans("KSEF_Issue_Timeout"); ?></strong><br>
-                    <?php echo $langs->trans("KSEF_Issue_Timeout_Desc"); ?></p>
+                    <?php echo $langs->trans("KSEF_Issue_Timeout_Desc"); ?><br>
+                    <em><?php echo $langs->trans("KSEF_Issue_Timeout_Solution"); ?></em></p>
 
                 <h4><?php echo $langs->trans("KSEF_RetryLimits"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_RetryLimitsDesc"); ?></p>

@@ -124,6 +124,7 @@ class FA3Builder
             $this->buildNaglowek($xml, $faktura, $invoice, $options);
             $this->buildPodmiot1($xml, $faktura, $mysoc, $customer);
             $this->buildPodmiot2($xml, $faktura, $customer);
+            $this->buildPodmiot3($xml, $faktura, $invoice);
             $this->buildFa($xml, $faktura, $invoice, $originalInvoice, $originalXmlData);
             $this->buildStopka($xml, $faktura, $invoice);
 
@@ -409,6 +410,164 @@ class FA3Builder
     }
 
     /**
+     * @brief Builds Podmiot3
+     * @param DOMDocument $xml
+     * @param DOMElement  $parent  Faktura root element
+     * @param Facture     $invoice current invoice
+     * @called_by buildFromInvoice()
+     */
+    private function buildPodmiot3($xml, $parent, $invoice)
+    {
+        if (getDolGlobalString('KSEF_PODMIOT3_SOURCE', 'disabled') !== 'enabled') {
+            return;
+        }
+        if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+            if (method_exists($invoice, 'fetch_optionals')) {
+                $invoice->fetch_optionals();
+            }
+        }
+
+        $list = $this->getPodmiot3List($invoice);
+        if (empty($list)) {
+            return;
+        }
+
+        $emitted = 0;
+        foreach ($list as $e) {
+            $this->buildOnePodmiot3($xml, $parent, $e['id'], $e['role'], $e['udzial']);
+            if (++$emitted >= 20) break; // soft cap (matches the editor)
+        }
+    }
+
+    /**
+     * @brief Decode stored Podmiot3 list of invoice.
+     * @return array List of id int, role string, udzial string
+     * @called_by buildPodmiot3(), buildPlatnosc()
+     */
+    private function getPodmiot3List($invoice)
+    {
+        if (!isset($invoice->array_options) || empty($invoice->array_options)) {
+            if (method_exists($invoice, 'fetch_optionals')) {
+                $invoice->fetch_optionals();
+            }
+        }
+        $raw = $invoice->array_options['options_ksef_podmiot3'] ?? '';
+        $list = array();
+        $decoded = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
+        if (is_array($decoded)) {
+            foreach ($decoded as $e) {
+                $id = (int) ($e['id'] ?? 0);
+                if ($id > 0) {
+                    $list[] = array(
+                        'id'     => $id,
+                        'role'   => (string) ($e['role'] ?? ''),
+                        'udzial' => trim((string) ($e['udzial'] ?? '')),
+                    );
+                }
+            }
+        } elseif ((int) $raw > 0) {
+            $list[] = array(
+                'id'     => (int) $raw,
+                'role'   => trim((string) ($invoice->array_options['options_ksef_podmiot3_role'] ?? '')),
+                'udzial' => '',
+            );
+        }
+        return $list;
+    }
+
+    /**
+     * @brief Build a single Podmiot3 node
+     * @param $societeId Societe rowid
+     * @param string $role Role code 1-11
+     * @param string $udzial Percentage share (role 4 udzial)
+     * @called_by buildPodmiot3()
+     */
+    private function buildOnePodmiot3($xml, $parent, $societeId, $role, $udzial = '')
+    {
+        require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+        $party = new Societe($this->db);
+        if ($party->fetch($societeId) <= 0) {
+            return;
+        }
+        if (method_exists($party, 'fetch_optionals')) {
+            $party->fetch_optionals();
+        }
+        if ($role === '') {
+            $role = getDolGlobalString('KSEF_PODMIOT3_ROLE', '6');
+        }
+
+        $podmiot3 = $xml->createElement('Podmiot3');
+        $parent->appendChild($podmiot3);
+
+        $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
+        $podmiot3->appendChild($daneIdent);
+
+        $countryCode = ksefInferCountryCode($party);
+        $isPolish = ($countryCode === 'PL');
+        $isEU = $this->isEUCountry($countryCode);
+        $nipRaw = ksefGetIdentifierField($party, 'NIP');
+        $nip = ksefCleanNIP($nipRaw);
+
+        $idwew = '';
+        $idwewSource = getDolGlobalString('KSEF_IDWEW_SOURCE', 'disabled');
+        if (strpos($idwewSource, 'thirdparty_extrafield:') === 0) {
+            $idwewField = substr($idwewSource, strlen('thirdparty_extrafield:'));
+            if (!empty($idwewField)) {
+                $idwew = trim((string) ($party->array_options['options_' . $idwewField] ?? ''));
+            }
+        }
+        if ($idwew !== '' && preg_match('/^[1-9]((\d[1-9])|([1-9]\d))\d{7}-\d{5}$/', $idwew)) {
+            $daneIdent->appendChild($xml->createElement('IDWew', $idwew));
+        } elseif ($isPolish && !empty($nip)) {
+            $daneIdent->appendChild($xml->createElement('NIP', $nip));
+        } elseif ($isEU && !empty($party->tva_intra)) {
+            $vatNumber = ksefStripVATPrefix($party->tva_intra);
+            $daneIdent->appendChild($xml->createElement('KodUE', $countryCode));
+            if (!empty($vatNumber)) {
+                $daneIdent->appendChild($xml->createElement('NrVatUE', $vatNumber));
+            }
+        } elseif (!$isPolish && !empty($nipRaw)) {
+            $daneIdent->appendChild($xml->createElement('KodKraju', $countryCode));
+            $daneIdent->appendChild($xml->createElement('NrID', $this->xmlSafe(ksefStripVATPrefix($nipRaw))));
+        } else {
+            $daneIdent->appendChild($xml->createElement('BrakID', '1'));
+        }
+        if (!empty($party->name)) {
+            $daneIdent->appendChild($xml->createElement('Nazwa', $this->xmlSafe($party->name)));
+        }
+
+        // Adres
+        $adres = $xml->createElement('Adres');
+        $podmiot3->appendChild($adres);
+        $adres->appendChild($xml->createElement('KodKraju', $countryCode));
+        $address = !empty($party->address) ? $this->xmlSafe($party->address) : 'Brak danych';
+        $adres->appendChild($xml->createElement('AdresL1', $address));
+        $adresL2Parts = array();
+        if (!empty($party->zip)) {
+            $adresL2Parts[] = $this->xmlSafe($party->zip);
+        }
+        if (!empty($party->town)) {
+            $adresL2Parts[] = $this->xmlSafe($party->town);
+        }
+        if (!empty($adresL2Parts)) {
+            $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
+        }
+
+        // Role
+        $podmiot3->appendChild($xml->createElement('Rola', $this->xmlSafe($role)));
+
+        // Udzial
+        if ($role === '4' && $udzial !== '') {
+            $udzialVal = (float) str_replace(',', '.', $udzial);
+            if ($udzialVal > 0 && $udzialVal <= 100) {
+                // xsd:decimal — dot separator, max 2 fraction digits, no forced trailing zeros
+                $udzialStr = rtrim(rtrim(number_format($udzialVal, 2, '.', ''), '0'), '.');
+                $podmiot3->appendChild($xml->createElement('Udzial', $udzialStr));
+            }
+        }
+    }
+
+    /**
      * @brief Builds invoice data (Fa) section
      * @param $xml DOMDocument
      * @param $parent Parent element
@@ -582,7 +741,7 @@ class FA3Builder
         }
         $fa->appendChild($xml->createElement('P_15', number_format($totalAmount, 2, '.', '')));
 
-        $this->buildAdnotacje($xml, $fa, $invoice, $vatSummary);
+        $this->buildAdnotacje($xml, $fa, $invoice, $vatSummary, $originalInvoice);
 
         // Invoice Type
         $fa->appendChild($xml->createElement('RodzajFaktury', $invoiceType));
@@ -608,8 +767,7 @@ class FA3Builder
             }
         }
 
-        // FP
-        if (getDolGlobalInt('KSEF_FA3_INCLUDE_FP')) {
+        if ($this->resolveBooleanFlagSource(getDolGlobalString('KSEF_FA3_FP_SOURCE', 'disabled'), $invoice)) {
             $fa->appendChild($xml->createElement('FP', '1'));
         }
 
@@ -1077,25 +1235,32 @@ class FA3Builder
     }
 
     /**
-     * @brief Check if invoice is TP
-     * @param $invoice
+     * @brief Resolve Adnotacje flag
+     * @param string $source  'disabled' 'always_on' 'extrafield:name' thirdparty_extrafield:name;
+     * @param object $invoice  current invoice (for extrafield: mode)
+     * @param object|null $fallbackInvoice  for correction inheritance
      * @return bool
+     * @called_by buildFa(), buildAdnotacje(), isRelatedPartyTransaction()
      */
-    private function isRelatedPartyTransaction($invoice)
+    private function resolveBooleanFlagSource($source, $invoice, $fallbackInvoice = null)
     {
-        $source = getDolGlobalString('KSEF_TP_SOURCE', 'disabled');
-        if ($source === 'disabled') {
+        if ($source === 'disabled' || $source === '') {
             return false;
+        }
+        if ($source === 'always_on') {
+            return true;
         }
         if (strpos($source, 'thirdparty_extrafield:') === 0) {
             $fieldName = substr($source, strlen('thirdparty_extrafield:'));
-            if (!empty($fieldName) && !empty($this->currentCustomer->array_options['options_' . $fieldName])) {
-                return true;
-            }
+            return !empty($fieldName) && !empty($this->currentCustomer->array_options['options_' . $fieldName]);
         }
         if (strpos($source, 'extrafield:') === 0) {
             $fieldName = substr($source, strlen('extrafield:'));
             if (!empty($fieldName) && !empty($invoice->array_options['options_' . $fieldName])) {
+                return true;
+            }
+            if ($fallbackInvoice !== null && !empty($fieldName)
+                && !empty($fallbackInvoice->array_options['options_' . $fieldName])) {
                 return true;
             }
         }
@@ -1103,24 +1268,41 @@ class FA3Builder
     }
 
     /**
+     * @brief Check if invoice is TP
+     * @param $invoice
+     * @return bool
+     */
+    private function isRelatedPartyTransaction($invoice)
+    {
+        return $this->resolveBooleanFlagSource(
+            getDolGlobalString('KSEF_TP_SOURCE', 'disabled'), $invoice);
+    }
+
+    /**
      * @brief Builds annotations/flags section
      * @param $xml DOMDocument
      * @param $parent Parent element
      * @param $invoice Invoice object
+     * @param $vatSummary VAT summary by rate
+     * @param object|null $originalInvoice  source invoice for a correction (P_18A inheritance); null otherwise
      * @called_by buildFa()
      */
-    private function buildAdnotacje($xml, $parent, $invoice, $vatSummary = array())
+    private function buildAdnotacje($xml, $parent, $invoice, $vatSummary = array(), $originalInvoice = null)
     {
         global $conf;
 
         $adnotacje = $xml->createElement('Adnotacje');
         $parent->appendChild($adnotacje);
 
-        // 1 = Yes, 2 = No/Not Applicable
-        $adnotacje->appendChild($xml->createElement('P_16', '2'));  // Cash accounting
-        $adnotacje->appendChild($xml->createElement('P_17', '2'));  // Self-billed
-        $adnotacje->appendChild($xml->createElement('P_18', '2'));  // Reverse charge
-        $adnotacje->appendChild($xml->createElement('P_18A', '2')); // Split payment
+        $p16On = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P16_SOURCE', 'disabled'), $invoice);
+        $p17On = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P17_SOURCE', 'disabled'), $invoice) || $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P17_TP_SOURCE', 'disabled'), $invoice);
+        $p18On = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P18_SOURCE', 'disabled'), $invoice) || $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P18_TP_SOURCE', 'disabled'), $invoice);
+        $mppOn = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_FA3_MPP_SOURCE', 'disabled'), $invoice, $originalInvoice);
+
+        $adnotacje->appendChild($xml->createElement('P_16',  $p16On ? '1' : '2')); // Cash accounting
+        $adnotacje->appendChild($xml->createElement('P_17',  $p17On ? '1' : '2')); // Self-bill
+        $adnotacje->appendChild($xml->createElement('P_18',  $p18On ? '1' : '2')); // Reverse charge
+        $adnotacje->appendChild($xml->createElement('P_18A', $mppOn ? '1' : '2')); // Split payment
 
         $zwolnienie = $xml->createElement('Zwolnienie');
         $adnotacje->appendChild($zwolnienie);
@@ -2334,6 +2516,76 @@ class FA3Builder
                 }
             }
         }
+
+        // Factor bank accounts from Dolibarr third-party bank accounts
+        if (getDolGlobalString('KSEF_PODMIOT3_SOURCE', 'disabled') === 'enabled') {
+            $this->buildRachunekBankowyFaktora($xml, $platnosc, $invoice);
+        }
+    }
+
+    /**
+     * @brief Emit <RachunekBankowyFaktora> nodes for factor third-parties
+     * @called_by buildPlatnosc()
+     */
+    private function buildRachunekBankowyFaktora($xml, $platnosc, $invoice)
+    {
+        $emitted = 0;
+        foreach ($this->getPodmiot3List($invoice) as $e) {
+            if ($e['role'] !== '1') {
+                continue;
+            }
+            $accounts = $this->getSocieteBankAccounts((int) $e['id']);
+            if (empty($accounts)) {
+                dol_syslog('FA3Builder::buildRachunekBankowyFaktora - factor societe ' . $e['id'] . ' has no bank account on file; RachunekBankowyFaktora omitted', LOG_WARNING);
+                continue;
+            }
+            foreach ($accounts as $account) {
+                if ($emitted >= 20) {
+                    break 2;
+                }
+                $rb = $xml->createElement('RachunekBankowyFaktora');
+                $platnosc->appendChild($rb);
+                $rb->appendChild($xml->createElement('NrRB', $this->cleanIBAN($account->iban)));
+                if (!empty($account->bic)) {
+                    $rb->appendChild($xml->createElement('SWIFT', strtoupper(trim($account->bic))));
+                }
+                if (!empty($account->bank)) {
+                    $rb->appendChild($xml->createElement('NazwaBanku', $this->xmlSafe($account->bank)));
+                }
+                if (!empty($account->label)) {
+                    $rb->appendChild($xml->createElement('OpisRachunku', $this->xmlSafe($account->label)));
+                }
+                $emitted++;
+            }
+        }
+    }
+
+    /**
+     * @brief Load a third-party's bank accounts from llx_societe_rib.
+     * @param int $socid Societe rowid
+     * @return array List of CompanyBankAccount objects (decrypted IBAN), empty if none
+     * @called_by buildRachunekBankowyFaktora()
+     */
+    private function getSocieteBankAccounts($socid)
+    {
+        if ($socid <= 0) {
+            return array();
+        }
+        require_once DOL_DOCUMENT_ROOT . '/societe/class/companybankaccount.class.php';
+        $accounts = array();
+        $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe_rib"
+            . " WHERE fk_soc = " . ((int) $socid) . " AND type = 'ban'"
+            . " ORDER BY default_rib DESC, rowid ASC";
+        $res = $this->db->query($sql);
+        if ($res) {
+            while ($obj = $this->db->fetch_object($res)) {
+                $acc = new CompanyBankAccount($this->db);
+                if ($acc->fetch($obj->rowid) > 0 && !empty($acc->iban)) {
+                    $accounts[] = $acc;
+                }
+            }
+        }
+        return $accounts;
     }
 
     /**

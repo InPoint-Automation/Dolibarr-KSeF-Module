@@ -564,6 +564,82 @@ class ActionsKSEF
             }
         }
 
+        // Save (Podmiot3
+        if ($currentcontext === 'invoicecard' && $action === 'ksef_save_podmiot3') {
+            if (is_object($object) && !empty($object->id) && $object->element === 'facture') {
+                $langs->load("ksef@ksef");
+
+                dol_include_once('/ksef/class/ksef_submission.class.php');
+                $p3SaveSubmission = new KsefSubmission($db);
+                $p3SaveHasSub = ($p3SaveSubmission->fetchByInvoice($object->id) > 0);
+                $p3SaveIsAccepted = $p3SaveHasSub && $p3SaveSubmission->status == KsefSubmission::STATUS_ACCEPTED
+                    && !empty($p3SaveSubmission->ksef_number)
+                    && strpos($p3SaveSubmission->ksef_number, 'OFFLINE') === false
+                    && strpos($p3SaveSubmission->ksef_number, 'PENDING') === false
+                    && strpos($p3SaveSubmission->ksef_number, 'ERROR') === false;
+                $p3SaveIsOffline = $p3SaveHasSub && $p3SaveSubmission->status == KsefSubmission::STATUS_OFFLINE
+                    && !empty($p3SaveSubmission->fa3_xml);
+                if ($p3SaveIsAccepted || $p3SaveIsOffline) {
+                    setEventMessages($langs->trans('KSEF_Podmiot3_Locked'), null, 'warnings');
+                    $action = '';
+                    return 0;
+                }
+
+                if (!isset($object->array_options) || empty($object->array_options)) {
+                    if (method_exists($object, 'fetch_optionals')) $object->fetch_optionals();
+                }
+
+                require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+
+                $allowedRoles = array('6', '2', '3', '4', '5', '7', '8', '9', '10', '11', '1');
+                $ids = GETPOST('ksef_podmiot3_party', 'array');
+                $roles = GETPOST('ksef_podmiot3_role', 'array');
+                $udzials = GETPOST('ksef_podmiot3_udzial', 'array');
+                $list = array();
+                $factorNoBank = array();
+                foreach ($ids as $i => $rid) {
+                    $rid = (int) $rid;
+                    if ($rid <= 0) continue;
+                    $role = isset($roles[$i]) ? (string) $roles[$i] : '';
+                    if (!in_array($role, $allowedRoles, true)) {
+                        $role = getDolGlobalString('KSEF_PODMIOT3_ROLE', '6');
+                    }
+                    $entry = array('id' => $rid, 'role' => $role);
+                    // Udzial
+                    if ($role === '4') {
+                        $u = isset($udzials[$i]) ? (float) str_replace(',', '.', (string) $udzials[$i]) : 0;
+                        if ($u > 0 && $u <= 100) {
+                            $entry['udzial'] = rtrim(rtrim(number_format($u, 2, '.', ''), '0'), '.');
+                        }
+                    }
+                    // Factor
+                    if ($role === '1') {
+                        $sqlRib = "SELECT COUNT(*) as nb FROM " . MAIN_DB_PREFIX . "societe_rib"
+                            . " WHERE fk_soc = " . ((int) $rid) . " AND type = 'ban'";
+                        $resRib = $db->query($sqlRib);
+                        $nbRib = ($resRib && ($o = $db->fetch_object($resRib))) ? (int) $o->nb : 0;
+                        if ($nbRib === 0) {
+                            $soc = new Societe($db);
+                            $factorNoBank[] = ($soc->fetch($rid) > 0 && !empty($soc->name)) ? $soc->name : ('#' . $rid);
+                        }
+                    }
+                    $list[] = $entry;
+                    if (count($list) >= 20) break;
+                }
+                $object->array_options['options_ksef_podmiot3'] = $list ? json_encode($list) : '';
+                $res = $object->insertExtraFields();
+                if ($res >= 0) {
+                    setEventMessages($langs->trans('KSEF_Podmiot3_Saved'), null, 'mesgs');
+                    if (!empty($factorNoBank)) {
+                        setEventMessages($langs->trans('KSEF_Podmiot3_FactorNoBank', implode(', ', $factorNoBank)), null, 'warnings');
+                    }
+                } else {
+                    setEventMessages($object->error ?: 'Error saving Podmiot3', $object->errors, 'errors');
+                }
+                $action = '';
+            }
+        }
+
         // Block reopen
         if ($currentcontext === 'invoicecard' && $action === 'reopen' && !empty($object->id)) {
             $objectidnext = $object->getIdReplacingInvoice('validated');
@@ -2213,6 +2289,7 @@ jQuery(document).ready(function() {
             print '<style>tr:has(.facture_extras_ksef_number), tr:has(.facture_extras_ksef_status), tr:has(.facture_extras_ksef_submission_date) { display: none !important; }</style>';
             print '<style>tr:has(.facture_extras_ksef_correction_original_ht), tr:has(.facture_extras_ksef_correction_original_tva), tr:has(.facture_extras_ksef_correction_original_ttc), tr:has(.facture_extras_ksef_correction_discount_id), tr:has(.facture_extras_ksef_correction_original_discount_ids) { display: none !important; }</style>';
             print '<style>tr:has(.facture_extras_ksef_correction_reason), tr:has(.facture_extras_ksef_correction_type) { display: none !important; }</style>';
+            print '<style>tr:has(.facture_extras_ksef_podmiot3), tr:has(.facture_extras_ksef_podmiot3_role) { display: none !important; }</style>';
 
             // Hide DodatkowyOpis mode override row unless feature is configured
             if (!empty($object) && !empty($object->id)) {
@@ -2593,6 +2670,161 @@ jQuery(document).ready(function() {
     });
 });
 </script>';
+                }
+                print '</td></tr>';
+            }
+
+            // pdmiot3 picker
+            if (getDolGlobalString('KSEF_PODMIOT3_SOURCE', 'disabled') === 'enabled'
+                && !empty($object) && !empty($object->id) && $object->element === 'facture') {
+                $langs->load("ksef@ksef");
+                if (!isset($object->array_options) || empty($object->array_options)) {
+                    $object->fetch_optionals();
+                }
+
+                dol_include_once('/ksef/class/ksef_submission.class.php');
+                $p3Submission = new KsefSubmission($db);
+                $p3HasSub = ($p3Submission->fetchByInvoice($object->id) > 0);
+                $p3IsAccepted = $p3HasSub && $p3Submission->status == KsefSubmission::STATUS_ACCEPTED
+                    && !empty($p3Submission->ksef_number)
+                    && strpos($p3Submission->ksef_number, 'OFFLINE') === false
+                    && strpos($p3Submission->ksef_number, 'PENDING') === false
+                    && strpos($p3Submission->ksef_number, 'ERROR') === false;
+                $p3IsOffline = $p3HasSub && $p3Submission->status == KsefSubmission::STATUS_OFFLINE
+                    && !empty($p3Submission->fa3_xml);
+                $p3Readonly = $p3IsAccepted || $p3IsOffline;
+
+                $p3Roles = array('6', '2', '3', '4', '5', '7', '8', '9', '10', '11', '1');
+                $p3DefaultRole = getDolGlobalString('KSEF_PODMIOT3_ROLE', '6');
+
+                $p3Raw = $object->array_options['options_ksef_podmiot3'] ?? '';
+                $p3List = array();
+                $p3Decoded = (is_string($p3Raw) && $p3Raw !== '') ? json_decode($p3Raw, true) : null;
+                if (is_array($p3Decoded)) {
+                    foreach ($p3Decoded as $e) {
+                        $eid = (int) ($e['id'] ?? 0);
+                        if ($eid > 0) $p3List[] = array('id' => $eid, 'role' => (string) ($e['role'] ?? ''), 'udzial' => trim((string) ($e['udzial'] ?? '')));
+                    }
+                } elseif ((int) $p3Raw > 0) {
+                    $p3List[] = array('id' => (int) $p3Raw, 'role' => trim((string) ($object->array_options['options_ksef_podmiot3_role'] ?? '')), 'udzial' => '');
+                }
+
+                require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+                $p3Existing = array();
+                foreach ($p3List as $e) {
+                    $rl = $e['role'] !== '' ? $e['role'] : $p3DefaultRole;
+                    $nm = '';
+                    $soc = new Societe($db);
+                    if ($soc->fetch($e['id']) > 0) $nm = $soc->name;
+                    $uTxt = ($rl === '4' && !empty($e['udzial'])) ? rtrim(rtrim($e['udzial'], '0'), '.') . '%' : '';
+                    $p3Existing[] = array('id' => $e['id'], 'role' => $rl, 'udzial' => ($rl === '4' ? (string) $e['udzial'] : ''), 'name' => $nm, 'label' => $langs->trans('KSEF_Podmiot3_Role' . $rl) . ($uTxt !== '' ? ' (' . $uTxt . ')' : ''));
+                }
+
+                $p3Label = $form->textwithpicto($langs->trans('KSEF_Podmiot3_Details'), $langs->trans('KSEF_Podmiot3_Details_Help'));
+                print '<tr><td class="titlefieldcreate">' . $p3Label . '</td><td colspan="3">';
+                if ($p3Readonly) {
+                    if (empty($p3Existing)) {
+                        print '<span class="opacitymedium">' . $langs->trans('KSEF_NotSet') . '</span>';
+                    } else {
+                        print '<ul style="margin:0;padding-left:18px;">';
+                        foreach ($p3Existing as $r) {
+                            $nmTxt = $r['name'] !== '' ? dol_escape_htmltag($r['name']) : $langs->trans('KSEF_NotSet');
+                            print '<li><strong>' . $nmTxt . '</strong> &mdash; ' . dol_escape_htmltag($r['label']) . '</li>';
+                        }
+                        print '</ul>';
+                    }
+                } else {
+                    print '<form method="POST" action="' . $_SERVER['PHP_SELF'] . '?facid=' . $object->id . '" id="ksef_p3_form">';
+                    print '<input type="hidden" name="token" value="' . newToken() . '">';
+                    print '<input type="hidden" name="action" value="ksef_save_podmiot3">';
+
+                    print '<table id="ksef_p3_list" class="centpercent" style="margin-bottom:6px;"></table>';
+
+                    // Mini-form
+                    print '<table class="nobordernopadding"><tbody>';
+                    print '<tr><td class="nowrap">' . $langs->trans('KSEF_Podmiot3_Party') . ': </td><td>';
+                    print $form->select_company(0, 'ksef_podmiot3_pick', '', '&nbsp;', 0, 0, array(), 0, 'minwidth300');
+                    print '</td></tr>';
+                    print '<tr><td class="nowrap">' . $langs->trans('KSEF_Podmiot3_Role') . ': </td><td>';
+                    print '<select id="ksef_podmiot3_role_pick">';
+                    foreach ($p3Roles as $r) {
+                        print '<option value="' . $r . '"' . ($r === $p3DefaultRole ? ' selected' : '') . '>' . $langs->trans('KSEF_Podmiot3_Role' . $r) . '</option>';
+                    }
+                    print '</select>';
+                    print '</td></tr>';
+                    // Udzial
+                    print '<tr id="ksef_p3_udzial_row" style="display:none;"><td class="nowrap">' . $langs->trans('KSEF_Podmiot3_Udzial') . ': </td><td>';
+                    print '<input type="text" id="ksef_podmiot3_udzial_pick" size="6" maxlength="6" placeholder="0-100"> %';
+                    print ' <span class="opacitymedium">' . $langs->trans('KSEF_Podmiot3_Udzial_Help') . '</span>';
+                    print '</td></tr>';
+                    print '<tr><td></td><td>';
+                    print '<button type="button" class="button smallpaddingimp" id="ksef_p3_add">' . $langs->trans('KSEF_Podmiot3_SaveAddAnother') . '</button>';
+                    print ' <button type="button" class="button smallpaddingimp" id="ksef_p3_save">' . $langs->trans('Save') . '</button>';
+                    print '</td></tr>';
+                    print '</tbody></table>';
+                    print '</form>';
+
+                    $p3ExistingJson = json_encode(array_values($p3Existing));
+                    $p3MaxMsg = dol_escape_js($langs->trans('KSEF_Podmiot3_Max'));
+                    $p3RemoveTitle = dol_escape_js($langs->trans('KSEF_Podmiot3_Remove'));
+                    print '<script>
+                    (function() {
+                        var MAX = 20;
+                        var existing = ' . $p3ExistingJson . ';
+                        function $list() { return document.getElementById("ksef_p3_list"); }
+                        function addRow(id, role, name, label, udzial) {
+                            var tb = $list();
+                            if (!tb || tb.rows.length >= MAX) { if (tb) alert("' . $p3MaxMsg . '"); return false; }
+                            var tr = tb.insertRow(-1);
+                            var c1 = tr.insertCell(-1);
+                            var nameSpan = document.createElement("strong"); nameSpan.textContent = name || "";
+                            c1.appendChild(nameSpan);
+                            c1.appendChild(document.createTextNode(" - " + (label || "")));
+                            var h1 = document.createElement("input"); h1.type="hidden"; h1.name="ksef_podmiot3_party[]"; h1.value=id; c1.appendChild(h1);
+                            var h2 = document.createElement("input"); h2.type="hidden"; h2.name="ksef_podmiot3_role[]"; h2.value=role; c1.appendChild(h2);
+                            var h3 = document.createElement("input"); h3.type="hidden"; h3.name="ksef_podmiot3_udzial[]"; h3.value=(role === "4" ? (udzial || "") : ""); c1.appendChild(h3);
+                            var c2 = tr.insertCell(-1); c2.style.textAlign="right"; c2.style.width="40px";
+                            var rm = document.createElement("a"); rm.href="#"; rm.title="' . $p3RemoveTitle . '"; rm.innerHTML="&times;"; rm.style.color="#a00"; rm.style.fontWeight="bold";
+                            rm.onclick = function(ev){ ev.preventDefault(); tr.parentNode.removeChild(tr); };
+                            c2.appendChild(rm);
+                            return true;
+                        }
+                        function toggleUdzial() {
+                            var role = document.getElementById("ksef_podmiot3_role_pick").value;
+                            document.getElementById("ksef_p3_udzial_row").style.display = (role === "4") ? "" : "none";
+                        }
+                        // true if a row was added
+                        function commitPick($) {
+                            var $pick = $("#ksef_podmiot3_pick");
+                            var id = parseInt($pick.val(), 10);
+                            if (!id || id <= 0) return false;
+                            var name = $.trim($pick.find("option:selected").text());
+                            var $role = $("#ksef_podmiot3_role_pick");
+                            var role = $role.val();
+                            var label = $.trim($role.find("option:selected").text());
+                            var udzial = (role === "4") ? $.trim($("#ksef_podmiot3_udzial_pick").val()) : "";
+                            if (udzial !== "") { label = label + " (" + udzial + "%)"; }
+                            if (addRow(id, role, name, label, udzial)) {
+                                $pick.val("").trigger("change");
+                                $("#ksef_podmiot3_udzial_pick").val("");
+                                return true;
+                            }
+                            return false;
+                        }
+                        jQuery(function($) {
+                            existing.forEach(function(e){ addRow(e.id, e.role, e.name, e.label, e.udzial); });
+                            $("#ksef_podmiot3_role_pick").on("change", toggleUdzial);
+                            toggleUdzial();
+                            $("#ksef_p3_add").on("click", function() {
+                                commitPick($);
+                            });
+                            $("#ksef_p3_save").on("click", function() {
+                                commitPick($);
+                                document.getElementById("ksef_p3_form").submit();
+                            });
+                        });
+                    })();
+                    </script>';
                 }
                 print '</td></tr>';
             }

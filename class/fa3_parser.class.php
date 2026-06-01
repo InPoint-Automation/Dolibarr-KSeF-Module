@@ -95,6 +95,7 @@ class FA3Parser
                 'seller' => $this->parsePodmiot1($xpath),
                 'buyer' => $this->parsePodmiot2($xpath),
                 'buyer_before' => $this->parsePodmiot2K($xpath),
+                'third_parties' => $this->parsePodmiot3($xpath),
                 'invoice' => $invoice,
                 'vat_summary' => $this->parseVatSummary($xpath),
                 'lines' => $lineData['lines'],
@@ -333,6 +334,52 @@ class FA3Parser
 
 
     /**
+     * @brief Parse podmiot3 sections
+     * @param $xpath DOMXPath object
+     * @return array List of third-party entries
+     * @called_by parse()
+     * @calls getValue()
+     */
+    private function parsePodmiot3($xpath)
+    {
+        $result = array();
+        $nodes = $xpath->query('//fa:Podmiot3');
+        for ($i = 0; $i < $nodes->length; $i++) {
+            $base = '//fa:Podmiot3[' . ($i + 1) . ']';
+            $entry = array(
+                'nip'         => $this->getValue($xpath, $base . '/fa:DaneIdentyfikacyjne/fa:NIP'),
+                'idwew'       => $this->getValue($xpath, $base . '/fa:DaneIdentyfikacyjne/fa:IDWew', null),
+                'name'        => $this->getValue($xpath, $base . '/fa:DaneIdentyfikacyjne/fa:Nazwa'),
+                'kod_ue'      => $this->getValue($xpath, $base . '/fa:DaneIdentyfikacyjne/fa:KodUE', null),
+                'nr_vat_ue'   => $this->getValue($xpath, $base . '/fa:DaneIdentyfikacyjne/fa:NrVatUE', null),
+                'country'     => $this->getValue($xpath, $base . '/fa:Adres/fa:KodKraju', 'PL'),
+                'address'     => $this->getValue($xpath, $base . '/fa:Adres/fa:AdresL1'),
+                'role'        => $this->getValue($xpath, $base . '/fa:Rola'),
+                'udzial'      => $this->getValue($xpath, $base . '/fa:Udzial', null),
+                'nr_klienta'  => $this->getValue($xpath, $base . '/fa:NrKlienta', null),
+                'id_nabywcy'  => $this->getValue($xpath, $base . '/fa:IDNabywcy', null),
+                'email'       => $this->getValue($xpath, $base . '/fa:DaneKontaktowe/fa:Email', null),
+                'phone'       => $this->getValue($xpath, $base . '/fa:DaneKontaktowe/fa:Telefon', null),
+            );
+            $adresL2 = $this->getValue($xpath, $base . '/fa:Adres/fa:AdresL2');
+            if ($adresL2) {
+                $entry['address'] .= "\n" . $adresL2;
+            }
+            if (empty($entry['nip'])) {
+                $nrId = $this->getValue($xpath, $base . '/fa:DaneIdentyfikacyjne/fa:NrID', null);
+                if ($nrId) {
+                    $entry['nip'] = $nrId;
+                } elseif (!empty($entry['idwew'])) {
+                    $entry['nip'] = $entry['idwew'];
+                }
+            }
+            $result[] = $entry;
+        }
+        return $result;
+    }
+
+
+    /**
      * @brief Parse invoice data section (Fa)
      * @param $xpath DOMXPath object
      * @return array Invoice data
@@ -361,6 +408,8 @@ class FA3Parser
 
         $invoice['date'] = $this->getValue($xpath, '//fa:Fa/fa:P_1', null);
         $invoice['sale_date'] = $this->getValue($xpath, '//fa:Fa/fa:P_6', null);
+        $invoice['period_from'] = $this->getValue($xpath, '//fa:Fa/fa:OkresFa/fa:P_6_Od', null);
+        $invoice['period_to'] = $this->getValue($xpath, '//fa:Fa/fa:OkresFa/fa:P_6_Do', null);
 
         // Place of issue
         $p1m = $this->getValue($xpath, '//fa:Fa/fa:P_1M', null);
@@ -369,6 +418,38 @@ class FA3Parser
         // FP flag (art. 109)
         $fp = $this->getValue($xpath, '//fa:Fa/fa:FP');
         $invoice['fp_flag'] = ($fp === '1');
+
+        // Adnotacje flags
+        $invoice['p_16_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:P_16') === '1'); // cash accounting
+        $invoice['p_17_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:P_17') === '1'); // self-billing
+        $invoice['p_18_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:P_18') === '1'); // reverse charge
+        $invoice['mpp_flag']  = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:P_18A') === '1'); // split payment (MPP)
+        $invoice['p_23_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:P_23') === '1');
+
+        // TP related party
+        $invoice['tp_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:TP') === '1');
+
+        // Tax exemption
+        $invoice['p_19_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:Zwolnienie/fa:P_19') === '1');
+        $invoice['p_19a'] = $this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:Zwolnienie/fa:P_19A', null);
+        $invoice['p_19b'] = $this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:Zwolnienie/fa:P_19B', null);
+        $invoice['p_19c'] = $this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:Zwolnienie/fa:P_19C', null);
+
+        // PMarzy
+        $invoice['pmarzy_flag'] = ($this->getValue($xpath, '//fa:Fa/fa:Adnotacje/fa:PMarzy/fa:P_PMarzy') === '1');
+        $invoice['pmarzy_subtype'] = null;
+        if ($invoice['pmarzy_flag']) {
+            $pm = '//fa:Fa/fa:Adnotacje/fa:PMarzy/fa:';
+            if ($this->getValue($xpath, $pm . 'P_PMarzy_3_1') === '1') {
+                $invoice['pmarzy_subtype'] = '3_1';
+            } elseif ($this->getValue($xpath, $pm . 'P_PMarzy_3_2') === '1') {
+                $invoice['pmarzy_subtype'] = '3_2';
+            } elseif ($this->getValue($xpath, $pm . 'P_PMarzy_2') === '1') {
+                $invoice['pmarzy_subtype'] = '2';
+            } elseif ($this->getValue($xpath, $pm . 'P_PMarzy_3_3') === '1') {
+                $invoice['pmarzy_subtype'] = '3_3';
+            }
+        }
 
         $totalNet = 0.0;
         $totalVat = 0.0;
@@ -803,6 +884,7 @@ class FA3Parser
             'bank_name' => null,
             'bank_own_account' => null,
             'bank_description' => null,
+            'factor_bank_accounts' => array(),
         );
 
         // Due date
@@ -879,6 +961,31 @@ class FA3Parser
         if ($ownAccount) $payment['bank_own_account'] = $ownAccount;
         $description = $this->getValue($xpath, '//fa:Fa/fa:Platnosc/fa:RachunekBankowy/fa:OpisRachunku', null);
         if ($description) $payment['bank_description'] = $description;
+
+        // Factor bank accounts
+        $factorNodes = $xpath->query('//fa:Fa/fa:Platnosc/fa:RachunekBankowyFaktora');
+        if ($factorNodes && $factorNodes->length > 0) {
+            foreach ($factorNodes as $fn) {
+                $acc = array(
+                    'bank_account'     => null,
+                    'bank_swift'       => null,
+                    'bank_name'        => null,
+                    'bank_own_account' => null,
+                    'bank_description' => null,
+                );
+                $nr = $xpath->query('fa:NrRB', $fn);
+                if ($nr->length > 0) $acc['bank_account'] = $nr->item(0)->textContent;
+                $sw = $xpath->query('fa:SWIFT', $fn);
+                if ($sw->length > 0) $acc['bank_swift'] = $sw->item(0)->textContent;
+                $bn = $xpath->query('fa:NazwaBanku', $fn);
+                if ($bn->length > 0) $acc['bank_name'] = $bn->item(0)->textContent;
+                $oa = $xpath->query('fa:RachunekWlasnyBanku', $fn);
+                if ($oa->length > 0) $acc['bank_own_account'] = $oa->item(0)->textContent;
+                $de = $xpath->query('fa:OpisRachunku', $fn);
+                if ($de->length > 0) $acc['bank_description'] = $de->item(0)->textContent;
+                if (!empty($acc['bank_account'])) $payment['factor_bank_accounts'][] = $acc;
+            }
+        }
 
         return $payment;
     }
@@ -997,11 +1104,7 @@ class FA3Parser
      */
     private function parseAdditionalInfo($invoice)
     {
-        $info = array();
-        if (!empty($invoice['fp_flag'])) {
-            $info[] = 'Faktura, o której mowa w art. 109 ust. 3d ustawy';
-        }
-        return $info;
+        return array();
     }
 
 
