@@ -1,4 +1,7 @@
 # Changelog
+### Version v1.4.2
+- Add CRSF tokens to forms that were missing them
+
 ### Version v1.4.1
 - Update default timeout to 7s instead of 5s and make it configurable in setup->other settings (Issue #27)
 - Add support for third entity to invoice Podmiot3 (Issue #28) Currently, supports up to 20 per invoice, with IDWew for branches too. Payer entity-to-invoice payments must be manually reconciled.

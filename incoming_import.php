@@ -664,6 +664,7 @@ print $form->select_company($selectedSocid > 0 ? 0 : '', 'socid_select', 's.four
 // Create Supplier - POST
 $sForm = 'ksef_create_supplier_form';
 print ' ';
+print '<input type="hidden" form="' . $sForm . '" name="token" value="' . newToken() . '">';
 print '<input type="hidden" form="' . $sForm . '" name="action" value="create">';
 print '<input type="hidden" form="' . $sForm . '" name="type" value="f">';
 print '<input type="hidden" form="' . $sForm . '" name="backtopage" value="' . dol_escape_htmltag($backtopageRaw) . '">';
@@ -903,6 +904,7 @@ if (!empty($lines)) {
         // Create Product - POST
         $pForm = 'ksef_create_product_form_' . ((int) $lineNum);
         print ' ';
+        print '<input type="hidden" form="' . $pForm . '" name="token" value="' . newToken() . '">';
         print '<input type="hidden" form="' . $pForm . '" name="action" value="create">';
         print '<input type="hidden" form="' . $pForm . '" name="type" value="0">';
         print '<input type="hidden" form="' . $pForm . '" name="backtopage" value="' . dol_escape_htmltag($backtopageRaw) . '">';
