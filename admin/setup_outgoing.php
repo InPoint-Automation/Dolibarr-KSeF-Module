@@ -111,6 +111,10 @@ if ($action == 'update') {
         dolibarr_set_const($db, 'KSEF_NR_UMOWY_SOURCE', $nr_umowy_source, 'chaine', 0, '', $conf->entity);
     }
 
+    // Parse date out of NrUmowy into DataUmowy
+    $nr_umowy_parse_date = GETPOST('KSEF_NR_UMOWY_PARSE_DATE', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_NR_UMOWY_PARSE_DATE', $nr_umowy_parse_date, 'chaine', 0, '', $conf->entity);
+
     // VAT Exemption legal basis
     $zwolnienie_type = GETPOST('KSEF_ZWOLNIENIE_TYPE', 'alpha');
     if (in_array($zwolnienie_type, array('disabled', 'P_19A', 'P_19B', 'P_19C'))) {
@@ -1341,6 +1345,8 @@ print $form->selectarray('KSEF_NR_UMOWY_SOURCE', $umowy_options, $current_umowy,
 if (count($umowy_options) <= 1) {
     print '<br><span class="small">' . $langs->trans('KSEF_NR_UMOWY_NO_EXTRAFIELDS') . '</span>';
 }
+print '<br><label class="paddingtop"><input type="checkbox" name="KSEF_NR_UMOWY_PARSE_DATE" id="KSEF_NR_UMOWY_PARSE_DATE" value="1" ' . (getDolGlobalInt('KSEF_NR_UMOWY_PARSE_DATE') ? 'checked' : '') . '> ' . $langs->trans('KSEF_NR_UMOWY_PARSE_DATE') . '</label>';
+print '<br><span class="opacitymedium small">' . $langs->trans('KSEF_NR_UMOWY_PARSE_DATE_Help') . '</span>';
 print '</td></tr>';
 
 print '<tr class="oddeven">';

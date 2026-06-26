@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.4.2';
+        $this->version = '1.4.3';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -561,6 +561,7 @@ class modKSEF extends DolibarrModules
                 'unique' => 0,
                 'required' => 0,
                 'default_value' => '',
+                'param' => '',
                 'alwayseditable' => 1,
                 'perms' => '',
                 'list' => '0',

@@ -1,4 +1,12 @@
 # Changelog
+### Version v1.4.3
+- Fix NrEORI emitted incorrectly in XML (#32) and not properly displayed in PDF
+- Add missing param key in podmiot3
+- Add a missing escaped % in translations
+- Visualization displays warunki transakcji properly
+- Add boolean option to parse date prefix from NrUmowy extrafield to fill in Data Umowy
+- Minor visualization improvements to PDF
+
 ### Version v1.4.2
 - Add CRSF tokens to forms that were missing them
 

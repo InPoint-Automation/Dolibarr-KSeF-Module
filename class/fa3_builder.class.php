@@ -241,6 +241,15 @@ class FA3Builder
             }
         }
 
+        // NrEORI
+        $sellerEori = getDolGlobalString('KSEF_COMPANY_EORI', '');
+        if (empty($sellerEori)) {
+            $sellerEori = trim(ksefGetIdentifierField($mysoc, 'EORI'));
+        }
+        if (!empty($sellerEori)) {
+            $podmiot1->appendChild($xml->createElement('NrEORI', $this->xmlSafe($sellerEori)));
+        }
+
         // Identification
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
         $podmiot1->appendChild($daneIdent);
@@ -259,15 +268,6 @@ class FA3Builder
         $this->sellerName = $this->xmlSafe($mysoc->name);
         $daneIdent->appendChild($xml->createElement('NIP', $nip));
         $daneIdent->appendChild($xml->createElement('Nazwa', $this->sellerName));
-
-        // NrEORI
-        $sellerEori = getDolGlobalString('KSEF_COMPANY_EORI', '');
-        if (empty($sellerEori)) {
-            $sellerEori = trim(ksefGetIdentifierField($mysoc, 'EORI'));
-        }
-        if (!empty($sellerEori)) {
-            $podmiot1->appendChild($xml->createElement('NrEORI', $this->xmlSafe($sellerEori)));
-        }
 
         // Address
         $adres = $xml->createElement('Adres');
@@ -321,6 +321,12 @@ class FA3Builder
         $podmiot2 = $xml->createElement('Podmiot2');
         $parent->appendChild($podmiot2);
 
+        // NrEORI
+        $nrEori = $this->getBuyerNrEORI($customer);
+        if (!empty($nrEori)) {
+            $podmiot2->appendChild($xml->createElement('NrEORI', $this->xmlSafe($nrEori)));
+        }
+
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
         $podmiot2->appendChild($daneIdent);
 
@@ -348,18 +354,6 @@ class FA3Builder
 
         $this->buyerName = $this->xmlSafe($customer->name);
         $daneIdent->appendChild($xml->createElement('Nazwa', $this->buyerName));
-
-        // IDNabywcy
-        $idNabywcy = $this->getIdNabywcy($customer);
-        if (!empty($idNabywcy)) {
-            $podmiot2->appendChild($xml->createElement('IDNabywcy', $this->xmlSafe($idNabywcy)));
-        }
-
-        // NrEORI
-        $nrEori = $this->getBuyerNrEORI($customer);
-        if (!empty($nrEori)) {
-            $podmiot2->appendChild($xml->createElement('NrEORI', $this->xmlSafe($nrEori)));
-        }
 
         // Address
         $adres = $xml->createElement('Adres');
@@ -399,6 +393,12 @@ class FA3Builder
         // NrKlienta: Customer code from Dolibarr
         if (!empty($conf->global->KSEF_FA3_INCLUDE_NRKLIENTA) && !empty($customer->code_client)) {
             $podmiot2->appendChild($xml->createElement('NrKlienta', $this->xmlSafe($customer->code_client)));
+        }
+
+        // IDNabywcy
+        $idNabywcy = $this->getIdNabywcy($customer);
+        if (!empty($idNabywcy)) {
+            $podmiot2->appendChild($xml->createElement('IDNabywcy', $this->xmlSafe($idNabywcy)));
         }
 
         $this->currentCustomerCountry = $countryCode;
@@ -1003,21 +1003,17 @@ class FA3Builder
             $daneIdent->appendChild($xml->createElement('Nazwa', $orig['nazwa']));
         }
 
-        if (!empty($orig['nr_eori'])) {
-            $podmiot1k->appendChild($xml->createElement('NrEORI', $orig['nr_eori']));
-        }
-
         $adres = $xml->createElement('Adres');
         $podmiot1k->appendChild($adres);
-        if (!empty($orig['gln'])) {
-            $adres->appendChild($xml->createElement('GLN', $orig['gln']));
-        }
         $adres->appendChild($xml->createElement('KodKraju', !empty($orig['kod_kraju']) ? $orig['kod_kraju'] : 'PL'));
         if (!empty($orig['adres_l1'])) {
             $adres->appendChild($xml->createElement('AdresL1', $orig['adres_l1']));
         }
         if (!empty($orig['adres_l2'])) {
             $adres->appendChild($xml->createElement('AdresL2', $orig['adres_l2']));
+        }
+        if (!empty($orig['gln'])) {
+            $adres->appendChild($xml->createElement('GLN', $orig['gln']));
         }
     }
 
@@ -1108,25 +1104,20 @@ class FA3Builder
             $daneIdent->appendChild($xml->createElement('Nazwa', $orig['nazwa']));
         }
 
-        if (!empty($orig['id_nabywcy'])) {
-            $podmiot2k->appendChild($xml->createElement('IDNabywcy', $orig['id_nabywcy']));
-        }
-
-        if (!empty($orig['nr_eori'])) {
-            $podmiot2k->appendChild($xml->createElement('NrEORI', $orig['nr_eori']));
-        }
-
         $adres = $xml->createElement('Adres');
         $podmiot2k->appendChild($adres);
-        if (!empty($orig['gln'])) {
-            $adres->appendChild($xml->createElement('GLN', $orig['gln']));
-        }
         $adres->appendChild($xml->createElement('KodKraju', !empty($orig['kod_kraju']) ? $orig['kod_kraju'] : 'PL'));
         if (!empty($orig['adres_l1'])) {
             $adres->appendChild($xml->createElement('AdresL1', $orig['adres_l1']));
         }
         if (!empty($orig['adres_l2'])) {
             $adres->appendChild($xml->createElement('AdresL2', $orig['adres_l2']));
+        }
+        if (!empty($orig['gln'])) {
+            $adres->appendChild($xml->createElement('GLN', $orig['gln']));
+        }
+        if (!empty($orig['id_nabywcy'])) {
+            $podmiot2k->appendChild($xml->createElement('IDNabywcy', $orig['id_nabywcy']));
         }
     }
 
@@ -2647,19 +2638,33 @@ class FA3Builder
                     : '';
             }
         }
+        // NrUmowy parse into DataUmowy
+        $dataUmowy = '';
+        if (!empty($nrUmowy) && getDolGlobalInt('KSEF_NR_UMOWY_PARSE_DATE')) {
+            $parsed = ksefParseContractDate($nrUmowy);
+            if (!empty($parsed['date'])) {
+                $dataUmowy = $parsed['date'];
+                $nrUmowy = $parsed['nr'];
+            }
+        }
         $nrUmowy = mb_substr($nrUmowy, 0, 256, 'UTF-8');
 
-        if (empty($orderRefs) && empty($nrUmowy)) {
+        if (empty($orderRefs) && empty($nrUmowy) && empty($dataUmowy)) {
             return;
         }
 
         $warunki = $xml->createElement('WarunkiTransakcji');
         $parent->appendChild($warunki);
 
-        if (!empty($nrUmowy)) {
+        if (!empty($nrUmowy) || !empty($dataUmowy)) {
             $umowy = $xml->createElement('Umowy');
             $warunki->appendChild($umowy);
-            $umowy->appendChild($xml->createElement('NrUmowy', $this->xmlSafe($nrUmowy)));
+            if (!empty($dataUmowy)) {
+                $umowy->appendChild($xml->createElement('DataUmowy', $dataUmowy));
+            }
+            if (!empty($nrUmowy)) {
+                $umowy->appendChild($xml->createElement('NrUmowy', $this->xmlSafe($nrUmowy)));
+            }
         }
 
         foreach ($orderRefs as $ref) {

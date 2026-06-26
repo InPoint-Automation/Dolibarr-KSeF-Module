@@ -107,6 +107,7 @@ class FA3Parser
                 'additional_info' => $this->parseAdditionalInfo($invoice),
                 'additional_desc' => $this->parseAdditionalDesc($xpath),
                 'exchange_rate' => $this->parseExchangeRate($xpath, $lineData['lines']),
+                'warunki' => $this->parseWarunkiTransakcji($xpath),
             );
 
             return $result;
@@ -174,7 +175,11 @@ class FA3Parser
             'phone' => null,
             'kod_ue' => null,
             'nr_vat_ue' => null,
+            'nr_eori' => null,
         );
+
+        $nrEori = $this->getValue($xpath, '//fa:Podmiot1/fa:NrEORI', null);
+        if ($nrEori) $seller['nr_eori'] = $nrEori;
 
         $seller['nip'] = $this->getValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:NIP');
 
@@ -223,7 +228,11 @@ class FA3Parser
             'customer_number' => null,
             'kod_ue' => null,
             'nr_vat_ue' => null,
+            'nr_eori' => null,
         );
+
+        $nrEori = $this->getValue($xpath, '//fa:Podmiot2/fa:NrEORI', null);
+        if ($nrEori) $buyer['nr_eori'] = $nrEori;
 
         // NIP
         $buyer['nip'] = $this->getValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:NIP');
@@ -1137,6 +1146,165 @@ class FA3Parser
             }
         }
         return $items;
+    }
+
+
+    /**
+     * @brief Parse WarunkiTransakcji section
+     * @param $xpath DOMXPath object
+     * @return array Structured transaction conditions
+     * @called_by parse()
+     * @calls parseTransport()
+     */
+    private function parseWarunkiTransakcji($xpath)
+    {
+        $result = array(
+            'umowy' => array(),
+            'zamowienia' => array(),
+            'partie' => array(),
+            'waluta_umowna' => null,
+            'kurs_umowny' => null,
+            'warunki_dostawy' => null,
+            'podmiot_posredniczacy' => false,
+            'transport' => array(),
+        );
+
+        $base = '//fa:Fa/fa:WarunkiTransakcji';
+        if ($xpath->query($base)->length === 0) {
+            return $result;
+        }
+
+        // Umowy
+        foreach ($xpath->query($base . '/fa:Umowy') as $node) {
+            $nr = $this->getValueRel($xpath, 'fa:NrUmowy', $node);
+            $data = $this->getValueRel($xpath, 'fa:DataUmowy', $node);
+            if ($nr !== null || $data !== null) {
+                $result['umowy'][] = array('nr' => $nr, 'data' => $data);
+            }
+        }
+
+        // Zamowienia
+        foreach ($xpath->query($base . '/fa:Zamowienia') as $node) {
+            $nr = $this->getValueRel($xpath, 'fa:NrZamowienia', $node);
+            $data = $this->getValueRel($xpath, 'fa:DataZamowienia', $node);
+            if ($nr !== null || $data !== null) {
+                $result['zamowienia'][] = array('nr' => $nr, 'data' => $data);
+            }
+        }
+
+        // NrPartiiTowaru
+        foreach ($xpath->query($base . '/fa:NrPartiiTowaru') as $node) {
+            $v = trim($node->textContent);
+            if ($v !== '') $result['partie'][] = $v;
+        }
+
+        $result['waluta_umowna'] = $this->getValue($xpath, $base . '/fa:WalutaUmowna', null);
+        $result['kurs_umowny'] = $this->getValue($xpath, $base . '/fa:KursUmowny', null);
+        $result['warunki_dostawy'] = $this->getValue($xpath, $base . '/fa:WarunkiDostawy', null);
+        $result['podmiot_posredniczacy'] = ($this->getValue($xpath, $base . '/fa:PodmiotPosredniczacy', '') === '1');
+
+        // Transport (may repeat)
+        foreach ($xpath->query($base . '/fa:Transport') as $node) {
+            $result['transport'][] = $this->parseTransport($xpath, $node);
+        }
+
+        return $result;
+    }
+
+
+    /**
+     * @brief Parse Transport node
+     * @param $xpath DOMXPath object
+     * @param $node Transport DOM element
+     * @return array Structured transport data
+     * @called_by parseWarunkiTransakcji()
+     * @calls parseAdresNode()
+     */
+    private function parseTransport($xpath, $node)
+    {
+        $t = array(
+            'rodzaj' => $this->getValueRel($xpath, 'fa:RodzajTransportu', $node),
+            'transport_inny' => $this->getValueRel($xpath, 'fa:TransportInny', $node),
+            'opis_innego_transportu' => $this->getValueRel($xpath, 'fa:OpisInnegoTransportu', $node),
+            'nr_zlecenia' => $this->getValueRel($xpath, 'fa:NrZleceniaTransportu', $node),
+            'opis_ladunku' => $this->getValueRel($xpath, 'fa:OpisLadunku', $node),
+            'ladunek_inny' => $this->getValueRel($xpath, 'fa:LadunekInny', $node),
+            'opis_innego_ladunku' => $this->getValueRel($xpath, 'fa:OpisInnegoLadunku', $node),
+            'jednostka_opakowania' => $this->getValueRel($xpath, 'fa:JednostkaOpakowania', $node),
+            'data_rozp' => $this->getValueRel($xpath, 'fa:DataGodzRozpTransportu', $node),
+            'data_zak' => $this->getValueRel($xpath, 'fa:DataGodzZakTransportu', $node),
+            'przewoznik' => null,
+            'wysylka_z' => null,
+            'wysylka_do' => null,
+            'wysylka_przez' => array(),
+        );
+
+        $prz = $xpath->query('fa:Przewoznik', $node);
+        if ($prz->length > 0) {
+            $pn = $prz->item(0);
+            $t['przewoznik'] = array(
+                'nip' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:NIP', $pn),
+                'kod_ue' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:KodUE', $pn),
+                'nr_vat_ue' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:NrVatUE', $pn),
+                'kod_kraju' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:KodKraju', $pn),
+                'nr_id' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:NrID', $pn),
+                'brak_id' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:BrakID', $pn),
+                'nazwa' => $this->getValueRel($xpath, 'fa:DaneIdentyfikacyjne/fa:Nazwa', $pn),
+                'adres' => $this->parseAdresNode($xpath, $xpath->query('fa:AdresPrzewoznika', $pn)->item(0)),
+            );
+        }
+
+        $t['wysylka_z'] = $this->parseAdresNode($xpath, $xpath->query('fa:WysylkaZ', $node)->item(0));
+        $t['wysylka_do'] = $this->parseAdresNode($xpath, $xpath->query('fa:WysylkaDo', $node)->item(0));
+        foreach ($xpath->query('fa:WysylkaPrzez', $node) as $wn) {
+            $adr = $this->parseAdresNode($xpath, $wn);
+            if ($adr !== null) $t['wysylka_przez'][] = $adr;
+        }
+
+        return $t;
+    }
+
+
+    /**
+     * @brief Parse address node
+     * @param $xpath DOMXPath object
+     * @param $node Address DOM element or null
+     * @return array|null Address data or null if empty/absent
+     * @called_by parseTransport()
+     */
+    private function parseAdresNode($xpath, $node)
+    {
+        if ($node === null) return null;
+        $adr = array(
+            'kod_kraju' => $this->getValueRel($xpath, 'fa:KodKraju', $node),
+            'l1' => $this->getValueRel($xpath, 'fa:AdresL1', $node),
+            'l2' => $this->getValueRel($xpath, 'fa:AdresL2', $node),
+            'gln' => $this->getValueRel($xpath, 'fa:GLN', $node),
+        );
+        if ($adr['l1'] === null && $adr['l2'] === null && $adr['gln'] === null && $adr['kod_kraju'] === null) {
+            return null;
+        }
+        return $adr;
+    }
+
+
+    /**
+     * @brief Get text value from XPath
+     * @param $xpath DOMXPath object
+     * @param $query XPath query string (relative to $node)
+     * @param $node Context DOM element
+     * @param $default Default value if not found
+     * @return string|null Text value or default
+     * @called_by parseWarunkiTransakcji(), parseTransport(), parseAdresNode()
+     */
+    private function getValueRel($xpath, $query, $node, $default = null)
+    {
+        $nodes = $xpath->query($query, $node);
+        if ($nodes->length > 0) {
+            $v = trim($nodes->item(0)->textContent);
+            return $v !== '' ? $v : $default;
+        }
+        return $default;
     }
 
 

@@ -66,16 +66,70 @@ class KsefInvoicePdf
     private $lineHeight = 1.2;
 
     private $countryNames = array(
-        'PL' => 'Polska', 'DE' => 'Niemcy', 'FR' => 'Francja', 'GB' => 'Wielka Brytania',
-        'CZ' => 'Czechy', 'SK' => 'Słowacja', 'AT' => 'Austria', 'IT' => 'Włochy',
-        'ES' => 'Hiszpania', 'NL' => 'Holandia', 'BE' => 'Belgia', 'SE' => 'Szwecja',
-        'DK' => 'Dania', 'FI' => 'Finlandia', 'NO' => 'Norwegia', 'CH' => 'Szwajcaria',
-        'LU' => 'Luksemburg', 'IE' => 'Irlandia', 'PT' => 'Portugalia', 'GR' => 'Grecja',
-        'HU' => 'Węgry', 'RO' => 'Rumunia', 'BG' => 'Bułgaria', 'HR' => 'Chorwacja',
-        'SI' => 'Słowenia', 'LT' => 'Litwa', 'LV' => 'Łotwa', 'EE' => 'Estonia',
-        'CY' => 'Cypr', 'MT' => 'Malta', 'US' => 'Stany Zjednoczone', 'CA' => 'Kanada',
-        'JP' => 'Japonia', 'CN' => 'Chiny', 'KR' => 'Korea Południowa', 'AU' => 'Australia',
-        'UA' => 'Ukraina', 'BY' => 'Białoruś', 'RU' => 'Rosja', 'TR' => 'Turcja',
+        'AD' => 'Andora', 'AE' => 'Zjednoczone Emiraty Arabskie', 'AF' => 'Afganistan', 'AG' => 'Antigua i Barbuda',
+        'AI' => 'Anguilla', 'AL' => 'Albania', 'AM' => 'Armenia', 'AN' => 'Antyle Holenderskie',
+        'AO' => 'Angola', 'AQ' => 'Antarktyda', 'AR' => 'Argentyna', 'AS' => 'Samoa Amerykańskie',
+        'AT' => 'Austria', 'AU' => 'Australia', 'AW' => 'Aruba', 'AX' => 'Aland Islands',
+        'AZ' => 'Azerbejdżan', 'BA' => 'Bośnia i Hercegowina', 'BB' => 'Barbados', 'BD' => 'Bangladesz',
+        'BE' => 'Belgia', 'BF' => 'Burkina Faso', 'BG' => 'Bułgaria', 'BH' => 'Bahrajn',
+        'BI' => 'Burundi', 'BJ' => 'Benin', 'BL' => 'Saint Barthelemy', 'BM' => 'Bermudy',
+        'BN' => 'Brunei Darussalam', 'BO' => 'Boliwia', 'BQ' => 'Bonaire, Sint Eustatius i Saba', 'BR' => 'Brazylia',
+        'BS' => 'Bahamy', 'BT' => 'Bhutan', 'BV' => 'Wyspa Bouveta', 'BW' => 'Botswana',
+        'BY' => 'Białoruś', 'BZ' => 'Belize', 'CA' => 'Kanada', 'CC' => 'Wyspy Kokosowe (Keelinga)',
+        'CD' => 'Kongo, Republika Demokratyczna', 'CF' => 'Rep.środkowoafrykańska', 'CG' => 'Kongo', 'CH' => 'Szwajcaria',
+        'CI' => 'Wybrzeże Kości Słoniowej', 'CK' => 'Wyspy Cooka', 'CL' => 'Chile', 'CM' => 'Kamerun',
+        'CN' => 'Chiny', 'CO' => 'Kolumbia', 'CR' => 'Kostaryka', 'CU' => 'Kuba',
+        'CV' => 'Zielony Przylądek', 'CW' => 'Curaçao', 'CX' => 'Wyspa Bożego Narodzenia', 'CY' => 'Cypr',
+        'CZ' => 'Republika Czeska', 'DE' => 'Niemcy', 'DJ' => 'Dżibuti', 'DK' => 'Dania',
+        'DM' => 'Dominika', 'DO' => 'Dominikana', 'DZ' => 'Algieria', 'EC' => 'Ekwador',
+        'EE' => 'Estonia', 'EG' => 'Egipt', 'EH' => 'Sahara Zachodnia', 'ER' => 'Erytrea',
+        'ES' => 'Hiszpania', 'ET' => 'Etiopia', 'FI' => 'Finlandia', 'FJ' => 'Fidżi Republika',
+        'FK' => 'Falklandy', 'FM' => 'Mikronezja', 'FO' => 'Wyspy Owcze', 'FR' => 'Francja',
+        'GA' => 'Gabon', 'GB' => 'Wielka Brytania', 'GD' => 'Grenada', 'GE' => 'Gruzja',
+        'GF' => 'Gujana Francuska', 'GG' => 'Guernsey', 'GH' => 'Ghana', 'GI' => 'Gibraltar',
+        'GL' => 'Grenlandia', 'GM' => 'Gambia', 'GN' => 'Gwinea', 'GP' => 'Gwadelupa',
+        'GQ' => 'Gwinea Równikowa', 'GR' => 'Grecja', 'GS' => 'Południowa Georgia i Połud.Wyspy Sandwich', 'GT' => 'Gwatemala',
+        'GU' => 'Guam', 'GW' => 'Gwinea Bissau', 'GY' => 'Gujana', 'HK' => 'Hongkong',
+        'HM' => 'Wyspy Heard i Mcdonald', 'HN' => 'Honduras', 'HR' => 'Chorwacja', 'HT' => 'Haiti',
+        'HU' => 'Węgry', 'ID' => 'Indonezja', 'IE' => 'Irlandia', 'IL' => 'Izrael',
+        'IM' => 'Wyspa Man', 'IN' => 'Indie', 'IO' => 'Brytyjskie Terytorium Oceanu Indyjskiego', 'IQ' => 'Irak',
+        'IR' => 'Iran', 'IS' => 'Islandia', 'IT' => 'Włochy', 'JE' => 'Jersey',
+        'JM' => 'Jamajka', 'JO' => 'Jordania', 'JP' => 'Japonia', 'KE' => 'Kenia',
+        'KG' => 'Kirgistan', 'KH' => 'Kambodża', 'KI' => 'Kiribati', 'KM' => 'Komory',
+        'KN' => 'Saint Kitts i Nevis', 'KP' => 'Koreańska Republika Ludowo-Demokratyczna', 'KR' => 'Republika Korei', 'KW' => 'Kuwejt',
+        'KY' => 'Kajmany', 'KZ' => 'Kazachstan', 'LA' => 'Laos', 'LB' => 'Liban',
+        'LC' => 'Saint Lucia', 'LI' => 'Liechtenstein', 'LK' => 'Sri Lanka', 'LR' => 'Liberia',
+        'LS' => 'Lesotho', 'LT' => 'Litwa', 'LU' => 'Luksemburg', 'LV' => 'Łotwa',
+        'LY' => 'Libia', 'MA' => 'Maroko', 'MC' => 'Monako', 'MD' => 'Mołdowa',
+        'ME' => 'Czarnogóra', 'MF' => 'Saint Martin', 'MG' => 'Madagaskar', 'MH' => 'Wyspy Marshalla',
+        'MK' => 'Macedonia', 'ML' => 'Mali', 'MM' => 'Myanmar (Burma)', 'MN' => 'Mongolia',
+        'MO' => 'Makau', 'MP' => 'Mariany Północne', 'MQ' => 'Martynika', 'MR' => 'Mauretania',
+        'MS' => 'Montserrat', 'MT' => 'Malta', 'MU' => 'Mauritius', 'MV' => 'Malediwy',
+        'MW' => 'Malawi', 'MX' => 'Meksyk', 'MY' => 'Malezja', 'MZ' => 'Mozambik',
+        'NA' => 'Namibia', 'NC' => 'Nowa Kaledonia', 'NE' => 'Niger', 'NF' => 'Norfolk',
+        'NG' => 'Nigeria', 'NI' => 'Nikaragua', 'NL' => 'Niderlandy (Holandia)', 'NO' => 'Norwegia',
+        'NP' => 'Nepal', 'NR' => 'Nauru', 'NU' => 'Niue', 'NZ' => 'Nowa Zelandia',
+        'OM' => 'Oman', 'PA' => 'Panama', 'PE' => 'Peru', 'PF' => 'Polinezja Francuska',
+        'PG' => 'Papua Nowa Gwinea', 'PH' => 'Filipiny', 'PK' => 'Pakistan', 'PL' => 'Polska',
+        'PM' => 'Saint Pierre i Miquelon', 'PN' => 'Pitcairn', 'PR' => 'Portoryko', 'PS' => 'Okupowane Terytorium Palestyny',
+        'PT' => 'Portugalia', 'PW' => 'Palau', 'PY' => 'Paragwaj', 'QA' => 'Katar',
+        'RE' => 'Reunion', 'RO' => 'Rumunia', 'RS' => 'Serbia', 'RU' => 'Rosja',
+        'RW' => 'Rwanda', 'SA' => 'Arabia Saudyjska', 'SB' => 'Wyspy Salomona', 'SC' => 'Seszele',
+        'SD' => 'Sudan', 'SE' => 'Szwecja', 'SG' => 'Singapur', 'SH' => 'Święta Helena',
+        'SI' => 'Słowenia', 'SJ' => 'Svalbard i Jan Mayen', 'SK' => 'Słowacja', 'SL' => 'Sierra Leone',
+        'SM' => 'San Marino', 'SN' => 'Senegal', 'SO' => 'Somalia', 'SR' => 'Surinam',
+        'SS' => 'Sudan Południowy', 'ST' => 'Wyspy Świętego Tomasza i Książęca', 'SV' => 'Salwador', 'SX' => 'Wyspa Sint Maarten (część holenderska wyspy)',
+        'SY' => 'Syria', 'SZ' => 'Suazi', 'TC' => 'Wyspy Turks i Caicos', 'TD' => 'Czad',
+        'TF' => 'Francuskie Terytorium Południowe', 'TG' => 'Togo', 'TH' => 'Tajlandia', 'TJ' => 'Tadżykistan',
+        'TK' => 'Tokelau', 'TL' => 'Wschodni Timor', 'TM' => 'Turkmenistan', 'TN' => 'Tunezja',
+        'TO' => 'Tonga', 'TR' => 'Turcja', 'TT' => 'Trynidad i Tobago', 'TV' => 'Tuvalu',
+        'TW' => 'Tajwan', 'TZ' => 'Tanzania', 'UA' => 'Ukraina', 'UG' => 'Uganda',
+        'UM' => 'Minor', 'US' => 'Stany Zjednoczone Ameryki', 'UY' => 'Urugwaj', 'UZ' => 'Uzbekistan',
+        'VA' => 'Watykan', 'VC' => 'Saint Vincent i Grenadyny', 'VE' => 'Wenezuela', 'VG' => 'Wyspy Dziewicze-W.B.',
+        'VI' => 'Wyspy Dziewicze-USA', 'VN' => 'Wietnam', 'VU' => 'Vanuatu', 'WF' => 'Wallis i Futuna',
+        'WS' => 'Samoa', 'XC' => 'Ceuta', 'XI' => 'Zjednoczone Królestwo (Irlandia Północna)', 'XK' => 'Kosowo',
+        'XL' => 'Melilla', 'YE' => 'Jemen', 'YT' => 'Majotta', 'ZA' => 'Republika Południowej Afryki',
+        'ZM' => 'Zambia', 'ZW' => 'Zimbabwe',
     );
 
     public function __construct($db)
@@ -182,6 +236,11 @@ class KsefInvoicePdf
 
             // PAYMENT
             $y = $this->renderPayment($incoming, $y);
+
+            // TRANSACTION CONDITIONS
+            if ($this->hasWarunkiTransakcji()) {
+                $y = $this->renderWarunkiTransakcji($y);
+            }
 
             // REGISTRIES
             $reg = $this->parsed['registries'];
@@ -548,6 +607,7 @@ class KsefInvoicePdf
         // SELLER
         $sellerY = $this->renderEntity($leftX, $y, $colWidth, 'Sprzedawca', array(
             'nip' => $incoming->seller_nip,
+            'eori' => $this->parsed['seller']['nr_eori'] ?? null,
             'name' => $incoming->seller_name,
             'address' => $incoming->seller_address,
             'country' => $incoming->seller_country ?? 'PL',
@@ -563,6 +623,7 @@ class KsefInvoicePdf
 
         $buyerY = $this->renderEntity($rightX, $startY, $colWidth, 'Nabywca', array(
             'nip' => $incoming->buyer_nip,
+            'eori' => $buyer['nr_eori'] ?? null,
             'vatUE' => $vatUE,
             'isEU' => !empty($buyer['kod_ue']),
             'name' => $incoming->buyer_name,
@@ -792,16 +853,18 @@ class KsefInvoicePdf
             $vatUE = $data['kod_ue'] . ' ' . ($data['nr_vat_ue'] ?: '');
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->Cell(24, 4, 'Numer VAT-UE: ', 0, 0, 'L');
+            $lw = $pdf->GetStringWidth('Numer VAT-UE: ') + 1;
+            $pdf->Cell($lw, 4, 'Numer VAT-UE: ', 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->Cell($width - 24, 4, trim($vatUE), 0, 1, 'L');
+            $pdf->Cell($width - $lw, 4, trim($vatUE), 0, 1, 'L');
             $y += 4;
         } elseif (!empty($data['nip'])) {
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->Cell(8, 4, 'NIP: ', 0, 0, 'L');
+            $lw = $pdf->GetStringWidth('NIP: ') + 1;
+            $pdf->Cell($lw, 4, 'NIP: ', 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->Cell($width - 8, 4, $this->formatNIP($data['nip']), 0, 1, 'L');
+            $pdf->Cell($width - $lw, 4, $this->formatNIP($data['nip']), 0, 1, 'L');
             $y += 4;
         }
 
@@ -809,9 +872,10 @@ class KsefInvoicePdf
         if (!empty($data['name'])) {
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->Cell(14, 4, 'Nazwa: ', 0, 0, 'L');
+            $lw = $pdf->GetStringWidth('Nazwa: ') + 1;
+            $pdf->Cell($lw, 4, 'Nazwa: ', 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->Cell($width - 14, 4, $data['name'], 0, 1, 'L');
+            $pdf->Cell($width - $lw, 4, $data['name'], 0, 1, 'L');
             $y += 4;
         }
 
@@ -866,21 +930,34 @@ class KsefInvoicePdf
 
         $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
 
+        // EORI number
+        if (!empty($data['eori'])) {
+            $pdf->SetXY($x, $y);
+            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+            $lw = $pdf->GetStringWidth('Numer EORI: ') + 1;
+            $pdf->Cell($lw, 4, 'Numer EORI: ', 0, 0, 'L');
+            $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+            $pdf->Cell($width - $lw, 4, $data['eori'], 0, 1, 'L');
+            $y += 4;
+        }
+
         // NIP or VAT-UE number
         if (!empty($data['vatUE'])) {
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->Cell(24, 4, 'Numer VAT-UE: ', 0, 0, 'L');
+            $lw = $pdf->GetStringWidth('Numer VAT-UE: ') + 1;
+            $pdf->Cell($lw, 4, 'Numer VAT-UE: ', 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->Cell($width - 24, 4, trim($data['vatUE']), 0, 1, 'L');
+            $pdf->Cell($width - $lw, 4, trim($data['vatUE']), 0, 1, 'L');
             $y += 4;
         } elseif (!empty($data['nip'])) {
             // NIP
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->Cell(8, 4, 'NIP: ', 0, 0, 'L');
+            $lw = $pdf->GetStringWidth('NIP: ') + 1;
+            $pdf->Cell($lw, 4, 'NIP: ', 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->Cell($width - 8, 4, $this->formatNIP($data['nip']), 0, 1, 'L');
+            $pdf->Cell($width - $lw, 4, $this->formatNIP($data['nip']), 0, 1, 'L');
             $y += 4;
         }
 
@@ -888,9 +965,10 @@ class KsefInvoicePdf
         if (!empty($data['name'])) {
             $pdf->SetXY($x, $y);
             $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-            $pdf->Cell(14, 4, 'Nazwa: ', 0, 0, 'L');
+            $lw = $pdf->GetStringWidth('Nazwa: ') + 1;
+            $pdf->Cell($lw, 4, 'Nazwa: ', 0, 0, 'L');
             $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-            $pdf->Cell($width - 14, 4, $data['name'], 0, 1, 'L');
+            $pdf->Cell($width - $lw, 4, $data['name'], 0, 1, 'L');
             $y += 4;
         }
 
@@ -932,26 +1010,29 @@ class KsefInvoicePdf
             if (!empty($data['email'])) {
                 $pdf->SetXY($x, $y);
                 $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-                $pdf->Cell(14, 4, 'E-mail: ', 0, 0, 'L');
+                $lw = $pdf->GetStringWidth('E-mail: ') + 1;
+                $pdf->Cell($lw, 4, 'E-mail: ', 0, 0, 'L');
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-                $pdf->Cell($width - 14, 4, $data['email'], 0, 1, 'L');
+                $pdf->Cell($width - $lw, 4, $data['email'], 0, 1, 'L');
                 $y += 4;
             }
             if (!empty($data['phone'])) {
                 $pdf->SetXY($x, $y);
                 $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-                $pdf->Cell(8, 4, 'Tel.: ', 0, 0, 'L');
+                $lw = $pdf->GetStringWidth('Tel.: ') + 1;
+                $pdf->Cell($lw, 4, 'Tel.: ', 0, 0, 'L');
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-                $pdf->Cell($width - 8, 4, $data['phone'], 0, 1, 'L');
+                $pdf->Cell($width - $lw, 4, $data['phone'], 0, 1, 'L');
                 $y += 4;
             }
             // Customer number (Numer klienta)
             if (!empty($data['customerNumber'])) {
                 $pdf->SetXY($x, $y);
                 $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
-                $pdf->Cell(24, 4, 'Numer klienta: ', 0, 0, 'L');
+                $lw = $pdf->GetStringWidth('Numer klienta: ') + 1;
+                $pdf->Cell($lw, 4, 'Numer klienta: ', 0, 0, 'L');
                 $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
-                $pdf->Cell($width - 24, 4, $data['customerNumber'], 0, 1, 'L');
+                $pdf->Cell($width - $lw, 4, $data['customerNumber'], 0, 1, 'L');
                 $y += 4;
             }
         }
@@ -981,9 +1062,9 @@ class KsefInvoicePdf
         $y += 5;
 
 
-        $colWidth = $this->contentWidth / 2;
+        $colWidth = ($this->contentWidth - 5) / 2;
         $leftX = $this->marginLeft;
-        $rightX = $this->marginLeft + $colWidth;
+        $rightX = $this->marginLeft + $colWidth + 5;
         $detailsFontSize = 6;
 
         $leftY = $y;
@@ -2093,6 +2174,423 @@ class KsefInvoicePdf
 
 
     /**
+     * @brief WarunkiTransakcji section should render
+     * @return bool
+     * @called_by generate()
+     */
+    private function hasWarunkiTransakcji()
+    {
+        $w = $this->parsed['warunki'] ?? array();
+        if (empty($w)) return false;
+        return !empty($w['umowy']) || !empty($w['zamowienia']) || !empty($w['partie'])
+            || !empty($w['waluta_umowna']) || !empty($w['kurs_umowny']) || !empty($w['warunki_dostawy'])
+            || !empty($w['podmiot_posredniczacy']) || !empty($w['transport']);
+    }
+
+
+    /**
+     * @brief Render WarunkiTransakcji
+     * @param $y Current Y position
+     * @return float New Y position
+     * @called_by generate()
+     * @calls checkPageBreak(), drawLine(), renderWarunkiSubBlock(), renderMiniTable(),
+     *         renderLabelValue(), renderTransport()
+     */
+    private function renderWarunkiTransakcji($y)
+    {
+        $pdf = $this->pdf;
+        $w = $this->parsed['warunki'];
+
+        $y = $this->checkPageBreak($y, 25);
+        $y = $this->drawLine($y);
+
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 5, 'Warunki transakcji', 0, 1, 'L');
+        $y += 6;
+
+        // Umowa / Zamówienie
+        $hasUmowy = !empty($w['umowy']);
+        $hasZam = !empty($w['zamowienia']);
+        if ($hasUmowy || $hasZam) {
+            $colGap = 6;
+            $colW = ($this->contentWidth - $colGap) / 2;
+            $rightX = $this->marginLeft + $colW + $colGap;
+            $rows = (max($hasUmowy ? count($w['umowy']) : 0, $hasZam ? count($w['zamowienia']) : 0)) + 1;
+            $y = $this->checkPageBreak($y, 6 + 5 * $rows);
+            $yStart = $y;
+            $yLeft = $y;
+            $yRight = $y;
+            if ($hasUmowy) {
+                $yLeft = $this->renderWarunkiSubBlock($this->marginLeft, $yStart, $colW, 'Umowa',
+                    array('Data umowy', 'Numer umowy'),
+                    array_map(function ($u) { return array($this->formatDatePolish($u['data']), (string) $u['nr']); }, $w['umowy']));
+            }
+            if ($hasZam) {
+                $yRight = $this->renderWarunkiSubBlock($rightX, $yStart, $colW, 'Zamówienie',
+                    array('Data zamówienia', 'Numer zamówienia'),
+                    array_map(function ($z) { return array($this->formatDatePolish($z['data']), (string) $z['nr']); }, $w['zamowienia']));
+            }
+            $y = max($yLeft, $yRight) + 3;
+        }
+
+        // Waluta umowna i kurs umowny
+        if (!empty($w['waluta_umowna']) || !empty($w['kurs_umowny'])) {
+            $y = $this->checkPageBreak($y, 18);
+            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+            $pdf->SetXY($this->marginLeft, $y);
+            $pdf->Cell($this->contentWidth, 5, 'Waluta umowna i kurs umowny', 0, 1, 'L');
+            $y += 5;
+            if (!empty($w['waluta_umowna'])) $y = $this->renderLabelValue($y, 'Waluta umowna: ', $w['waluta_umowna']);
+            if (!empty($w['kurs_umowny'])) $y = $this->renderLabelValue($y, 'Kurs umowny: ', $w['kurs_umowny']);
+            $y += 2;
+        }
+
+        // NrPartiiTowaru
+        if (!empty($w['partie'])) {
+            $colW = ($this->contentWidth - 6) / 2;
+            $batchRows = array_map(function ($p) { return array($p); }, $w['partie']);
+            $y = $this->checkPageBreak($y, 5 * (count($batchRows) + 1) + 3);
+            $y = $this->renderMiniTable($this->marginLeft, $y, $colW, array('Numer partii towaru'), $batchRows) + 3;
+        }
+
+        // Warunki dostawy
+        if (!empty($w['warunki_dostawy'])) {
+            $y = $this->checkPageBreak($y, 8);
+            $y = $this->renderLabelValue($y, 'Warunki dostawy towarów: ', $w['warunki_dostawy']) + 2;
+        }
+
+        // Podmiot posredniczacy
+        if (!empty($w['podmiot_posredniczacy'])) {
+            $y = $this->checkPageBreak($y, 14);
+            $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+            $text = 'Dostawa dokonana przez podmiot, o którym mowa w art. 22 ust. 2d ustawy. Pole dotyczy sytuacji, w której podmiot uczestniczy w transakcji łańcuchowej innej niż procedura trójstronna uproszczona, o której mowa w art. 135 ust. 1 pkt 4 ustawy';
+            $pdf->SetXY($this->marginLeft, $y);
+            $pdf->MultiCell($this->contentWidth, 4, $text, 0, 'L');
+            $y = $pdf->GetY() + 2;
+        }
+
+        // Transport
+        if (!empty($w['transport'])) {
+            $multi = count($w['transport']) > 1;
+            foreach ($w['transport'] as $i => $t) {
+                $y = $this->renderTransport($y, $t, $multi ? ($i + 1) : null);
+            }
+        }
+
+        return $y + 2;
+    }
+
+
+    /**
+     * @brief Render a labelled sub-block
+     * @param $x Column X
+     * @param $y Y position
+     * @param $w Column width
+     * @param $title Sub-header title
+     * @param $headers Table header labels
+     * @param $rows Table rows
+     * @return float New Y position
+     * @called_by renderWarunkiTransakcji()
+     * @calls renderMiniTable()
+     */
+    private function renderWarunkiSubBlock($x, $y, $w, $title, $headers, $rows)
+    {
+        $pdf = $this->pdf;
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+        $pdf->SetXY($x, $y);
+        $pdf->Cell($w, 5, $title, 0, 1, 'L');
+        return $this->renderMiniTable($x, $y + 5, $w, $headers, $rows);
+    }
+
+
+    /**
+     * @brief Render a bordered mini-table
+     * @param $x Left X
+     * @param $y Y position
+     * @param $w Total width
+     * @param $headers Array of column header labels
+     * @param $rows Array of rows (each an array of cell strings)
+     * @return float New Y position
+     * @called_by renderWarunkiTransakcji(), renderWarunkiSubBlock()
+     */
+    private function renderMiniTable($x, $y, $w, $headers, $rows)
+    {
+        $pdf = $this->pdf;
+        $n = count($headers);
+        if ($n === 0) return $y;
+        $cw = $w / $n;
+
+        $pdf->SetDrawColorArray($this->colorBorder);
+        $pdf->SetLineWidth($this->borderWidth);
+
+        // Header row
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeTable);
+        $pdf->SetFillColorArray($this->colorHeaderBg);
+        $cx = $x;
+        foreach ($headers as $h) {
+            $pdf->SetXY($cx, $y);
+            $pdf->Cell($cw, 5, $h, 1, 0, 'L', true);
+            $cx += $cw;
+        }
+        $y += 5;
+
+        // Value rows
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeTable);
+        foreach ($rows as $row) {
+            $cx = $x;
+            foreach ($row as $cell) {
+                $pdf->SetXY($cx, $y);
+                $pdf->Cell($cw, 5, (string) $cell, 1, 0, 'L');
+                $cx += $cw;
+            }
+            $y += 5;
+        }
+
+        return $y;
+    }
+
+
+    /**
+     * @brief Render a single Transport
+     * @param $y Current Y position
+     * @param $t Transport data array
+     * @param $index 1-based index when multiple, null
+     * @return float New Y position
+     * @called_by renderWarunkiTransakcji()
+     * @calls checkPageBreak(), renderLabelValue(), renderTransportCarrier(), renderTransportAdres()
+     */
+    private function renderTransport($y, $t, $index)
+    {
+        $pdf = $this->pdf;
+        $y = $this->checkPageBreak($y, 20);
+        $y = $this->drawLine($y);
+
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 5, 'Transport' . ($index ? ' ' . $index : ''), 0, 1, 'L');
+        $y += 5;
+
+        $colGap = 6;
+        $colW = ($this->contentWidth - $colGap) / 2;
+        $rightX = $this->marginLeft + $colW + $colGap;
+
+        // Rodzaj transportu
+        $leftItems = array();
+        if (!empty($t['rodzaj'])) {
+            $leftItems[] = array('Rodzaj transportu: ', $this->getTransportTypeName($t['rodzaj']));
+        } elseif (($t['transport_inny'] ?? '') === '1' && !empty($t['opis_innego_transportu'])) {
+            $leftItems[] = array('Rodzaj transportu: ', 'Transport inny');
+            $leftItems[] = array('Opis innego rodzaju transportu: ', $t['opis_innego_transportu']);
+        }
+
+        // Dane transportu
+        $rightItems = array();
+        if (!empty($t['nr_zlecenia'])) $rightItems[] = array('Numer zlecenia transportu: ', $t['nr_zlecenia']);
+        if (!empty($t['opis_ladunku'])) {
+            $rightItems[] = array('Opis ładunku: ', $this->getCargoTypeName($t['opis_ladunku']));
+            if (($t['ladunek_inny'] ?? '') === '1' && !empty($t['opis_innego_ladunku'])) {
+                $rightItems[] = array('Opis ładunku: ', 'Ładunek inny');
+                $rightItems[] = array('Opis innego ładunku: ', $t['opis_innego_ladunku']);
+            }
+        }
+        if (!empty($t['jednostka_opakowania'])) $rightItems[] = array('Jednostka opakowania: ', $t['jednostka_opakowania']);
+        if (!empty($t['data_rozp'])) $rightItems[] = array('Data i godzina rozpoczęcia transportu: ', $this->formatDateTimePolish($t['data_rozp']));
+        if (!empty($t['data_zak'])) $rightItems[] = array('Data i godzina zakończenia transportu: ', $this->formatDateTimePolish($t['data_zak']));
+
+        if (!empty($leftItems) || !empty($rightItems)) {
+            $yStart = $y;
+            $yL = $yStart;
+            $yR = $yStart;
+            foreach ($leftItems as $it) {
+                $yL = $this->renderLabelValueAt($this->marginLeft, $yL, $colW, $it[0], $it[1]);
+            }
+            if (!empty($rightItems)) {
+                $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+                $pdf->SetXY($rightX, $yR);
+                $pdf->Cell($colW, 4, 'Dane transportu', 0, 1, 'L');
+                $yR += 4;
+                foreach ($rightItems as $it) {
+                    $yR = $this->renderLabelValueAt($rightX, $yR, $colW, $it[0], $it[1]);
+                }
+            }
+            $y = max($yL, $yR) + 3;
+        }
+
+        // Carrier
+        if (!empty($t['przewoznik'])) {
+            $y = $this->renderTransportCarrier($y, $t['przewoznik']);
+        }
+
+        // Addresses
+        $z = $t['wysylka_z'] ?? null;
+        $do = $t['wysylka_do'] ?? null;
+        $przez = $t['wysylka_przez'] ?? array();
+        if (!empty($z) || !empty($do) || !empty($przez)) {
+            $y = $this->checkPageBreak($y, 18);
+            $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+            $pdf->SetXY($this->marginLeft, $y);
+            $pdf->Cell($this->contentWidth, 5, 'Wysyłka', 0, 1, 'L');
+            $y += 5;
+
+            $yStart = $y;
+            $yL = $yStart;
+            $yR = $yStart;
+            // WysylkaZ/WysylkaPrzez
+            if (!empty($z)) $yL = $this->renderTransportAdres($this->marginLeft, $yL, $colW, 'Adres miejsca wysyłki', $z);
+            foreach ($przez as $adr) {
+                $yL += 2;
+                $yL = $this->renderTransportAdres($this->marginLeft, $yL, $colW, 'Adres pośredni wysyłki', $adr);
+            }
+            // WysylkaDo
+            if (!empty($do)) $yR = $this->renderTransportAdres($rightX, $yR, $colW, 'Adres miejsca docelowego, do którego został zlecony transport', $do);
+            $y = max($yL, $yR) + 2;
+        }
+
+        return $y + 2;
+    }
+
+
+    /**
+     * @brief Render transport carrier
+     * @param $y Current Y position
+     * @param $p Carrier data array
+     * @return float New Y position
+     * @called_by renderTransport()
+     * @calls renderLabelValue(), renderTransportAdres()
+     */
+    private function renderTransportCarrier($y, $p)
+    {
+        $pdf = $this->pdf;
+        $y = $this->checkPageBreak($y, 16);
+
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSection);
+        $pdf->SetXY($this->marginLeft, $y);
+        $pdf->Cell($this->contentWidth, 5, 'Przewoźnik', 0, 1, 'L');
+        $y += 5;
+
+        $colGap = 6;
+        $colW = ($this->contentWidth - $colGap) / 2;
+        $rightX = $this->marginLeft + $colW + $colGap;
+        $yStart = $y;
+        $yL = $yStart;
+        $yR = $yStart;
+
+        // identity
+        if (!empty($p['nip'])) $yL = $this->renderLabelValueAt($this->marginLeft, $yL, $colW, 'NIP: ', $p['nip']);
+        if (!empty($p['nr_vat_ue'])) $yL = $this->renderLabelValueAt($this->marginLeft, $yL, $colW, 'Numer VAT UE: ', trim(($p['kod_ue'] ?? '') . ' ' . $p['nr_vat_ue']));
+        if (!empty($p['nr_id'])) $yL = $this->renderLabelValueAt($this->marginLeft, $yL, $colW, 'Identyfikator podatkowy inny: ', trim(($p['kod_kraju'] ?? '') . ' ' . $p['nr_id']));
+        if (($p['brak_id'] ?? '') === '1') $yL = $this->renderLabelValueAt($this->marginLeft, $yL, $colW, 'Brak identyfikatora podatkowego', '');
+        if (!empty($p['nazwa'])) $yL = $this->renderLabelValueAt($this->marginLeft, $yL, $colW, 'Nazwa: ', $p['nazwa']);
+
+        // address
+        if (!empty($p['adres'])) {
+            $yR = $this->renderTransportAdres($rightX, $yR, $colW, 'Adres przewoźnika', $p['adres']);
+        }
+
+        return max($yL, $yR) + 2;
+    }
+
+
+    /**
+     * @brief Render a single address block
+     * @param $x Column X
+     * @param $y Y position
+     * @param $w Column width
+     * @param $title Sub-header title
+     * @param $adr Address data array
+     * @return float New Y position
+     * @called_by renderTransport(), renderTransportCarrier()
+     */
+    private function renderTransportAdres($x, $y, $w, $title, $adr)
+    {
+        $pdf = $this->pdf;
+        $pdf->SetFont($this->fontFamily, 'B', $this->fontSizeSmall);
+        $pdf->SetXY($x, $y);
+        $pdf->MultiCell($w, 4, $title, 0, 'L');
+        $y = $pdf->GetY();
+
+        $pdf->SetFont($this->fontFamily, '', $this->fontSizeSmall);
+        foreach (array($adr['l1'] ?? '', $adr['l2'] ?? '') as $line) {
+            if ($line === '') continue;
+            $pdf->SetXY($x, $y);
+            $pdf->MultiCell($w, 4, $line, 0, 'L');
+            $y = $pdf->GetY();
+        }
+        if (!empty($adr['kod_kraju'])) {
+            $pdf->SetXY($x, $y);
+            $pdf->MultiCell($w, 4, $this->getCountryName($adr['kod_kraju']), 0, 'L');
+            $y = $pdf->GetY();
+        }
+        if (!empty($adr['gln'])) {
+            $y = $this->renderLabelValueAt($x, $y, $w, 'GLN: ', $adr['gln']);
+        }
+        return $y;
+    }
+
+
+    /**
+     * @brief Map RodzajTransportu to Polish
+     * @param $code Transport type code
+     * @return string Name (or raw code if unknown)
+     * @called_by renderTransport()
+     */
+    private function getTransportTypeName($code)
+    {
+        $map = array(
+            '1' => 'Transport morski',
+            '2' => 'Transport kolejowy',
+            '3' => 'Transport drogowy',
+            '4' => 'Transport lotniczy',
+            '5' => 'Przesyłka pocztowa',
+            '7' => 'Stałe instalacje przesyłowe',
+            '8' => 'Żegluga śródlądowa',
+        );
+        return $map[$code] ?? $code;
+    }
+
+
+    /**
+     * @brief Map OpisLadunku to Polish
+     * @param $code Cargo type code
+     * @return string Name (or raw code if unknown)
+     * @called_by renderTransport()
+     */
+    private function getCargoTypeName($code)
+    {
+        $map = array(
+            '1' => 'Bańka', '2' => 'Beczka', '3' => 'Butla', '4' => 'Karton', '5' => 'Kanister',
+            '6' => 'Klatka', '7' => 'Kontener', '8' => 'Kosz/koszyk', '9' => 'Łubianka',
+            '10' => 'Opakowanie zbiorcze', '11' => 'Paczka', '12' => 'Pakiet', '13' => 'Paleta',
+            '14' => 'Pojemnik', '15' => 'Pojemnik do ładunków masowych stałych',
+            '16' => 'Pojemnik do ładunków masowych w postaci płynnej', '17' => 'Pudełko',
+            '18' => 'Puszka', '19' => 'Skrzynia', '20' => 'Worek',
+        );
+        return $map[$code] ?? $code;
+    }
+
+
+    /**
+     * @brief Format an ISO dateTime
+     * @param $value ISO dateTime string
+     * @return string Formatted value
+     * @called_by renderTransport()
+     */
+    private function formatDateTimePolish($value)
+    {
+        if (empty($value)) return '';
+        try {
+            $dt = new DateTime($value);
+            $dt->setTimezone(new DateTimeZone('Europe/Warsaw'));
+            return $dt->format('d.m.Y H:i');
+        } catch (Exception $e) {
+            $ts = strtotime($value);
+            return $ts ? date('d.m.Y H:i', $ts) : $value;
+        }
+    }
+
+
+    /**
      * @brief Render registries section (KRS, REGON, BDO)
      * @param $registries Registry data array
      * @param $y Current Y position
@@ -2673,6 +3171,7 @@ class KsefInvoicePdf
             'additional_info' => array(),
             'additional_desc' => array(),
             'exchange_rate' => array('rate' => null),
+            'warunki' => array('umowy' => array(), 'zamowienia' => array(), 'partie' => array(), 'waluta_umowna' => null, 'kurs_umowny' => null, 'warunki_dostawy' => null, 'podmiot_posredniczacy' => false, 'transport' => array()),
         );
     }
 }

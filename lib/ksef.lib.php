@@ -2236,3 +2236,29 @@ function ksefBuildCorrectionChain($invoice, $db, $maxDepth = 20)
 
     return $chain;
 }
+
+/**
+ * @brief Parse day/month/year date out of contract string
+ * @param string $text Raw contract text
+ * @return array{date: ?string, nr: string} 'date' as 'Y-m-d' or null, 'nr' as remainder
+ * @called_by FA3Builder::buildWarunkiTransakcji()
+ */
+function ksefParseContractDate($text)
+{
+    $text = (string) $text;
+    if (preg_match('/^\s*(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})\s*(?:[-–—]\s*)?(.*)$/su', $text, $m)) {
+        $day = (int) $m[1];
+        $month = (int) $m[2];
+        $year = (int) $m[3];
+        if (strlen($m[3]) <= 2) {
+            $year += 2000;
+        }
+        if (checkdate($month, $day, $year)) {
+            return array(
+                'date' => sprintf('%04d-%02d-%02d', $year, $month, $day),
+                'nr'   => trim($m[4]),
+            );
+        }
+    }
+    return array('date' => null, 'nr' => trim($text));
+}
