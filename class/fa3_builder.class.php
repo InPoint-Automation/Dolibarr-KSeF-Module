@@ -23,6 +23,7 @@
 
 require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture.class.php';
 require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+dol_include_once('/ksef/lib/ksef.lib.php');
 
 class FA3Builder
 {
@@ -2801,7 +2802,7 @@ class FA3Builder
      */
     private function xmlSafe($str)
     {
-        return htmlspecialchars(trim($str), ENT_XML1 | ENT_QUOTES, 'UTF-8');
+        return ksefXmlEscape(trim($str));
     }
 
     // https://github.com/Dolibarr/dolibarr/blob/develop/htdocs/install/mysql/data/llx_c_paiement.sql

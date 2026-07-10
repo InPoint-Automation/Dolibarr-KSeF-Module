@@ -28,7 +28,7 @@ if (!defined('CSRFCHECK_WITH_TOKEN')) {
 
 // Prevent token renewal for actions that exit without page reload
 $action_raw = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
-if (in_array($action_raw, array('check_fetch_status', 'init_fetch', 'process_incoming', 'download_xml', 'download_pdf', 'batch_import_preview', 'batch_import_execute'))) {
+if (in_array($action_raw, array('check_fetch_status', 'init_fetch', 'process_incoming', 'download_xml', 'download_pdf', 'batch_import_preview', 'batch_import_execute', 'gus_supplier_preview'))) {
     if (!defined('NOTOKENRENEWAL')) {
         define('NOTOKENRENEWAL', '1');
     }
@@ -296,6 +296,98 @@ if ($action == 'batch_import_preview') {
  * AJAX - Batch import execute
  */
 
+if ($action == 'gus_supplier_preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-cache');
+
+    if (!$user->hasRight('ksef', 'write')) {
+        echo json_encode(array('status' => 'ERROR', 'error' => 'Access denied'));
+        exit;
+    }
+    if (empty(getDolGlobalString('KSEF_GUS_ENABLED'))) {
+        echo json_encode(array('status' => 'OK', 'overrides' => array()));
+        exit;
+    }
+
+    $rawInput = file_get_contents('php://input');
+    $payload = json_decode($rawInput, true);
+    $ids = (is_array($payload) && !empty($payload['ids']) && is_array($payload['ids'])) ? $payload['ids'] : array();
+    if (empty($ids)) {
+        echo json_encode(array('status' => 'OK', 'overrides' => array()));
+        exit;
+    }
+
+    dol_include_once('/ksef/class/ksef_gus_client.class.php');
+
+    @set_time_limit(0);
+    $batchMax = getDolGlobalInt('KSEF_GUS_BATCH_MAX', 25);
+    if ($batchMax < 1) {
+        $batchMax = 25;
+    }
+    $batchDelayMs = getDolGlobalInt('KSEF_GUS_BATCH_DELAY_MS', 600);
+
+    $gusClient = new KsefGusClient($db, getDolGlobalString('KSEF_GUS_ENV', 'TEST'));
+    $supplierData = array();
+    $overrides = array();
+    $seenNip = array();
+    $looked = 0;
+    $truncated = 0;
+
+    foreach ($ids as $rawId) {
+        $invoiceId = (int) $rawId;
+        if ($invoiceId <= 0) {
+            continue;
+        }
+        $record = new KsefIncoming($db);
+        if ($record->fetch($invoiceId) <= 0) {
+            continue;
+        }
+        if (($record->seller_country ?: 'PL') !== 'PL') {
+            continue;
+        }
+        $nip = ksefCleanNIP($record->seller_nip);
+        if (!ksefValidateNIP($nip) || isset($seenNip[$nip])) {
+            continue;
+        }
+        $seenNip[$nip] = true;
+
+        if ($looked >= $batchMax) {
+            $truncated++;
+            continue;
+        }
+        if ($looked > 0 && $batchDelayMs > 0) {
+            usleep($batchDelayMs * 1000);
+        }
+        $looked++;
+
+        $data = $gusClient->lookupByNip($nip);
+        if ($data === false) {
+            continue;
+        }
+        $supplierData[$nip] = $data;
+
+        $changes = array();
+        $invName = trim((string) $record->seller_name);
+        if (!empty($data['name']) && $data['name'] !== $invName) {
+            $changes[] = array('label' => $langs->trans('Name'), 'from' => $invName, 'to' => $data['name']);
+        }
+        $gusAddr = trim(trim(($data['address'] ?? '') . ', ' . ($data['zip'] ?? '') . ' ' . ($data['town'] ?? '')), ',');
+        $invAddr = trim((string) $record->seller_address);
+        if ($gusAddr !== '' && $gusAddr !== $invAddr) {
+            $changes[] = array('label' => $langs->trans('Address'), 'from' => $invAddr, 'to' => $gusAddr);
+        }
+        if (!empty($changes)) {
+            $overrides[] = array('nip' => $nip, 'name' => ($invName !== '' ? $invName : $nip), 'changes' => $changes);
+        }
+    }
+    $gusClient->logout();
+
+    ksefSessionWrite('KSEF_GUS_SUPPLIER_DATA', $supplierData);
+
+    echo json_encode(array('status' => 'OK', 'overrides' => $overrides, 'truncated' => $truncated));
+    exit;
+}
+
 if ($action == 'batch_import_execute') {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-cache');
@@ -321,6 +413,13 @@ if ($action == 'batch_import_execute') {
     require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
     dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_SUPPLIERS', !empty($payload['auto_create_suppliers']) ? '1' : '0', 'chaine', 0, '', $conf->entity);
     dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_PRODUCTS', !empty($payload['auto_create_products']) ? '1' : '0', 'chaine', 0, '', $conf->entity);
+
+    $gusFetchSuppliers = !empty($payload['fetch_suppliers']) && !empty(getDolGlobalString('KSEF_GUS_ENABLED'));
+    dolibarr_set_const($db, 'KSEF_GUS_FETCH_SUPPLIERS', $gusFetchSuppliers ? '1' : '0', 'chaine', 0, '', $conf->entity);
+    $gusSupplierData = $gusFetchSuppliers ? ksefSessionRead('KSEF_GUS_SUPPLIER_DATA', array(), false) : array();
+    if (!is_array($gusSupplierData)) {
+        $gusSupplierData = array();
+    }
 
     session_write_close();
     require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
@@ -385,7 +484,8 @@ if ($action == 'batch_import_execute') {
             if (isset($createdSuppliers[$supplierCacheKey])) {
                 $socid = $createdSuppliers[$supplierCacheKey];
             } else {
-                $socid = $record->autoCreateSupplier($user);
+                $gusForThis = (!empty($gusSupplierData[$nip])) ? $gusSupplierData[$nip] : null;
+                $socid = $record->autoCreateSupplier($user, $gusForThis);
                 if ($socid > 0) {
                     $createdSuppliers[$supplierCacheKey] = $socid;
                 } else {
@@ -1271,6 +1371,10 @@ print '<label><input type="checkbox" id="batch-auto-create-suppliers"' . (getDol
 print ' <span class="fa fa-info-circle classfortooltip" style="opacity: 0.5;" title="' . dol_escape_htmltag($langs->trans('KSEF_BatchAutoCreateSuppliers_Help')) . '"></span><br>';
 print '<label><input type="checkbox" id="batch-auto-create-products"' . (getDolGlobalString('KSEF_BATCH_AUTO_CREATE_PRODUCTS', '1') ? ' checked' : '') . '> ' . $langs->trans("KSEF_BatchAutoCreateProducts") . '</label>';
 print ' <span class="fa fa-info-circle classfortooltip" style="opacity: 0.5;" title="' . dol_escape_htmltag($langs->trans('KSEF_BatchAutoCreateProducts_Help')) . '"></span>';
+if (!empty(getDolGlobalString('KSEF_GUS_ENABLED'))) {
+    print '<br><label><input type="checkbox" id="batch-gus-fetch-suppliers"' . (getDolGlobalString('KSEF_GUS_FETCH_SUPPLIERS') ? ' checked' : '') . '> ' . $langs->trans("KSEF_GusFetchSuppliers") . '</label>';
+    print ' <span class="fa fa-info-circle classfortooltip" style="opacity: 0.5;" title="' . dol_escape_htmltag($langs->trans('KSEF_GusFetchSuppliers_Help')) . '"></span>';
+}
 print '</div>';
 if (isModEnabled('stock')) {
     $stockEnabled = getDolGlobalString('STOCK_CALCULATE_ON_SUPPLIER_BILL');
@@ -1302,6 +1406,12 @@ $(document).ready(function() {
     var langBatchResults = ' . json_encode($langs->trans("KSEF_BatchImportResults")) . ';
     var langSuccess = ' . json_encode($langs->trans("KSEF_BatchImportSuccessLine")) . ';
     var langError = ' . json_encode($langs->trans("Error")) . ';
+    var langGusOverrideTitle = ' . json_encode($langs->trans("KSEF_GusOverrideTitle")) . ';
+    var langGusOverrideIntro = ' . json_encode($langs->trans("KSEF_GusOverrideIntro")) . ';
+    var langGusOverrideProceed = ' . json_encode($langs->trans("KSEF_GusOverrideProceed")) . ';
+    var langGusPreviewFailed = ' . json_encode($langs->trans("KSEF_GusPreviewFailed")) . ';
+    var langGusPreviewTruncated = ' . json_encode($langs->trans("KSEF_GusPreviewTruncated")) . ';
+    var langGusCancel = ' . json_encode($langs->trans("Cancel")) . ';
     var langNoImportable = ' . json_encode($langs->trans("KSEF_BatchNoImportable")) . ';
     var langMatchedByRef = ' . json_encode($langs->trans("KSEF_MatchedByRef")) . ';
     var langMatchedBySupplierRef = ' . json_encode($langs->trans("KSEF_MatchedBySupplierRef")) . ';
@@ -1664,6 +1774,7 @@ $(document).ready(function() {
         var decisions = [];
         var autoCreateSuppliers = $("#batch-auto-create-suppliers").is(":checked");
         var autoCreateProducts = $("#batch-auto-create-products").is(":checked");
+        var gusFetch = $("#batch-gus-fetch-suppliers").is(":checked");
 
         $("#batch-import-table tbody tr").each(function() {
             var $row = $(this);
@@ -1679,15 +1790,83 @@ $(document).ready(function() {
 
         if (decisions.length === 0) return;
 
-        $("#batch-import-btn-confirm").prop("disabled", true).text(langImporting);
-        $("#batch-import-content").hide();
-        $("#batch-import-loading").show();
-
         var payload = {
             decisions: decisions,
             auto_create_suppliers: autoCreateSuppliers,
-            auto_create_products: autoCreateProducts
+            auto_create_products: autoCreateProducts,
+            fetch_suppliers: gusFetch
         };
+
+        var supplierIds = [];
+        if (gusFetch) {
+            $.each(decisions, function(i, d) { if (d.auto_create_supplier) supplierIds.push(d.id); });
+        }
+
+        if (gusFetch && supplierIds.length > 0) {
+            $("#batch-import-btn-confirm").prop("disabled", true);
+            $.ajax({
+                url: baseUrl + "?action=gus_supplier_preview&token=" + ajaxToken,
+                method: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({ ids: supplierIds }),
+                dataType: "json",
+                success: function(resp) {
+                    $("#batch-import-btn-confirm").prop("disabled", false);
+                    var trunc = (resp && resp.truncated) ? resp.truncated : 0;
+                    if (resp && resp.status === "OK" && resp.overrides && resp.overrides.length > 0) {
+                        showGusOverrideConfirm(resp.overrides, payload, trunc);
+                    } else if (trunc > 0) {
+                        if (confirm(langGusPreviewTruncated.replace("%s", trunc))) {
+                            doExecuteBatchImport(payload);
+                        }
+                    } else {
+                        doExecuteBatchImport(payload);
+                    }
+                },
+                error: function() {
+                    $("#batch-import-btn-confirm").prop("disabled", false);
+                    if (confirm(langGusPreviewFailed)) {
+                        doExecuteBatchImport(payload);
+                    }
+                }
+            });
+            return;
+        }
+
+        doExecuteBatchImport(payload);
+    }
+
+    function showGusOverrideConfirm(overrides, payload, truncated) {
+        var h = "<div style=\"max-height:300px; overflow:auto;\"><p>" + escapeHtml(langGusOverrideIntro) + "</p>";
+        if (truncated && truncated > 0) {
+            h += "<p class=\"warning\">" + escapeHtml(langGusPreviewTruncated.replace("%s", truncated)) + "</p>";
+        }
+        $.each(overrides, function(i, o) {
+            h += "<div style=\"margin-bottom:8px;\"><strong>" + escapeHtml(o.name) + "</strong> (NIP " + escapeHtml(o.nip) + ")<ul>";
+            $.each(o.changes, function(j, c) {
+                h += "<li>" + escapeHtml(c.label) + ": <span class=\"opacitymedium\">" + escapeHtml(c.from) + "</span> &rarr; " + escapeHtml(c.to) + "</li>";
+            });
+            h += "</ul></div>";
+        });
+        h += "</div>";
+
+        $("#ksef-gus-override-dialog").remove();
+        var $dlg = $("<div></div>").attr("id", "ksef-gus-override-dialog").attr("title", langGusOverrideTitle).html(h);
+        $("body").append($dlg);
+        $dlg.dialog({
+            modal: true,
+            width: 520,
+            buttons: [
+                { text: langGusOverrideProceed, click: function() { $(this).dialog("close"); doExecuteBatchImport(payload); } },
+                { text: langGusCancel, click: function() { $(this).dialog("close"); } }
+            ]
+        });
+    }
+
+    function doExecuteBatchImport(payload) {
+        $("#batch-import-btn-confirm").prop("disabled", true).text(langImporting);
+        $("#batch-import-content").hide();
+        $("#batch-import-loading").show();
 
         $.ajax({
             url: baseUrl + "?action=batch_import_execute&token=" + ajaxToken,

@@ -73,6 +73,12 @@ if (!$user->admin) {
 $action = GETPOST('action', 'aZ09');
 $backtopage = GETPOST('backtopage', 'alpha');
 
+dol_include_once('/ksef/core/modules/modKSEF.class.php');
+$tmpmodule = new modKSEF($db);
+
+// Run update check
+$ksefUpdate = ksefMaybeRunUpdateCheck($db);
+
 $requirements = array();
 
 $php_version = phpversion();
@@ -388,9 +394,6 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'about', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-dol_include_once('/ksef/core/modules/modKSEF.class.php');
-$tmpmodule = new modKSEF($db);
-
 ?>
 
     <table class="noborder centpercent">
@@ -512,6 +515,10 @@ $tmpmodule = new modKSEF($db);
     <br>
 
 <?php
+
+print ksefRenderSupportBox('', $ksefUpdate);
+
+print '<br>';
 
 print dol_get_fiche_end();
 llxFooter();

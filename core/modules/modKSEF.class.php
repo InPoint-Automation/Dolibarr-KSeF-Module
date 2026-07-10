@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.4.3';
+        $this->version = '1.4.4';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -343,8 +343,6 @@ class modKSEF extends DolibarrModules
             'KSEF_DEFAULT_CORRECTION_TYPE'   => '',
             'KSEF_KOR_LINE_METHOD'           => 'stanprzed',
             'KSEF_IDNABYWCY_SOURCE'          => 'disabled',
-            'KSEF_NREORI_BUYER_SOURCE'       => 'disabled',
-            'KSEF_FA3_INCLUDE_FP'            => '0', // deleteme later
             'KSEF_TP_SOURCE'                 => 'disabled',
 
             'KSEF_FA3_MPP_SOURCE'            => 'disabled',
@@ -358,6 +356,13 @@ class modKSEF extends DolibarrModules
             'KSEF_PODMIOT3_SOURCE'           => 'disabled',
             'KSEF_PODMIOT3_ROLE'             => '6',
             'KSEF_IDWEW_SOURCE'              => 'disabled',
+
+            // GUS / REGON Lookup
+            'KSEF_GUS_ENABLED'               => '0',
+            'KSEF_GUS_ENV'                   => 'TEST',
+            'KSEF_GUS_KEY'                   => '',
+            'KSEF_GUS_FETCH_SUPPLIERS'       => '0',
+            'KSEF_GUS_NAME_STYLE'            => 'full',
         );
 
         foreach ($persistentDefaults as $name => $defaultValue) {
@@ -1239,6 +1244,13 @@ class modKSEF extends DolibarrModules
                     }
                 },
             ),
+            '1.4.4' => array(
+                function () use ($db, $conf) {
+                    dolibarr_del_const($db, 'KSEF_FA3_INCLUDE_FP', $conf->entity);
+                    dolibarr_del_const($db, 'KSEF_NREORI_BUYER_SOURCE', $conf->entity);
+                    dol_syslog("modKSEF::migration 1.4.4 - Removed dead consts KSEF_FA3_INCLUDE_FP and KSEF_NREORI_BUYER_SOURCE", LOG_INFO);
+                },
+            ),
         );
 
         $lastMigration = getDolGlobalString('KSEF_MIGRATION_VERSION', '');
@@ -1390,14 +1402,12 @@ class modKSEF extends DolibarrModules
 
                 // Entity Fields
                 'KSEF_IDNABYWCY_SOURCE',
-                'KSEF_NREORI_BUYER_SOURCE',
 
                 // Company Identifiers
                 'KSEF_COMPANY_EORI',
                 'KSEF_FIELD_EORI',
 
                 // Invoice Flags
-                'KSEF_FA3_INCLUDE_FP', //deleteme later
                 'KSEF_TP_SOURCE',
                 'KSEF_FA3_MPP_SOURCE',
                 'KSEF_FA3_FP_SOURCE',
@@ -1410,6 +1420,20 @@ class modKSEF extends DolibarrModules
                 'KSEF_PODMIOT3_SOURCE',
                 'KSEF_PODMIOT3_ROLE',
                 'KSEF_IDWEW_SOURCE',
+
+                // GUS / REGON
+                'KSEF_GUS_ENABLED',
+                'KSEF_GUS_ENV',
+                'KSEF_GUS_KEY',
+                'KSEF_GUS_FETCH_SUPPLIERS',
+                'KSEF_GUS_NAME_STYLE',
+
+                // Update check
+                'KSEF_UPDATE_LAST_CHECK',
+                'KSEF_UPDATE_AVAILABLE',
+                'KSEF_UPDATE_LATEST_VERSION',
+                'KSEF_UPDATE_RELEASE_URL',
+                'KSEF_UPDATE_ZIP_URL',
 
                 'KSEF_MIGRATION_VERSION',
             );

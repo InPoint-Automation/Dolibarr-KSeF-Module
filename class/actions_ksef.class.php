@@ -493,6 +493,11 @@ class ActionsKSEF
 
         $currentcontext = $parameters['currentcontext'] ?? '';
 
+        // GUS lookup
+        if ($currentcontext === 'thirdpartycard' && $action === 'ksef_gus_lookup') {
+            $this->handleGusLookup();
+        }
+
         // Handle per-invoice override
         if ($currentcontext === 'invoicenote' && $action === 'ksef_set_note_override') {
             if (is_object($object) && !empty($object->id) && $object->element === 'facture') {
@@ -2257,6 +2262,336 @@ jQuery(document).ready(function() {
     jQuery(document).on("input change", "textarea[name=\'note_public\']", updateCounter);
 });
 </script>';
+    }
+
+    /**
+     * @brief Renders the GUS lookup button
+     * @param $parameters Hook parameters
+     * @param $object Third party object
+     * @param $action Current action
+     * @param $hookmanager Hook manager
+     * @return int Status code (0 so the standard field table still renders)
+     * @called_by Dolibarr hook: tabContentCreateThirdparty
+     * @calls printGusLookupWidget()
+     */
+    public function tabContentCreateThirdparty($parameters, &$object, &$action, $hookmanager)
+    {
+        $this->printGusLookupWidget($object);
+        return 0;
+    }
+
+    /**
+     * @brief Renders the GUS lookup button
+     * @param $parameters Hook parameters
+     * @param $object Third party object
+     * @param $action Current action
+     * @param $hookmanager Hook manager
+     * @return int Status code (0 so the standard field table still renders)
+     * @called_by Dolibarr hook: tabContentEditThirdparty
+     * @calls printGusLookupWidget()
+     */
+    public function tabContentEditThirdparty($parameters, &$object, &$action, $hookmanager)
+    {
+        $this->printGusLookupWidget($object);
+        return 0;
+    }
+
+    /**
+     * @brief Prints the GUS lookup button
+     * @param $object Third party object (may be empty on create)
+     * @return void
+     * @called_by tabContentCreateThirdparty(), tabContentEditThirdparty()
+     * @calls ksefTranslationOverridesReady(), ksefGusDomFieldId()
+     */
+    private function printGusLookupWidget(&$object)
+    {
+        global $langs, $db, $conf;
+
+        if (empty($conf->ksef) || empty($conf->ksef->enabled) || empty(getDolGlobalString('KSEF_GUS_ENABLED'))) {
+            return;
+        }
+
+        // PL or unchosen country only
+        $countryCode = (is_object($object) && !empty($object->country_code)) ? $object->country_code : '';
+        if ($countryCode !== '' && $countryCode !== 'PL') {
+            return;
+        }
+
+        dol_include_once('/ksef/lib/ksef.lib.php');
+        $langs->loadLangs(array('ksef@ksef'));
+
+        $nipSelector = ksefGusDomFieldId('NIP');
+        if (empty($nipSelector)) {
+            return;
+        }
+
+        $ready = ksefTranslationOverridesReady($db);
+        $setupUrl = dol_buildpath('/ksef/admin/setup.php', 1);
+
+        print '<span id="ksef_gus_widget" style="margin-left: 8px; white-space: nowrap;">';
+        if ($ready) {
+            print '<button type="button" id="ksef_gus_fetch" class="button smallpaddingimp">'
+                . '<span class="fa fa-download"></span> ' . $langs->trans('KSEF_GusFetch') . '</button>';
+            print ' <span id="ksef_gus_status" class="opacitymedium"></span>';
+        } else {
+            print '<button type="button" class="button smallpaddingimp" disabled title="' . dol_escape_htmltag($langs->trans('KSEF_GusSetupRequired')) . '">'
+                . '<span class="fa fa-download"></span> ' . $langs->trans('KSEF_GusFetch') . '</button>';
+            print ' <a href="' . $setupUrl . '">' . $langs->trans('KSEF_GusRunSetup') . '</a>';
+        }
+        print '</span>';
+        if ($ready) {
+            print '<div id="ksef_gus_conflicts" style="display: none;"></div>';
+        }
+
+        if (!$ready) {
+            print '<script type="text/javascript">jQuery(function($) { var $n = $("' . dol_escape_js($nipSelector) . '"); if ($n.length) { $n.after($("#ksef_gus_widget")); } });</script>';
+            return;
+        }
+
+        $cfg = array(
+            'nipSelector' => $nipSelector,
+        );
+        $msg = array(
+            'fetching'     => $langs->trans('KSEF_GusFetching'),
+            'filled'       => $langs->trans('KSEF_GusFilled'),
+            'noChanges'    => $langs->trans('KSEF_GusNoChanges'),
+            'conflictTitle' => $langs->trans('KSEF_GusConflictTitle'),
+            'apply'        => $langs->trans('KSEF_GusApply'),
+            'dismiss'      => $langs->trans('KSEF_GusDismiss'),
+            'selectAll'    => $langs->trans('KSEF_GusSelectAll'),
+            'invalidNip'   => $langs->trans('KSEF_GusErrInvalidNip'),
+            'nipCancelled' => $langs->trans('KSEF_GusNipCancelled'),
+            'inactive'     => $langs->trans('KSEF_GusInactiveWarn'),
+        );
+        $errMap = array(
+            'forbidden'        => $langs->trans('KSEF_GusErrForbidden'),
+            'disabled'         => $langs->trans('KSEF_GusErrDisabled'),
+            'setup_required'   => $langs->trans('KSEF_GusErrSetupRequired'),
+            'invalid_nip'      => $langs->trans('KSEF_GusErrInvalidNip'),
+            'no_key'           => $langs->trans('KSEF_GusErrNoKey'),
+            'rate_limited'     => $langs->trans('KSEF_GusErrRateLimited'),
+            'not_found'        => $langs->trans('KSEF_GusErrNotFound'),
+            'unsupported_type' => $langs->trans('KSEF_GusErrUnsupportedType'),
+            'session_error'    => $langs->trans('KSEF_GusErrSession'),
+            'transport_error'  => $langs->trans('KSEF_GusErrTransport'),
+            'http_error'       => $langs->trans('KSEF_GusErrTransport'),
+            'parse_error'      => $langs->trans('KSEF_GusErrTransport'),
+            'error'            => $langs->trans('KSEF_GusError'),
+        );
+
+        $flags = JSON_HEX_APOS | JSON_HEX_TAG;
+        $cfgJson = json_encode($cfg, $flags);
+        $msgJson = json_encode($msg, $flags);
+        $errJson = json_encode($errMap, $flags);
+
+        print '<script type="text/javascript">';
+        print 'jQuery(function($) {';
+        print 'var cfg = ' . $cfgJson . ';';
+        print 'var MSG = ' . $msgJson . ';';
+        print 'var ERR = ' . $errJson . ';';
+        print 'var $btn = $("#ksef_gus_fetch");';
+        print 'if (!$btn.length) return;';
+        // Relocate widget to NIP field
+        print 'var $nipField = $(cfg.nipSelector);';
+        print 'if ($nipField.length) {';
+        print '$nipField.after($("#ksef_gus_widget"));';
+        print 'var $cr = $("<tr class=\'ksef-gus-conflict-row\'><td colspan=\'4\'></td></tr>");';
+        print '$cr.children("td").append($("#ksef_gus_conflicts"));';
+        print '$nipField.closest("tr").after($cr);';
+        print '}';
+        // card.php rolls token, use new
+        print 'function token() { return $("meta[name=\'anti-csrf-newtoken\']").attr("content") || ""; }';
+        print 'function setStatus(t) { $("#ksef_gus_status").text(t || ""); }';
+        print 'function highlight($el) { $el.css("background-color", "#e6ffe6"); }';
+        print 'function esc(s) { return $("<div>").text(s == null ? "" : s).html(); }';
+        print 'function renderConflicts(list) {';
+        print 'var h = "<table class=\'noborder centpercent\'>";';
+        print 'h += "<tr class=\'liste_titre\'><td colspan=\'3\'>" + esc(MSG.conflictTitle) + "</td></tr>";';
+        print '$.each(list, function(i, f) {';
+        print 'h += "<tr class=\'oddeven\'><td class=\'center\' style=\'width:24px;\'><input type=\'checkbox\' class=\'ksef-gus-cf\' data-idx=\'" + i + "\'></td>";';
+        print 'h += "<td><strong>" + esc(f.label) + "</strong></td>";';
+        print 'h += "<td><span class=\'opacitymedium\'>" + esc($.trim($(f.selector).val() || "")) + "</span> &rarr; " + esc(f.value) + "</td></tr>";';
+        print '});';
+        print 'h += "<tr class=\'oddeven\'><td colspan=\'3\'><label><input type=\'checkbox\' id=\'ksef_gus_all\'> " + esc(MSG.selectAll) + "</label> ";';
+        print 'h += "<button type=\'button\' class=\'button smallpaddingimp\' id=\'ksef_gus_apply\'>" + esc(MSG.apply) + "</button> ";';
+        print 'h += "<button type=\'button\' class=\'button smallpaddingimp button-cancel\' id=\'ksef_gus_dismiss\'>" + esc(MSG.dismiss) + "</button></td></tr>";';
+        print 'h += "</table>";';
+        print 'var $box = $("#ksef_gus_conflicts"); $box.html(h).show(); $box.data("conflicts", list);';
+        print '}';
+        print '$btn.on("click", function() {';
+        print 'var nip = ($(cfg.nipSelector).val() || "").replace(/[^0-9]/g, "");';
+        print '$("#ksef_gus_conflicts").hide().empty();';
+        print 'if (nip.length < 10) { setStatus(""); alert(MSG.invalidNip); return; }';
+        print 'setStatus(MSG.fetching);';
+        print '$.ajax({ type: "POST", url: window.location.pathname, dataType: "json", data: { action: "ksef_gus_lookup", nip: nip, token: token() } }).done(function(resp) {';
+        print 'if (!resp || !resp.ok) { setStatus(""); var code = (resp && resp.error) ? resp.error : "error"; alert((ERR[code] || ERR.error).replace("%s", nip)); return; }';
+        print 'var filled = 0, conflicts = [];';
+        print '$.each(resp.fields, function(i, f) {';
+        print 'var $el = $(f.selector); if (!$el.length) return;';
+        print 'var cur = $.trim($el.val() || "");';
+        print 'if (cur === "") { $el.val(f.value); highlight($el); filled++; }';
+        print 'else if (cur !== $.trim(f.value)) { conflicts.push(f); }';
+        print '});';
+        print 'var notes = [];';
+        print 'if (resp.meta && resp.meta.status_nip) { notes.push(MSG.nipCancelled.replace("%s", resp.meta.status_nip)); }';
+        print 'if (resp.meta && resp.meta.active === false) { notes.push(MSG.inactive); }';
+        print 'var summary = (!filled && !conflicts.length) ? MSG.noChanges : MSG.filled.replace("%s", filled);';
+        print 'setStatus(summary + (notes.length ? " " + notes.join(" ") : ""));';
+        print 'if (conflicts.length) { renderConflicts(conflicts); }';
+        print '}).fail(function() { setStatus(""); alert(ERR.transport_error); });';
+        print '});';
+        print '$("#ksef_gus_conflicts").on("change", "#ksef_gus_all", function() { $(".ksef-gus-cf").prop("checked", $(this).prop("checked")); });';
+        print '$("#ksef_gus_conflicts").on("click", "#ksef_gus_apply", function() {';
+        print 'var list = $("#ksef_gus_conflicts").data("conflicts") || []; var n = 0;';
+        print '$(".ksef-gus-cf:checked").each(function() { var f = list[$(this).data("idx")]; if (f) { var $el = $(f.selector); if ($el.length) { $el.val(f.value); highlight($el); n++; } } });';
+        print '$("#ksef_gus_conflicts").hide().empty(); setStatus(MSG.filled.replace("%s", n));';
+        print '});';
+        print '$("#ksef_gus_conflicts").on("click", "#ksef_gus_dismiss", function() { $("#ksef_gus_conflicts").hide().empty(); });';
+        print '});';
+        print '</script>';
+    }
+
+    /**
+     * @brief Handles the GUS lookup background request
+     * @return void This method always exits after sending the response
+     * @called_by doActions()
+     * @calls ksefTranslationOverridesReady(), KsefGusClient::lookupByNip(), ksefGusDomFieldId()
+     */
+    private function handleGusLookup()
+    {
+        global $db, $user, $langs;
+
+        dol_include_once('/ksef/class/ksef_gus_client.class.php');
+        $langs->loadLangs(array('ksef@ksef', 'companies'));
+
+        if (!$user->hasRight('societe', 'creer')) {
+            $this->gusJsonError('forbidden');
+        }
+        if (empty(getDolGlobalString('KSEF_GUS_ENABLED'))) {
+            $this->gusJsonError('disabled');
+        }
+        if (!ksefTranslationOverridesReady($db)) {
+            $this->gusJsonError('setup_required');
+        }
+
+        $nip = ksefCleanNIP(GETPOST('nip', 'alphanohtml', 2));
+        if (empty($nip)) {
+            $this->gusJsonError('invalid_nip');
+        }
+
+        $now = dol_now();
+        $gusEnv = getDolGlobalString('KSEF_GUS_ENV', 'TEST');
+        $cacheKey = $gusEnv . ':' . getDolGlobalString('KSEF_GUS_NAME_STYLE', 'full') . ':' . $nip;
+
+        // Cache before rate limit
+        $gusCache = ksefSessionRead('KSEF_GUS_CACHE', array());
+        if (!is_array($gusCache)) {
+            $gusCache = array();
+        }
+
+        if (isset($gusCache[$cacheKey]) && $gusCache[$cacheKey]['ts'] > $now - 3600) {
+            $data = $gusCache[$cacheKey]['data'];
+        } else {
+            // Self imposed rate limit
+            $gusCalls = ksefSessionRead('KSEF_GUS_CALLS', array());
+            if (!is_array($gusCalls)) {
+                $gusCalls = array();
+            }
+            $recent = array();
+            foreach ($gusCalls as $ts) {
+                if ($ts > $now - 60) {
+                    $recent[] = $ts;
+                }
+            }
+            if (!empty($recent) && ($now - max($recent)) < 2) {
+                $this->gusJsonError('rate_limited');
+            }
+            if (count($recent) >= 20) {
+                $this->gusJsonError('rate_limited');
+            }
+            $recent[] = $now;
+            ksefSessionWrite('KSEF_GUS_CALLS', $recent);
+
+            $client = new KsefGusClient($db, $gusEnv);
+            $data = $client->lookupByNip($nip);
+            if ($data === false) {
+                $this->gusJsonError($client->error ? $client->error : 'error');
+            }
+
+            $gusCache[$cacheKey] = array('ts' => $now, 'data' => $data);
+            if (count($gusCache) > 50) {
+                $gusCache = array_slice($gusCache, -50, null, true);
+            }
+            ksefSessionWrite('KSEF_GUS_CACHE', $gusCache);
+        }
+
+        $targets = array();
+        $this->gusAddTarget($targets, '#name', $data['name'], $langs->trans('Name'));
+        $this->gusAddTarget($targets, '#name_alias_input', $data['name_short'], $langs->trans('AliasNames'));
+        $this->gusAddTarget($targets, '#address', $data['address'], $langs->trans('Address'));
+        $this->gusAddTarget($targets, '#zipcode', $data['zip'], $langs->trans('Zip'));
+        $this->gusAddTarget($targets, '#town', $data['town'], $langs->trans('Town'));
+        $this->gusAddTarget($targets, '#phone', $data['phone'], $langs->trans('Phone'));
+        $this->gusAddTarget($targets, '#email', $data['email'], $langs->trans('Email'));
+        $this->gusAddTarget($targets, '#url', $data['url'], $langs->trans('Web'));
+
+        $nipSelector = ksefGusDomFieldId('NIP');
+        if ($nipSelector === '#intra_vat') {
+            $this->gusAddTarget($targets, '#intra_vat', 'PL' . $data['nip'], 'VAT/NIP');
+        } else {
+            $this->gusAddTarget($targets, $nipSelector, $data['nip'], 'NIP');
+            $this->gusAddTarget($targets, '#intra_vat', 'PL' . $data['nip'], 'VAT');
+        }
+        $this->gusAddTarget($targets, ksefGusDomFieldId('REGON'), $data['regon'], 'REGON');
+        $this->gusAddTarget($targets, ksefGusDomFieldId('KRS'), $data['krs'], 'KRS');
+
+        top_httphead('application/json');
+        echo json_encode(array(
+            'ok' => 1,
+            'fields' => $targets,
+            'meta' => array(
+                'typ' => $data['typ'],
+                'status_nip' => $data['status_nip'],
+                'active' => $data['active'],
+            ),
+        ), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    /**
+     * @brief Appends a fillable target
+     * @param array $list Target list (by reference)
+     * @param $selector jQuery selector or null
+     * @param $value Field value
+     * @param $label Human label for the reconcile panel
+     * @return void
+     * @called_by handleGusLookup()
+     */
+    private function gusAddTarget(&$list, $selector, $value, $label)
+    {
+        if (empty($selector) || $value === '' || $value === null) {
+            return;
+        }
+        // Skip duplicate selectors
+        foreach ($list as $existing) {
+            if ($existing['selector'] === $selector) {
+                return;
+            }
+        }
+        $list[] = array('selector' => $selector, 'value' => $value, 'label' => $label);
+    }
+
+    /**
+     * @brief Outputs a JSON error and exits
+     * @param $code Machine readable error code
+     * @return void This method always exits
+     * @called_by handleGusLookup()
+     */
+    private function gusJsonError($code)
+    {
+        top_httphead('application/json');
+        echo json_encode(array('ok' => 0, 'error' => $code));
+        exit;
     }
 
     /**

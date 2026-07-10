@@ -375,6 +375,54 @@ if ($action == 'testcertauth') {
     $conf->global->KSEF_ENVIRONMENT = $orig_env;
 }
 
+if ($action == 'update_gus') {
+    $gusEnabled = GETPOST('KSEF_GUS_ENABLED', 'int') ? '1' : '0';
+
+    $gusEnv = GETPOST('KSEF_GUS_ENV', 'alpha');
+    if (!in_array($gusEnv, array('TEST', 'PROD'))) {
+        $gusEnv = 'TEST';
+    }
+
+    // Require field labels applied
+    if ($gusEnabled === '1' && !ksefTranslationOverridesReady($db)) {
+        $gusEnabled = '0';
+        setEventMessages($langs->trans("KSEF_GusSetupRequiredBanner"), null, 'warnings');
+    }
+
+    $gusNameStyle = GETPOST('KSEF_GUS_NAME_STYLE', 'alpha');
+    if (!in_array($gusNameStyle, array('full', 'upper', 'mixed'))) {
+        $gusNameStyle = 'full';
+    }
+
+    dolibarr_set_const($db, 'KSEF_GUS_ENABLED', $gusEnabled, 'chaine', 0, '', $conf->entity);
+    dolibarr_set_const($db, 'KSEF_GUS_ENV', $gusEnv, 'chaine', 0, '', $conf->entity);
+    dolibarr_set_const($db, 'KSEF_GUS_NAME_STYLE', $gusNameStyle, 'chaine', 0, '', $conf->entity);
+
+    $gusKey = GETPOST('KSEF_GUS_KEY', 'password');
+    if ($gusKey !== '') {
+        dolibarr_set_const($db, 'KSEF_GUS_KEY', dol_encode(trim($gusKey)), 'chaine', 0, '', $conf->entity);
+    }
+
+    setEventMessages($langs->trans("SetupSaved"), null, 'mesgs');
+    header("Location: " . $_SERVER["PHP_SELF"]);
+    exit;
+}
+
+if ($action == 'testgusconnection') {
+    dol_include_once('/ksef/class/ksef_gus_client.class.php');
+    try {
+        $gusClient = new KsefGusClient($db, getDolGlobalString('KSEF_GUS_ENV', 'TEST'));
+        if ($gusClient->login()) {
+            $gusClient->logout();
+            setEventMessages($langs->trans("KSEF_GusTestOk"), null, 'mesgs');
+        } else {
+            setEventMessages($langs->trans("KSEF_GusTestFail", ($gusClient->error ? $gusClient->error : 'error')), null, 'errors');
+        }
+    } catch (Exception $e) {
+        setEventMessages($langs->trans("KSEF_GusTestFail", $e->getMessage()), null, 'errors');
+    }
+}
+
 /*
  * View
  */
@@ -390,14 +438,104 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'auth', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-// Reactivation warning
-echo ksefShowReactivationWarning();
+// Reactivation + update banners
+echo ksefShowAdminBanners();
 
 // Config warnings
 $warnings = ksefGetConfigWarnings();
 if (!empty($warnings)) {
     echo ksefRenderConfigWarnings($warnings, 'auth');
 }
+
+$gusReady = ksefTranslationOverridesReady($db);
+if (!$gusReady) {
+    print '<div class="warning" style="margin-bottom: 15px;">' . img_warning() . ' ' . $langs->trans("KSEF_GusSetupRequiredBanner");
+    print ' <a href="' . dol_buildpath('/ksef/admin/setup.php', 1) . '">' . $langs->trans("KSEF_GusRunSetup") . '</a>';
+    print '</div>';
+}
+
+// GUS / REGON lookup
+$gusEnabled = getDolGlobalString('KSEF_GUS_ENABLED');
+$gusEnv = getDolGlobalString('KSEF_GUS_ENV', 'TEST');
+$gusHasKey = !empty(getDolGlobalString('KSEF_GUS_KEY'));
+$gusNameStyle = getDolGlobalString('KSEF_GUS_NAME_STYLE', 'full');
+$gusOpen = ($gusEnabled || !$gusReady);
+
+print '<div style="border: 1px solid #dee2e6; border-radius: 6px; margin-bottom: 15px; overflow: hidden;">';
+print '<div onclick="ksefToggleEnv(\'GUS\')" style="cursor: pointer; padding: 12px 15px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center;">';
+print '<div>';
+print '<i id="ksef_env_toggle_GUS" class="fa fa-chevron-' . ($gusOpen ? 'down' : 'right') . '" style="margin-right: 8px;"></i>';
+print '<strong>' . $langs->trans('KSEF_GusSectionTitle') . '</strong>';
+if ($gusEnabled) {
+    print ' <span class="badge badge-status4 badge-status">' . $langs->trans('Enabled') . '</span>';
+} else {
+    print ' <span class="badge badge-status8 badge-status">' . $langs->trans('Disabled') . '</span>';
+}
+print '</div>';
+print '</div>';
+
+print '<div id="ksef_env_body_GUS" style="padding: 15px; ' . ($gusOpen ? '' : 'display: none;') . '">';
+
+print '<div style="margin-bottom: 10px;"><span class="opacitymedium">' . $langs->trans("KSEF_GusSectionDesc") . '</span></div>';
+
+if (!$gusHasKey) {
+    print '<div style="padding: 8px 12px; background: #eef4ff; border: 1px solid #cddffb; border-radius: 4px; margin-bottom: 10px;">';
+    print '<i class="fa fa-info-circle"></i> ' . $langs->trans("KSEF_GusNoKeyBanner");
+    print '</div>';
+
+    print '<div style="border: 1px solid #dee2e6; border-radius: 6px; margin-bottom: 15px; overflow: hidden;">';
+    print '<div onclick="ksefToggleEnv(\'GUSKEY\')" style="cursor: pointer; padding: 10px 12px; background: #f8f9fa; display: flex; align-items: center;">';
+    print '<i id="ksef_env_toggle_GUSKEY" class="fa fa-chevron-right" style="margin-right: 8px;"></i>';
+    print '<strong>' . $langs->trans("KSEF_GusKeyHelpTitle") . '</strong>';
+    print '</div>';
+    print '<div id="ksef_env_body_GUSKEY" style="padding: 15px; display: none;">';
+    print '<ol><li>' . $langs->trans("KSEF_GusKeyApplyStep1") . '</li><li>' . $langs->trans("KSEF_GusKeyApplyStep2") . '</li><li>' . $langs->trans("KSEF_GusKeyApplyStep3") . '</li><li>' . $langs->trans("KSEF_GusKeyApplyStep4") . '</li></ol>';
+    print '<p><strong>' . $langs->trans("KSEF_GusHowTo_EmailLabel") . '</strong></p>';
+    print '<pre style="background: #f5f5f5; border: 1px solid #ddd; padding: 10px; white-space: pre-wrap;">' . htmlspecialchars(ksefGusRequestEmail()) . '</pre>';
+    print '</div>';
+    print '</div>';
+}
+
+print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+print '<input type="hidden" name="token" value="' . newToken() . '">';
+print '<input type="hidden" name="action" value="update_gus">';
+print '<table class="noborder centpercent">';
+
+print '<tr class="oddeven"><td class="titlefield">' . $langs->trans("KSEF_GusEnabled") . '</td><td>';
+print '<input type="checkbox" name="KSEF_GUS_ENABLED" value="1"' . ($gusEnabled ? ' checked' : '') . ($gusReady ? '' : ' disabled') . '>';
+print '</td></tr>';
+
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_GusEnv") . '</td><td>';
+print '<select name="KSEF_GUS_ENV" class="flat">';
+print '<option value="TEST"' . ($gusEnv === 'TEST' ? ' selected' : '') . '>' . $langs->trans("KSEF_GusEnvTest") . '</option>';
+print '<option value="PROD"' . ($gusEnv === 'PROD' ? ' selected' : '') . '>' . $langs->trans("KSEF_GusEnvProd") . '</option>';
+print '</select>';
+print '</td></tr>';
+
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_GusApiKey") . '</td><td>';
+print '<input type="password" name="KSEF_GUS_KEY" autocomplete="new-password" value="" placeholder="' . ($gusHasKey ? '********' : '') . '" size="30">';
+print '<br><span class="opacitymedium">' . $langs->trans("KSEF_GusApiKeyHelp") . '</span>';
+print '</td></tr>';
+
+print '<tr class="oddeven"><td>' . $langs->trans("KSEF_GusNameStyle") . '</td><td>';
+print '<select name="KSEF_GUS_NAME_STYLE" class="flat">';
+print '<option value="full"' . ($gusNameStyle === 'full' ? ' selected' : '') . '>' . $langs->trans("KSEF_GusNameStyleFull") . '</option>';
+print '<option value="upper"' . ($gusNameStyle === 'upper' ? ' selected' : '') . '>' . $langs->trans("KSEF_GusNameStyleUpper") . '</option>';
+print '<option value="mixed"' . ($gusNameStyle === 'mixed' ? ' selected' : '') . '>' . $langs->trans("KSEF_GusNameStyleMixed") . '</option>';
+print '</select>';
+print '</td></tr>';
+
+print '<tr class="oddeven"><td colspan="2">';
+print '<input type="submit" class="button" value="' . $langs->trans("Save") . '">';
+if ($gusEnabled) {
+    print ' <a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?action=testgusconnection&token=' . newToken() . '">' . $langs->trans("KSEF_GusTestConnection") . '</a>';
+}
+print '</td></tr>';
+
+print '</table>';
+print '</form>';
+print '</div>';
+print '</div>';
 
 // Environment selector
 print '<div style="margin-bottom: 15px;">';

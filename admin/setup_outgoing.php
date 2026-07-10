@@ -775,8 +775,8 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'outgoing', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-// Reactivation warning
-echo ksefShowReactivationWarning();
+// Reactivation + update banners
+echo ksefShowAdminBanners();
 
 // Config warnings
 $warnings = ksefGetConfigWarnings();

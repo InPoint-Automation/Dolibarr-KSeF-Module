@@ -336,6 +336,9 @@ if ($action == 'testcertauth') {
     $conf->global->$envKey = $orig_method;
 }
 
+// Run update check
+$ksefUpdate = ksefMaybeRunUpdateCheck($db);
+
 $form = new Form($db);
 $page_name = "KSEF_Setup";
 
@@ -347,7 +350,7 @@ print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'general', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-echo ksefShowReactivationWarning();
+echo ksefShowAdminBanners();
 
 $warnings = ksefGetConfigWarnings();
 if (!empty($warnings)) {
@@ -685,6 +688,9 @@ print '</td>';
 print '</tr>';
 
 print '</table>';
+
+print '<br>';
+print ksefRenderSupportBox('', $ksefUpdate);
 
 print dol_get_fiche_end();
 

@@ -478,6 +478,36 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
 
     <table class="noborder centpercent">
         <tr class="liste_titre">
+            <th><span class="fas fa-search paddingright"></span><?php echo $langs->trans("KSEF_GusHowTo_Title"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_GusHowTo_Intro"); ?></p>
+                <p><?php echo $langs->trans("KSEF_GusHowTo_KeyTest"); ?></p>
+                <p><?php echo $langs->trans("KSEF_GusHowTo_KeyProd"); ?></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_GusHowTo_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_GusHowTo_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_GusHowTo_Step3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_GusHowTo_Step4"); ?></li>
+                </ol>
+                <p><strong><?php echo $langs->trans("KSEF_GusRequestKeyTitle"); ?></strong></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_GusKeyApplyStep1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_GusKeyApplyStep2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_GusKeyApplyStep3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_GusKeyApplyStep4"); ?></li>
+                </ol>
+                <p><?php echo $langs->trans("KSEF_GusHowTo_EmailLabel"); ?></p>
+                <pre style="background: #f5f5f5; border: 1px solid #ddd; padding: 10px; white-space: pre-wrap;"><?php echo htmlspecialchars(ksefGusRequestEmail()); ?></pre>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent">
+        <tr class="liste_titre">
             <th><span class="fas fa-file-invoice paddingright"></span><?php echo $langs->trans("KSEF_SendingInvoices"); ?></th>
         </tr>
         <tr class="oddeven">

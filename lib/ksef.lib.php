@@ -263,6 +263,26 @@ function ksefCleanNIP($nip)
 }
 
 /**
+ * @brief Cleans REGON to its 9 digit core
+ * @param $regon REGON string
+ * @return string First 9 digits of the REGON
+ */
+function ksefCleanREGON($regon)
+{
+    return substr(ksefCleanNIP($regon), 0, 9);
+}
+
+/**
+ * @brief Escapes a value for inclusion in XML (dol_escape_xml is a no-op)
+ * @param $value Raw value
+ * @return string XML safe value
+ */
+function ksefXmlEscape($value)
+{
+    return htmlspecialchars($value, ENT_QUOTES | ENT_XML1, 'UTF-8');
+}
+
+/**
  * @brief Validates NIP checksum
  * @param $nip NIP string
  * @return bool True if valid
@@ -599,6 +619,12 @@ function ksefGetCurrentTranslationOverrides($db)
 {
     global $conf;
 
+    static $cache = array();
+    $cacheKey = (int) $conf->entity;
+    if (isset($cache[$cacheKey])) {
+        return $cache[$cacheKey];
+    }
+
     $allManagedKeys = ksefGetAllManagedTransKeys();
     $escaped = array_map(function ($k) use ($db) {
         return "'" . $db->escape($k) . "'";
@@ -620,7 +646,115 @@ function ksefGetCurrentTranslationOverrides($db)
             );
         }
     }
+
+    $cache[$cacheKey] = $result;
     return $result;
+}
+
+/**
+ * @brief Checks if the KSeF managed idprof/VAT translation overrides are fully applied
+ * @param DoliDB $db Database handler
+ * @param array $languages Language codes to require (defaults to en_US and pl_PL)
+ * @return bool True only if is on and every override matches
+ * @called_by admin/setup_auth.php, class/actions_ksef.class.php
+ * @calls ksefGetManagedTranslationOverrides(), ksefGetCurrentTranslationOverrides()
+ */
+function ksefTranslationOverridesReady($db, $languages = array('en_US', 'pl_PL'))
+{
+    global $conf;
+
+    if (empty($conf->global->MAIN_ENABLE_OVERWRITE_TRANSLATION)) {
+        return false;
+    }
+
+    $want = ksefGetManagedTranslationOverrides();
+
+    $have = array();
+    foreach (ksefGetCurrentTranslationOverrides($db) as $ov) {
+        $have[$ov['lang']][$ov['transkey']] = $ov['transvalue'];
+    }
+
+    foreach ($want as $key => $value) {
+        if (preg_match('/Short/', $key)) {
+            continue; // skip Short variants
+        }
+        foreach ($languages as $lang) {
+            if (!isset($have[$lang][$key]) || $have[$lang][$key] !== $value) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @brief Resolves the societe card DOM input id for a KSeF identifier
+ * @param $identifier Identifier name (NIP, KRS, REGON, BDO, EORI)
+ * @return string|null jQuery selector (e.g. #idprof1, #intra_vat) or null if unmapped
+ * @called_by class/actions_ksef.class.php
+ * @calls ksefGetFieldName()
+ */
+function ksefGusDomFieldId($identifier)
+{
+    $fieldName = ksefGetFieldName($identifier);
+
+    if ($fieldName === 'tva_intra') {
+        return '#intra_vat';
+    }
+    if (preg_match('/^idprof[1-6]$/', $fieldName)) {
+        return '#' . $fieldName;
+    }
+
+    return null;
+}
+
+/**
+ * @brief Builds the prefilled GUS email
+ * @return string Plain text email body (Polish; the recipient is GUS)
+ * @called_by admin/setup_auth.php, admin/howtouse.php
+ * @calls ksefGetIdentifierField()
+ */
+function ksefGusRequestEmail()
+{
+    global $mysoc;
+
+    $name = (is_object($mysoc) && !empty($mysoc->name)) ? $mysoc->name : '[nazwa firmy]';
+
+    // Prefer KSeF settings, then company
+    $nip = trim(getDolGlobalString('KSEF_COMPANY_NIP'));
+    if ($nip === '') {
+        $nip = trim(ksefGetIdentifierField($mysoc, 'NIP'));
+    }
+    if ($nip === '') {
+        $nip = '[NIP]';
+    }
+    $regon = trim(getDolGlobalString('KSEF_COMPANY_REGON'));
+    if ($regon === '') {
+        $regon = trim(ksefGetIdentifierField($mysoc, 'REGON'));
+    }
+    if ($regon === '') {
+        $regon = '[REGON]';
+    }
+    $email = !empty($mysoc->email) ? $mysoc->email : '[adres e-mail]';
+    $phone = !empty($mysoc->phone) ? $mysoc->phone : '[+48 numer telefonu]';
+
+    return "Do: regon_bir@stat.gov.pl\n"
+        . "Temat: Wniosek o wydanie Klucza Użytkownika do usługi BIR1\n\n"
+        . "Dzień dobry,\n\n"
+        . "proszę o wydanie Klucza Użytkownika do środowiska produkcyjnego usługi BIR1.\n\n"
+        . "Podmiot: " . $name . "\n"
+        . "REGON: " . $regon . "\n"
+        . "NIP: " . $nip . "\n"
+        . "Osoba kontaktowa: [imię i nazwisko]\n"
+        . "E-mail: " . $email . "\n"
+        . "Telefon: " . $phone . "\n"
+        . "Adresy IP: zmienne (połączenia bezpośrednio z własnego systemu)\n"
+        . "Przybliżona liczba jednoczesnych użytkowników: [np. 2]\n\n"
+        . "Klucz będzie wykorzystywany w naszym systemie Dolibarr z modułem KSeF (https://github.com/InPoint-Automation/Dolibarr-KSeF-Module) do weryfikacji danych rejestrowych kontrahentów na podstawie numeru NIP.\n\n"
+        . "W razie potrzeby chętnie przekażę dodatkowe informacje.\n\n"
+        . "Z poważaniem,\n"
+        . "[imię i nazwisko]";
 }
 
 /**
@@ -1971,6 +2105,57 @@ function ksefParseEfConfig($configStr)
 }
 
 /**
+ * @brief Returns the module version
+ * @param DoliDB $db
+ * @return string
+ * @called_by ksefCheckForUpdate(), ksefShowUpdateBanner(), ksefShowReactivationWarning()
+ */
+function ksefGetModuleVersion($db)
+{
+    static $version = null;
+    if ($version === null) {
+        dol_include_once('/ksef/core/modules/modKSEF.class.php');
+        $module = new modKSEF($db);
+        $version = $module->version;
+    }
+    return $version;
+}
+
+/**
+ * @brief Renders admin banner box
+ * @param string $iconClass  Font Awesome icon classes
+ * @param string $iconColor  Icon CSS color
+ * @param string $bg         Background CSS color
+ * @param string $border     Border CSS color
+ * @param string $innerHtml  Pre-escaped banner body HTML
+ * @return string HTML
+ * @called_by ksefShowReactivationWarning(), ksefShowUpdateBanner()
+ */
+function ksefRenderBanner($iconClass, $iconColor, $bg, $border, $innerHtml)
+{
+    $h = '<div style="margin-bottom: 15px; padding: 12px; background: ' . $bg . '; border: 1px solid ' . $border . '; border-radius: 4px;">';
+    $h .= '<i class="' . $iconClass . '" style="color: ' . $iconColor . '; margin-right: 6px;"></i>';
+    $h .= $innerHtml;
+    $h .= '</div>';
+    return $h;
+}
+
+/**
+ * @brief Renders the confirm-gated .zip download link
+ * @param string $latest  Latest version (for the confirm prompt)
+ * @param string $zipUrl  Download URL
+ * @param string $attrs   Optional extra anchor attributes (class/style)
+ * @return string HTML
+ * @called_by ksefShowUpdateBanner(), ksefRenderSupportBox()
+ */
+function ksefRenderDownloadLink($latest, $zipUrl, $attrs = '')
+{
+    global $langs;
+    $confirm = dol_escape_js($langs->trans('KSEF_UpdateDownloadConfirm', $latest));
+    return '<a href="' . dol_escape_htmltag($zipUrl) . '" target="_blank" rel="noopener noreferrer"' . ($attrs !== '' ? ' ' . $attrs : '') . ' onclick="return confirm(\'' . $confirm . '\');">' . $langs->trans('KSEF_DownloadUpdate') . '</a>';
+}
+
+/**
  * @brief Shows reactivation warning banner if module version changed since last init
  * @return string HTML string (empty if no warning needed)
  */
@@ -1979,24 +2164,208 @@ function ksefShowReactivationWarning()
     global $db, $langs;
     $langs->load("ksef@ksef");
 
-    dol_include_once('/ksef/core/modules/modKSEF.class.php');
-    $module = new modKSEF($db);
-    $currentVersion = $module->version;
+    $currentVersion = ksefGetModuleVersion($db);
     $lastInit = getDolGlobalString('KSEF_LAST_INIT_VERSION', '');
 
     if (!ksefNeedsReactivation($currentVersion, $lastInit)) {
         return '';
     }
 
-    $html = '<div style="margin-bottom: 15px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">';
-    $html .= '<i class="fa fa-exclamation-triangle" style="color: #856404; margin-right: 6px;"></i>';
-    $html .= '<strong>' . $langs->trans('KSEF_MODULE_NEEDS_REACTIVATION') . '</strong><br>';
     $fromVersion = $lastInit !== '' ? $lastInit : $langs->trans('KSEF_VERSION_UNKNOWN');
-    $html .= dol_escape_htmltag($langs->trans('KSEF_MODULE_NEEDS_REACTIVATION_Desc', $fromVersion, $currentVersion));
-    $html .= ' <a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1" class="button button-small" style="margin-left: 8px;">' . $langs->trans('KSEF_GOTO_MODULES_LIST') . '</a>';
-    $html .= '</div>';
+    $inner = '<strong>' . $langs->trans('KSEF_MODULE_NEEDS_REACTIVATION') . '</strong><br>';
+    $inner .= dol_escape_htmltag($langs->trans('KSEF_MODULE_NEEDS_REACTIVATION_Desc', $fromVersion, $currentVersion));
+    $inner .= ' <a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1" class="button button-small" style="margin-left: 8px;">' . $langs->trans('KSEF_GOTO_MODULES_LIST') . '</a>';
 
-    return $html;
+    return ksefRenderBanner('fa fa-exclamation-triangle', '#856404', '#fff3cd', '#ffc107', $inner);
+}
+
+/**
+ * @brief Query GitHub for the latest release
+ * @param DoliDB $db
+ * @return array {status:'ok'|'error', current, latest, available:bool, release_url, zip_url, message}
+ * @called_by ksefMaybeRunUpdateCheck()
+ * @calls getURLContent(), ksefGetModuleVersion()
+ */
+function ksefCheckForUpdate($db)
+{
+    global $conf, $langs;
+    require_once DOL_DOCUMENT_ROOT . '/core/lib/geturl.lib.php';
+
+    $current = ksefGetModuleVersion($db);
+
+    $result = array('status' => 'error', 'current' => $current, 'latest' => '', 'available' => false, 'release_url' => 'https://github.com/InPoint-Automation/Dolibarr-KSeF-Module/releases', 'zip_url' => '', 'message' => '');
+
+    $apiurl = 'https://api.github.com/repos/InPoint-Automation/Dolibarr-KSeF-Module/releases/latest';
+    $headers = array('Accept: application/vnd.github+json', 'User-Agent: Dolibarr-KSeF-Module');
+
+    dol_syslog("ksefCheckForUpdate GET $apiurl", LOG_INFO);
+    $res = getURLContent($apiurl, 'GET', '', 1, $headers, array('https'), 0, -1, 5, 10);
+
+    if (!empty($res['curl_error_no'])) {
+        $result['message'] = $res['curl_error_msg'];
+        return $result;
+    }
+    if (empty($res['http_code']) || $res['http_code'] != 200 || empty($res['content'])) {
+        $result['message'] = 'HTTP ' . (empty($res['http_code']) ? '0' : $res['http_code']);
+        return $result;
+    }
+
+    $data = json_decode($res['content'], true);
+    $latest = (!empty($data) && !empty($data['tag_name'])) ? ltrim($data['tag_name'], 'vV') : '';
+    if ($latest === '') {
+        $result['message'] = $langs->trans('KSEF_UpdateCheckParseError');
+        return $result;
+    }
+
+    if (!empty($data['html_url'])) {
+        $result['release_url'] = $data['html_url'];
+    }
+
+    $zipUrl = '';
+    if (!empty($data['assets']) && is_array($data['assets'])) {
+        foreach ($data['assets'] as $asset) {
+            if (!empty($asset['browser_download_url']) && !empty($asset['name']) && preg_match('/\.zip$/i', $asset['name'])) {
+                $zipUrl = $asset['browser_download_url'];
+                break;
+            }
+        }
+    }
+    if ($zipUrl === '' && !empty($data['zipball_url'])) {
+        $zipUrl = $data['zipball_url'];
+    }
+
+    $available = (version_compare($current, $latest) < 0);
+
+    $result['status'] = 'ok';
+    $result['latest'] = $latest;
+    $result['available'] = $available;
+    $result['zip_url'] = $zipUrl;
+
+    dolibarr_set_const($db, 'KSEF_UPDATE_LATEST_VERSION', $latest, 'chaine', 0, '', $conf->entity);
+    dolibarr_set_const($db, 'KSEF_UPDATE_RELEASE_URL', $result['release_url'], 'chaine', 0, '', $conf->entity);
+    dolibarr_set_const($db, 'KSEF_UPDATE_ZIP_URL', $zipUrl, 'chaine', 0, '', $conf->entity);
+
+    return $result;
+}
+
+/**
+ * @brief Update-available banner
+ * @return string HTML
+ * @called_by ksefShowAdminBanners()
+ * @calls ksefGetModuleVersion(), ksefRenderDownloadLink(), ksefRenderBanner()
+ */
+function ksefShowUpdateBanner()
+{
+    global $db, $langs;
+    $langs->load("ksef@ksef");
+
+    // Show if latest newer than running
+    $latest = getDolGlobalString('KSEF_UPDATE_LATEST_VERSION', '');
+    $current = ksefGetModuleVersion($db);
+    if ($latest === '' || version_compare($current, $latest) >= 0) {
+        return '';
+    }
+
+    $releaseUrl = getDolGlobalString('KSEF_UPDATE_RELEASE_URL', 'https://github.com/InPoint-Automation/Dolibarr-KSeF-Module/releases');
+    $zipUrl = getDolGlobalString('KSEF_UPDATE_ZIP_URL', '');
+
+    $inner = '<strong>' . $langs->trans('KSEF_UpdateBannerTitle') . '</strong> ';
+    $inner .= dol_escape_htmltag($langs->trans('KSEF_UpdateBannerDesc', $latest, $current));
+    if ($zipUrl !== '') {
+        $inner .= ' ' . ksefRenderDownloadLink($latest, $zipUrl, 'class="button button-small" style="margin-left: 8px;"');
+    }
+    $inner .= ' <a href="' . dol_escape_htmltag($releaseUrl) . '" target="_blank" rel="noopener noreferrer" style="margin-left: 8px;">' . $langs->trans('KSEF_Support_Releases') . '</a>';
+
+    return ksefRenderBanner('fa fa-arrow-circle-up', '#0c5460', '#d1ecf1', '#17a2b8', $inner);
+}
+
+/**
+ * @brief Runs the GitHub update check
+ * @param DoliDB $db
+ * @return array|null  Update result
+ * @called_by admin/about.php, admin/setup.php
+ * @calls ksefCheckForUpdate()
+ */
+function ksefMaybeRunUpdateCheck($db)
+{
+    if (GETPOST('action', 'aZ09') === 'ksef_checkupdate') {
+        return ksefCheckForUpdate($db);
+    }
+    return null;
+}
+
+/**
+ * @brief reactivation + update banners shown on settings tab.
+ * @return string HTML
+ * @called_by admin/setup.php, admin/setup_auth.php, admin/setup_incoming.php, admin/setup_outgoing.php
+ * @calls ksefShowReactivationWarning(), ksefShowUpdateBanner()
+ */
+function ksefShowAdminBanners()
+{
+    return ksefShowReactivationWarning() . ksefShowUpdateBanner();
+}
+
+/**
+ * @brief update-check button.
+ * @param string     $selfurl  Host page URL for the button (defaults to PHP_SELF)
+ * @param array|null $update   Result of ksefMaybeRunUpdateCheck()
+ * @return string HTML
+ * @called_by admin/about.php, admin/setup.php
+ * @calls ksefRenderDownloadLink()
+ */
+function ksefRenderSupportBox($selfurl = '', $update = null)
+{
+    global $langs;
+    $langs->load("ksef@ksef");
+
+    if ($selfurl === '') {
+        $selfurl = $_SERVER['PHP_SELF'];
+    }
+
+    $sep = (strpos($selfurl, '?') !== false) ? '&' : '?';
+
+    $h = '<table class="noborder centpercent">';
+    $h .= '<tr class="liste_titre"><th><span class="fa fa-life-ring paddingright"></span>' . $langs->trans('KSEF_NeedHelp') . '</th></tr>';
+    $h .= '<tr class="oddeven"><td>';
+
+    // Update check
+    $h .= '<p><strong>' . $langs->trans('KSEF_UpdatesTitle') . '</strong></p>';
+    $h .= '<a href="' . $selfurl . $sep . 'action=ksef_checkupdate&token=' . newToken() . '" class="button small"><span class="fas fa-sync paddingright"></span>' . $langs->trans('KSEF_CheckForUpdates') . '</a>';
+
+    if (!empty($update)) {
+        if ($update['status'] === 'ok' && $update['available']) {
+            $h .= '<div class="warning" style="margin-top:10px;"><span class="fas fa-arrow-circle-up paddingright"></span> ';
+            // Escape %s args individually
+            $h .= $langs->trans('KSEF_UpdateAvailable', dol_escape_htmltag($update['latest']), dol_escape_htmltag($update['current']));
+            if (!empty($update['zip_url'])) {
+                $h .= ' ' . ksefRenderDownloadLink($update['latest'], $update['zip_url']);
+            } else {
+                $h .= ' <a href="' . dol_escape_htmltag($update['release_url']) . '" target="_blank" rel="noopener noreferrer">' . $langs->trans('KSEF_Support_Releases') . '</a>';
+            }
+            $h .= '</div>';
+        } elseif ($update['status'] === 'ok') {
+            $h .= '<div class="ok" style="margin-top:10px;"><span class="fas fa-check-circle paddingright"></span> ' . $langs->trans('KSEF_UpToDate', $update['current']) . '</div>';
+        } else {
+            $h .= '<div class="warning" style="margin-top:10px;"><span class="fas fa-exclamation-triangle paddingright"></span> ';
+            $h .= $langs->trans('KSEF_UpdateCheckFailed', dol_escape_htmltag($update['message']));
+            $h .= ' <a href="https://github.com/InPoint-Automation/Dolibarr-KSeF-Module/releases" target="_blank" rel="noopener noreferrer">' . $langs->trans('KSEF_Support_Releases') . '</a></div>';
+        }
+    }
+
+    // Help links
+    $h .= '<p style="margin-top:15px;"><strong>' . $langs->trans('KSEF_NeedHelp') . '</strong></p>';
+    $h .= '<p>' . $langs->trans('KSEF_Support_Intro') . '</p>';
+    $h .= '<ul>';
+    $h .= '<li><a href="https://github.com/InPoint-Automation/Dolibarr-KSeF-Module/issues" target="_blank" rel="noopener noreferrer"><span class="fab fa-github paddingright"></span>' . $langs->trans('KSEF_Support_Issues') . '</a> - ' . $langs->trans('KSEF_Support_IssuesDesc') . '</li>';
+    $h .= '<li><a href="https://www.dolibarr.org/forum/t/ksef-module-for-dolibarr/30788" target="_blank" rel="noopener noreferrer"><span class="fas fa-comments paddingright"></span>' . $langs->trans('KSEF_Support_Forum') . '</a> - ' . $langs->trans('KSEF_Support_ForumDesc') . '</li>';
+    $h .= '<li><a href="https://inpointautomation.com/content/ksef-integration-module-for-dolibarr/" target="_blank" rel="noopener noreferrer"><span class="fas fa-book paddingright"></span>' . $langs->trans('KSEF_Support_DocsEN') . '</a></li>';
+    $h .= '<li><a href="https://inpointautomation.com/pl/content/modul-ksef-dla-dolibarr/" target="_blank" rel="noopener noreferrer"><span class="fas fa-book paddingright"></span>' . $langs->trans('KSEF_Support_DocsPL') . '</a></li>';
+    $h .= '<li><a href="https://github.com/InPoint-Automation/Dolibarr-KSeF-Module/releases" target="_blank" rel="noopener noreferrer"><span class="fas fa-tag paddingright"></span>' . $langs->trans('KSEF_Support_Releases') . '</a></li>';
+    $h .= '</ul>';
+
+    $h .= '</td></tr></table>';
+
+    return $h;
 }
 
 /**
@@ -2137,6 +2506,15 @@ function ksefGetConfigWarnings()
         }
     }
 
+    // GUS lookup not enabled
+    if (empty(getDolGlobalString('KSEF_GUS_ENABLED'))) {
+        $warnings[] = array(
+            'message' => $langs->trans("KSEF_GusNotConfiguredWarning"),
+            'severity' => 'info',
+            'tab' => 'auth'
+        );
+    }
+
     return $warnings;
 }
 
@@ -2174,7 +2552,7 @@ function ksefRenderConfigWarnings($warnings, $currentTab = '')
         if (!empty($w['tab']) && $w['tab'] !== $currentTab && isset($tabUrls[$w['tab']])) {
             $url = dol_buildpath('/ksef/admin/' . $tabUrls[$w['tab']], 1);
             $label = $tabLabels[$w['tab']];
-            $html .= ' &mdash; ' . $langs->trans('KSEF_WarningFixOnTab', $url, $label);
+            $html .= ' - ' . $langs->trans('KSEF_WarningFixOnTab', $url, $label);
         }
         $html .= '<br>';
     }

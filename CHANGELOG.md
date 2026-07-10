@@ -1,4 +1,13 @@
 # Changelog
+### Version v1.4.4
+- Add GUS/REGON lookup to fill name and address for PL entity from NIP
+- Prompts per-field before overwriting existing values and populates configured NIP, REGON, KRS, VAT etc fields
+- Can choose to shorten the long organization names from GUS to acronyms with upper or mixed case (e.g. SPÓŁKA Z OGRANICZONĄ ODPOWIEDZIALNOŚCIĄ to either SP Z O.O. or Sp z o.o)
+- Use of the NIP lookup needs a GUS key (example request email on the How To Use and Authentication pages)
+- Add "Check for updates" button on the About and Settings pages, with a download link to the latest GitHub release
+- Show an "update available" banner across settings tabs if "Check for Updates" is clicked
+- Remove unused configuration constants
+
 ### Version v1.4.3
 - Fix NrEORI emitted incorrectly in XML (#32) and not properly displayed in PDF
 - Add missing param key in podmiot3

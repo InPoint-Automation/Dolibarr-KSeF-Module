@@ -1135,6 +1135,53 @@ class KsefApi extends DolibarrApi
     }
 
     /**
+     * @brief Look up a Polish company in the GUS REGON register by NIP
+     * @param  string $nip  NIP to look up
+     * @param  string $env  Environment TEST or PROD {@from query}
+     * @return array Normalized company data
+     *
+     * @url GET /gus/{nip}
+     * @throws RestException 400
+     * @throws RestException 403
+     * @throws RestException 404
+     * @throws RestException 503
+     */
+    public function gusLookup($nip, $env = '')
+    {
+        $this->checkKsefReadPermission();
+
+        if (empty(getDolGlobalString('KSEF_GUS_ENABLED'))) {
+            throw new RestException(403, 'GUS lookup is disabled');
+        }
+
+        dol_include_once('/ksef/class/ksef_gus_client.class.php');
+
+        $nip = ksefCleanNIP($nip);
+        if (!ksefValidateNIP($nip)) {
+            throw new RestException(400, 'Invalid NIP');
+        }
+
+        $env = $env ? strtoupper($env) : getDolGlobalString('KSEF_GUS_ENV', 'TEST');
+        $client = new KsefGusClient($this->db, $env);
+        $data = $client->lookupByNip($nip);
+
+        if ($data === false) {
+            $err = $client->error ? $client->error : 'error';
+            if ($err === 'not_found' || $err === 'unsupported_type') {
+                throw new RestException(404, 'No company found for NIP ' . $nip);
+            }
+            if ($err === 'invalid_nip') {
+                throw new RestException(400, 'Invalid NIP');
+            }
+            throw new RestException(503, 'GUS lookup failed: ' . $err);
+        }
+
+        $data['env'] = ($env === 'PROD') ? 'PROD' : 'TEST';
+
+        return $data;
+    }
+
+    /**
      * @brief Get KSeF API URL for a given environment
      * @param $environment Environment name
      * @return string API URL

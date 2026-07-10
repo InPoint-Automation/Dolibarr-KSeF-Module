@@ -1974,9 +1974,10 @@ class KsefIncoming extends CommonObject
     /**
      * @brief Auto-create a supplier (Societe) from the invoice's seller data
      * @param User $user User performing the creation
+     * @param $gusData Optional GUS lookup result override
      * @return int New societe ID on success, negative on error
      */
-    public function autoCreateSupplier($user)
+    public function autoCreateSupplier($user, $gusData = null)
     {
         require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
 
@@ -2012,7 +2013,7 @@ class KsefIncoming extends CommonObject
                 foreach (array('KRS' => 'krs', 'REGON' => 'regon', 'BDO' => 'bdo') as $ident => $key) {
                     if (!empty($reg[$key])) {
                         $field = ksefGetFieldName($ident);
-                        if (!empty($field)) {
+                        if (!empty($field) && $field !== 'tva_intra') {
                             $societe->$field = trim($reg[$key]);
                         }
                     }
@@ -2030,6 +2031,30 @@ class KsefIncoming extends CommonObject
             if ($countryId > 0) {
                 $societe->country_id = $countryId;
                 $societe->country_code = $this->seller_country;
+            }
+        }
+
+        // Override with GUS data
+        if (!empty($gusData) && is_array($gusData)) {
+            if (!empty($gusData['name'])) {
+                $societe->name = $gusData['name'];
+            }
+            if (!empty($gusData['address'])) {
+                $societe->address = $gusData['address'];
+            }
+            if (!empty($gusData['zip'])) {
+                $societe->zip = $gusData['zip'];
+            }
+            if (!empty($gusData['town'])) {
+                $societe->town = $gusData['town'];
+            }
+            foreach (array('REGON' => 'regon', 'KRS' => 'krs') as $ident => $key) {
+                if (!empty($gusData[$key])) {
+                    $field = ksefGetFieldName($ident);
+                    if (!empty($field) && $field !== 'tva_intra') {
+                        $societe->$field = trim($gusData[$key]);
+                    }
+                }
             }
         }
 
