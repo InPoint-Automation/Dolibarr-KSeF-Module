@@ -255,6 +255,7 @@ class KsefIncoming extends CommonObject
         } else {
             return -1;
         }
+        $sql .= " AND entity IN (" . getEntity($this->element) . ")";
 
         dol_syslog("KsefIncoming::fetch", LOG_DEBUG);
         $resql = $this->db->query($sql);
@@ -991,6 +992,7 @@ class KsefIncoming extends CommonObject
 
         $sql = "SELECT import_status, COUNT(*) as count FROM " . MAIN_DB_PREFIX . $this->table_element;
         $sql .= " WHERE fetch_date > " . (int)$since;
+        $sql .= " AND entity IN (" . getEntity($this->element) . ")";
         $sql .= " GROUP BY import_status";
 
         $resql = $this->db->query($sql);

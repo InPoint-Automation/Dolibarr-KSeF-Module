@@ -21,7 +21,6 @@
  * \brief   Client
  */
 
-require_once __DIR__ . '/../lib/vendor/autoload.php';
 dol_include_once('/ksef/lib/ksef.lib.php');
 
 use phpseclib3\Crypt\RSA;
@@ -515,6 +514,14 @@ class KsefClient
 
 
     /**
+     * @brief Lazy-load phpseclib crypto
+     */
+    private function loadCrypto()
+    {
+        require_once __DIR__ . '/../lib/vendor/autoload.php';
+    }
+
+    /**
      * @brief Submits invoice to KSeF API
      * @param $invoiceXml FA3 XML string
      * @return array|false Submission result
@@ -523,6 +530,7 @@ class KsefClient
      */
     public function submitInvoice($invoiceXml, $options = array())
     {
+        $this->loadCrypto();
         if (!$this->authenticate()) {
             $this->error = "Authentication failed";
             return false;
@@ -757,6 +765,7 @@ class KsefClient
      */
     public function authenticate()
     {
+        $this->loadCrypto();
         if ($this->isAuthenticated()) return true;
 
         if ($this->auth_method == 'certificate') {
@@ -1138,7 +1147,7 @@ class KsefClient
     {
         if (empty($this->session_token)) return true;
         try {
-            $this->makeRequest('POST', '/auth/token/terminate', null, array("Authorization: Bearer {$this->session_token}", "Content-Type: application/json"));
+            $this->makeRequest('DELETE', '/auth/sessions/current', null, array("Authorization: Bearer {$this->session_token}", "Accept: application/json"));
             $this->session_token = null;
             $this->refresh_token = null;
             return true;
@@ -1225,7 +1234,7 @@ class KsefClient
      * @called_by authenticate(), submitInvoice(), checkStatus(), downloadUPO()
      * @calls parseErrorResponse(), formatErrorMessage()
      */
-    private function makeRequest($method, $endpoint, $data = null, $headers = array())
+    protected function makeRequest($method, $endpoint, $data = null, $headers = array())
     {
         $url = $this->api_url . $endpoint;
 
@@ -1290,7 +1299,6 @@ class KsefClient
             $this->last_error_code = $errorDetails['code'];
             $this->last_error_details = $errorDetails;
 
-            // Handle 429 Too Many Requests
             if ($httpCode == 429) {
                 if (isset($responseHeaders['retry-after'])) {
                     $this->retry_after_seconds = (int)$responseHeaders['retry-after'];
@@ -1314,8 +1322,7 @@ class KsefClient
 
 
     /**
-     * Fetch KSeF's RSA public key for encryption
-     * Used to encrypt AES key
+     * Fetch KSeF's RSA public key used to encrypt the AES key
      * @return string|false PEM-encoded public key or false on error
      */
     public function fetchKsefPublicKey()
@@ -1420,32 +1427,26 @@ class KsefClient
 
 
     /**
-     * Generate encryption data for export request
-     * Creates AES-256 key and IV locally, encrypts AES key with KSeF's RSA public key
+     * Generate export encryption data: local AES-256 key + IV, AES key RSA-encrypted with KSeF public key
      * @return array|false Encryption data or false on error
      */
     public function generateEncryptionData()
     {
+        $this->loadCrypto();
         try {
-            // Generate AES-256 key and IV
             $aesKey = random_bytes(32);
             $iv = random_bytes(16);
 
-            // Fetch KSeF's RSA public key
             $publicKeyPem = $this->fetchKsefPublicKey();
             if (!$publicKeyPem) {
                 throw new Exception("Failed to fetch KSeF public key");
             }
 
-            //load the public key using phpseclib3
             $key = PublicKeyLoader::load($publicKeyPem);
-
-            // OAEP padding
             $key = $key->withPadding(RSA::ENCRYPTION_OAEP)
                 ->withHash('sha256')
                 ->withMGFHash('sha256');
 
-            //Encrypt
             $encryptedAesKey = $key->encrypt($aesKey);
 
             dol_syslog("KsefClient::generateEncryptionData Generated AES key and encrypted with RSA (OAEP SHA-256)", LOG_DEBUG);

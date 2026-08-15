@@ -247,6 +247,17 @@ if ($action == 'update') {
         dolibarr_set_const($db, 'KSEF_NBP_RATE_MODE', $nbp_rate_mode, 'chaine', 0, '', $conf->entity);
     }
 
+    // NBP cron currency subset
+    $nbp_sync_curr = GETPOST('KSEF_NBP_SYNC_CURRENCIES', 'array');
+    $nbp_sync_clean = array();
+    if (is_array($nbp_sync_curr)) {
+        foreach ($nbp_sync_curr as $c) {
+            $c = strtoupper(preg_replace('/[^A-Za-z]/', '', $c));
+            if ($c !== '') $nbp_sync_clean[] = $c;
+        }
+    }
+    dolibarr_set_const($db, 'KSEF_NBP_SYNC_CURRENCIES', implode(',', $nbp_sync_clean), 'chaine', 0, '', $conf->entity);
+
     // VAT Rate Code toggles (enable/disable dictionary)
     $_vatPlId = 0;
     $_vatPlSql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_country WHERE code = 'PL'";
@@ -605,6 +616,25 @@ $nbp_modes = array(
 );
 $current_mode = getDolGlobalString('KSEF_NBP_RATE_MODE', 'keep_base');
 print $form->selectarray('KSEF_NBP_RATE_MODE', $nbp_modes, $current_mode, 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+print '</td></tr>';
+
+// NBP cron currency subset
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_NBP_SYNC_CURRENCIES'), $langs->trans('KSEF_NBP_SYNC_CURRENCIES_Help')) . '</td>';
+print '<td>';
+$nbp_curr_dict = array();
+$nbp_dict_sql = "SELECT code FROM " . MAIN_DB_PREFIX . "multicurrency WHERE entity = " . ((int) $conf->entity) . " ORDER BY code";
+$nbp_dict_res = $db->query($nbp_dict_sql);
+if ($nbp_dict_res) {
+    while ($nbp_dict_obj = $db->fetch_object($nbp_dict_res)) {
+        $nbp_dict_code = strtoupper(trim($nbp_dict_obj->code));
+        if ($nbp_dict_code !== '' && $nbp_dict_code !== 'PLN') $nbp_curr_dict[$nbp_dict_code] = $nbp_dict_code;
+    }
+}
+$nbp_curr_selected = array();
+$nbp_curr_raw = getDolGlobalString('KSEF_NBP_SYNC_CURRENCIES', '');
+if ($nbp_curr_raw !== '') $nbp_curr_selected = array_filter(array_map('trim', explode(',', $nbp_curr_raw)));
+print $form->multiselectarray('KSEF_NBP_SYNC_CURRENCIES', $nbp_curr_dict, $nbp_curr_selected, 0, 0, 'minwidth300', 0, '0', '', '', $langs->trans('KSEF_NBP_SYNC_CURRENCIES_All'));
 print '</td></tr>';
 
 print '</table>';

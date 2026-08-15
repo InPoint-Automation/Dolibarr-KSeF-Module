@@ -41,6 +41,7 @@ class FA3Builder
     private $currentCustomer;
     private $currentCustomerCountry;
     private $currentCustomerIsEU;
+    private $reconstructing = false;
     private $productCache = array();
 
     public function __construct($db)
@@ -95,6 +96,9 @@ class FA3Builder
                 $this->error = "Customer not found: " . $invoice->socid;
                 return false;
             }
+            if (method_exists($customer, 'fetch_optionals')) {
+                $customer->fetch_optionals();
+            }
             $this->currentCustomer = $customer;
 
             // For corrective invoices, load original + original XML
@@ -107,7 +111,16 @@ class FA3Builder
                     return false;
                 }
                 $originalInvoice->fetch_lines();
+                if (ksefGetInvoiceCurrency($invoice) !== ksefGetInvoiceCurrency($originalInvoice)) {
+                    $this->error = "Cross-currency correction not supported: original is "
+                        . ksefGetInvoiceCurrency($originalInvoice) . ", correction is "
+                        . ksefGetInvoiceCurrency($invoice) . ". A correction must use the original invoice currency.";
+                    return false;
+                }
                 $originalXmlData = $this->fetchOriginalXmlData($originalInvoice->id);
+                if ($originalXmlData === null) {
+                    $originalXmlData = $this->reconstructOriginalXmlData($originalInvoice);
+                }
             }
 
             $xml = new DOMDocument('1.0', 'UTF-8');
@@ -292,7 +305,7 @@ class FA3Builder
             $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
         }
 
-        // DaneKontaktowe: Contact information
+        // DaneKontaktowe
         if (!empty($mysoc->email) || !empty($mysoc->phone)) {
             $daneKontakt = $xml->createElement('DaneKontaktowe');
             $podmiot1->appendChild($daneKontakt);
@@ -324,7 +337,7 @@ class FA3Builder
 
         // NrEORI
         $nrEori = $this->getBuyerNrEORI($customer);
-        if (!empty($nrEori)) {
+        if (!empty($nrEori) && empty($customer->array_options['options_ksef_hide_eori'])) {
             $podmiot2->appendChild($xml->createElement('NrEORI', $this->xmlSafe($nrEori)));
         }
 
@@ -378,8 +391,10 @@ class FA3Builder
             $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
         }
 
-        // DaneKontaktowe: Contact information
-        if (!empty($customer->email) || !empty($customer->phone)) {
+        // DaneKontaktowe
+        $includeContact = getDolGlobalString('KSEF_FA3_INCLUDE_CONTACT', '1') !== '0'
+            && empty($customer->array_options['options_ksef_hide_contact']);
+        if ($includeContact && (!empty($customer->email) || !empty($customer->phone))) {
             $daneKontakt = $xml->createElement('DaneKontaktowe');
             $podmiot2->appendChild($daneKontakt);
 
@@ -561,7 +576,7 @@ class FA3Builder
         if ($role === '4' && $udzial !== '') {
             $udzialVal = (float) str_replace(',', '.', $udzial);
             if ($udzialVal > 0 && $udzialVal <= 100) {
-                // xsd:decimal — dot separator, max 2 fraction digits, no forced trailing zeros
+                // xsd:decimal: dot separator, max 2 fraction digits, no forced trailing zeros
                 $udzialStr = rtrim(rtrim(number_format($udzialVal, 2, '.', ''), '0'), '.');
                 $podmiot3->appendChild($xml->createElement('Udzial', $udzialStr));
             }
@@ -747,7 +762,6 @@ class FA3Builder
         // Invoice Type
         $fa->appendChild($xml->createElement('RodzajFaktury', $invoiceType));
 
-        // KOR correction fields PrzyczynaKorekty, TypKorekty, DaneFaKorygowanej, OkresFaKorygowanej, NrFaKorygowany, Podmiot1K, Podmiot2K, P_15ZK/KursWalutyZK
         if ($invoiceType == 'KOR') {
             $corrReason = $invoice->array_options['options_ksef_correction_reason'] ?? '';
             $corrType = $invoice->array_options['options_ksef_correction_type'] ?? '';
@@ -886,6 +900,53 @@ class FA3Builder
             return null;
         }
 
+        return $this->extractPodmiotData($origXml);
+    }
+
+    /**
+     * @brief Reconstruct the correction before-state when no FA(3) XML was archived (H3a)
+     * @param Facture $originalInvoice
+     * @return array|null
+     */
+    private function reconstructOriginalXmlData($originalInvoice)
+    {
+        if ($this->reconstructing) {
+            return null;
+        }
+        $saved = array(
+            $this->currentCustomer, $this->currentCustomerCountry, $this->currentCustomerIsEU,
+            $this->currentInvoiceCurrency, $this->currentKursWaluty,
+            $this->lastInvoiceType, $this->lastCreationDate, $this->lastXmlHash,
+            $this->error, $this->errors,
+        );
+        $this->reconstructing = true;
+        $xmlString = $this->buildFromInvoice($originalInvoice->id);
+        $this->reconstructing = false;
+        list($this->currentCustomer, $this->currentCustomerCountry, $this->currentCustomerIsEU,
+            $this->currentInvoiceCurrency, $this->currentKursWaluty,
+            $this->lastInvoiceType, $this->lastCreationDate, $this->lastXmlHash,
+            $this->error, $this->errors) = $saved;
+
+        if (!is_string($xmlString) || $xmlString === '') {
+            dol_syslog("FA3Builder::reconstructOriginalXmlData - could not rebuild original "
+                . $originalInvoice->id . " for the correction before-state; Podmiot1K/2K omitted", LOG_WARNING);
+            return null;
+        }
+        $doc = new DOMDocument();
+        if (!@$doc->loadXML($xmlString)) {
+            return null;
+        }
+        return $this->extractPodmiotData($doc);
+    }
+
+    /**
+     * @brief Extract Podmiot1/Podmiot2 before-state fields from an FA(3) DOMDocument
+     * @param DOMDocument $origXml Parsed FA(3) document
+     * @return array podmiot1/podmiot2 field maps
+     * @remarks Shared by fetchOriginalXmlData (stored XML) and reconstructOriginalXmlData (rebuilt XML).
+     */
+    private function extractPodmiotData($origXml)
+    {
         $xpath = new DOMXPath($origXml);
         $xpath->registerNamespace('fa', KSEF_FA3_NAMESPACE);
 
@@ -1007,9 +1068,7 @@ class FA3Builder
         $adres = $xml->createElement('Adres');
         $podmiot1k->appendChild($adres);
         $adres->appendChild($xml->createElement('KodKraju', !empty($orig['kod_kraju']) ? $orig['kod_kraju'] : 'PL'));
-        if (!empty($orig['adres_l1'])) {
-            $adres->appendChild($xml->createElement('AdresL1', $orig['adres_l1']));
-        }
+        $adres->appendChild($xml->createElement('AdresL1', !empty($orig['adres_l1']) ? $orig['adres_l1'] : 'Brak danych'));
         if (!empty($orig['adres_l2'])) {
             $adres->appendChild($xml->createElement('AdresL2', $orig['adres_l2']));
         }
@@ -1050,7 +1109,7 @@ class FA3Builder
 
         $currentNazwa = $this->xmlSafe($customer->name);
         $currentIdNabywcy = $this->getIdNabywcy($customer);
-        $currentNrEori = $this->getBuyerNrEORI($customer);
+        $currentNrEori = empty($customer->array_options['options_ksef_hide_eori']) ? $this->getBuyerNrEORI($customer) : '';
         $currentKodKraju = $countryCode;
         $currentAdresL1 = !empty($customer->address) ? $this->xmlSafe($customer->address) : 'Brak danych';
         $adresL2Parts = array();
@@ -1079,6 +1138,12 @@ class FA3Builder
             return; // No change
         }
 
+        $origHasIdent = !empty($orig['nip']) || !empty($orig['kod_ue']) || !empty($orig['kod_kraju_id']) || !empty($orig['nr_id']);
+        if (!$origHasIdent && ($orig['brak_id'] ?? '') !== '1') {
+            dol_syslog("FA3Builder::buildPodmiot2K - original buyer identity unreproducible from stored XML; Podmiot2K omitted to avoid a false BrakID", LOG_WARNING);
+            return;
+        }
+
         // Emit Podmiot2K
         $podmiot2k = $xml->createElement('Podmiot2K');
         $parent->appendChild($podmiot2k);
@@ -1093,8 +1158,10 @@ class FA3Builder
             if (!empty($orig['nr_vat_ue'])) {
                 $daneIdent->appendChild($xml->createElement('NrVatUE', $orig['nr_vat_ue']));
             }
-        } elseif (!empty($orig['kod_kraju_id'])) {
-            $daneIdent->appendChild($xml->createElement('KodKraju', $orig['kod_kraju_id']));
+        } elseif (!empty($orig['kod_kraju_id']) || !empty($orig['nr_id'])) {
+            if (!empty($orig['kod_kraju_id'])) {
+                $daneIdent->appendChild($xml->createElement('KodKraju', $orig['kod_kraju_id']));
+            }
             if (!empty($orig['nr_id'])) {
                 $daneIdent->appendChild($xml->createElement('NrID', $orig['nr_id']));
             }
@@ -1108,9 +1175,7 @@ class FA3Builder
         $adres = $xml->createElement('Adres');
         $podmiot2k->appendChild($adres);
         $adres->appendChild($xml->createElement('KodKraju', !empty($orig['kod_kraju']) ? $orig['kod_kraju'] : 'PL'));
-        if (!empty($orig['adres_l1'])) {
-            $adres->appendChild($xml->createElement('AdresL1', $orig['adres_l1']));
-        }
+        $adres->appendChild($xml->createElement('AdresL1', !empty($orig['adres_l1']) ? $orig['adres_l1'] : 'Brak danych'));
         if (!empty($orig['adres_l2'])) {
             $adres->appendChild($xml->createElement('AdresL2', $orig['adres_l2']));
         }
@@ -2097,6 +2162,8 @@ class FA3Builder
         $corrLines = $invoice->lines;
         $origLines = ($originalInvoice && !empty($originalInvoice->lines)) ? $originalInvoice->lines : array();
         $useMulti = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN');
+        $origKursWaluty = ($useMulti && $originalInvoice && !empty($originalInvoice->multicurrency_tx) && $originalInvoice->multicurrency_tx > 0)
+            ? 1 / $originalInvoice->multicurrency_tx : null;
         $lineNum = 1;
 
         $pairs = $this->matchCorrectionLines($origLines, $corrLines);
@@ -2114,7 +2181,7 @@ class FA3Builder
                 $deltaTotal = $corrTotal - $origTotal;
 
                 if ($origRate !== $corrRate) {
-                    $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti);
+                    $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti, null, $origKursWaluty);
                     $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $corrLine->qty, $corrTotal, $corrRate, $useMulti);
                     $lineNum++;
                 } elseif (abs($deltaTotal) >= 0.005 || abs($deltaQty) >= 0.005) {
@@ -2130,7 +2197,7 @@ class FA3Builder
             } elseif ($origLine) {
                 $origRate = $this->mapVatRateToKSeF($origLine->tva_tx, $origLine);
                 $origTotal = $useMulti ? $origLine->multicurrency_total_ht : $origLine->total_ht;
-                $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti);
+                $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti, null, $origKursWaluty);
                 $lineNum++;
             } else {
                 $corrRate = $this->mapVatRateToKSeF($corrLine->tva_tx, $corrLine);
@@ -2152,9 +2219,10 @@ class FA3Builder
      * @param $vatRate KSeF VAT rate string
      * @param $useMulti Use multicurrency fields
      * @param $unitPrice Override (null = derive from line)
+     * @param $kursWalutyOverride Exchange rate override
      * @called_by buildFaWierszDifferentialReplacement()
      */
-    private function buildDifferentialRow($xml, $parent, $line, $lineNum, $qty, $total, $vatRate, $useMulti, $unitPrice = null)
+    private function buildDifferentialRow($xml, $parent, $line, $lineNum, $qty, $total, $vatRate, $useMulti, $unitPrice = null, $kursWalutyOverride = null)
     {
         global $conf;
 
@@ -2231,8 +2299,9 @@ class FA3Builder
         }
 
         // KursWaluty
-        if (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN' && !empty($this->currentKursWaluty)) {
-            $faWiersz->appendChild($xml->createElement('KursWaluty', number_format($this->currentKursWaluty, 6, '.', '')));
+        $rowKurs = ($kursWalutyOverride !== null) ? $kursWalutyOverride : $this->currentKursWaluty;
+        if (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN' && !empty($rowKurs)) {
+            $faWiersz->appendChild($xml->createElement('KursWaluty', number_format($rowKurs, 6, '.', '')));
         }
     }
 

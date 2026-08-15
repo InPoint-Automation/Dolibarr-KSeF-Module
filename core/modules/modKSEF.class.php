@@ -45,7 +45,7 @@ class modKSEF extends DolibarrModules
         $this->descriptionlong = "Submit invoices to Polish KSEF system";
         $this->editor_name = 'InPoint Automation';
         $this->editor_url = 'https://inpointautomation.com';
-        $this->version = '1.4.4';
+        $this->version = '1.4.5';
         $this->url_last_version = '';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'ksef@ksef';
@@ -53,6 +53,7 @@ class modKSEF extends DolibarrModules
         $this->module_parts = array(
             'triggers' => 1,
             'api' => 1,
+            'css' => array('/ksef/css/ksef.css'),
             'login' => 0,
             'substitutions' => 0,
             'menus' => 0,
@@ -179,6 +180,20 @@ class modKSEF extends DolibarrModules
                 'unitfrequency'  => 60,
                 'status'         => 1,
                 'test'           => 'isModEnabled("ksef")',
+                'priority'       => 50,
+            ),
+            5 => array(
+                'label'          => 'KSEF - Sync NBP currency rates (D-1)',
+                'jobtype'        => 'method',
+                'class'          => '/ksef/class/ksef_nbp_currency_rate.class.php',
+                'objectname'     => 'KsefNbpCurrencyRate',
+                'method'         => 'cronSyncMulticurrencyRates',
+                'parameters'     => '',
+                'comment'        => 'Fetch D-1 NBP rates for the Multicurrency module currencies into llx_multicurrency_rate',
+                'frequency'      => 1,
+                'unitfrequency'  => 86400,
+                'status'         => 0,
+                'test'           => 'isModEnabled("ksef") && isModEnabled("multicurrency")',
                 'priority'       => 50,
             ),
         );
@@ -839,6 +854,81 @@ class modKSEF extends DolibarrModules
                     if ($result > 0) {
                         dol_syslog("modKSEF::init - Updated extrafield '$fieldName' for $elementType", LOG_INFO);
                     }
+                }
+            }
+        }
+
+        $societeExtraFieldDefs = array(
+            'ksef_hide_contact' => array(
+                'label' => 'KSEF_ExtraFieldHideContact',
+                'type' => 'boolean',
+                'pos' => 600,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '3',
+                'help' => 'KSEF_ExtraFieldHideContactHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+            'ksef_hide_eori' => array(
+                'label' => 'KSEF_ExtraFieldHideEori',
+                'type' => 'boolean',
+                'pos' => 601,
+                'size' => '',
+                'unique' => 0,
+                'required' => 0,
+                'default_value' => '',
+                'param' => '',
+                'alwayseditable' => 1,
+                'perms' => '',
+                'list' => '3',
+                'help' => 'KSEF_ExtraFieldHideEoriHelp',
+                'computed' => '',
+                'entity' => '',
+                'langfile' => 'ksef@ksef',
+                'enabled' => '$conf->ksef->enabled',
+                'totalizable' => 0,
+                'printable' => 0,
+            ),
+        );
+
+        $existingSocieteFields = $extrafields->fetch_name_optionals_label('societe');
+        foreach ($societeExtraFieldDefs as $fieldName => $def) {
+            if (!isset($existingSocieteFields[$fieldName])) {
+                $result = $extrafields->addExtraField(
+                    $fieldName,
+                    $def['label'],
+                    $def['type'],
+                    $def['pos'],
+                    $def['size'],
+                    'societe',
+                    $def['unique'],
+                    $def['required'],
+                    $def['default_value'],
+                    $def['param'],
+                    $def['alwayseditable'],
+                    $def['perms'],
+                    $def['list'],
+                    $def['help'],
+                    $def['computed'],
+                    $def['entity'],
+                    $def['langfile'],
+                    $def['enabled'],
+                    $def['totalizable'],
+                    $def['printable']
+                );
+                if ($result < 0 && $db->errno() != 'DB_ERROR_COLUMN_ALREADY_EXISTS' && $db->errno() != 'DB_ERROR_RECORD_ALREADY_EXISTS') {
+                    $this->error = $extrafields->error;
+                    return -1;
                 }
             }
         }

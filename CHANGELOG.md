@@ -1,4 +1,12 @@
 # Changelog
+
+### Version v1.4.5
+- NBP exchange-rate sync cron for Multicurrency module currencies (#34). Not enabled by default as invoices still collect current NBP
+- Option to hide customer email/phone from KSeF invoices. Global default + per-customer override (#36)
+- Per-customer toggle to hide buyer EORI (#36)
+- More REST API endpoints for integrations
+- Build release using github actinos
+
 ### Version v1.4.4
 - Add GUS/REGON lookup to fill name and address for PL entity from NIP
 - Prompts per-field before overwriting existing values and populates configured NIP, REGON, KRS, VAT etc fields
@@ -11,7 +19,7 @@
 ### Version v1.4.3
 - Fix NrEORI emitted incorrectly in XML (#32) and not properly displayed in PDF
 - Add missing param key in podmiot3
-- Add a missing escaped % in translations
+  - Add a missing escaped % in translations 
 - Visualization displays warunki transakcji properly
 - Add boolean option to parse date prefix from NrUmowy extrafield to fill in Data Umowy
 - Minor visualization improvements to PDF

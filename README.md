@@ -23,6 +23,7 @@ A complete KSeF (Krajowy System e-Faktur) e-invoicing integration for Dolibarr. 
 - Tax exemption support with configurable legal basis
 - Configurable notes, extrafields, and order/contract references in FA(3) XML
 - Per-environment authentication (Test/Demo/Production) with token or certificate
+- GUS/REGON company lookup by NIP (requires GUS API key - instructions in How To Use)
 - REST API endpoints
 - Third party KSeF exclusion (e.g. B2C customers)
 - In-module How To Use documentation

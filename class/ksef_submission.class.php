@@ -301,7 +301,8 @@ class KsefSubmission extends CommonObject
         $resql = $this->db->query($sql);
 
         if ($resql) {
-            if ($this->db->num_rows($resql)) {
+            $num = $this->db->num_rows($resql);
+            if ($num) {
                 $obj = $this->db->fetch_object($resql);
 
                 $this->rowid = $obj->rowid;
@@ -330,7 +331,7 @@ class KsefSubmission extends CommonObject
                 $this->invoice_type = $obj->invoice_type;
             }
             $this->db->free($resql);
-            return 1;
+            return $num ? 1 : 0;
         } else {
             $this->error = "Error " . $this->db->lasterror();
             dol_syslog(get_class($this) . "::fetch " . $this->db->lasterror(), LOG_ERR);
@@ -400,9 +401,10 @@ class KsefSubmission extends CommonObject
     {
         $stats = array('total' => 0, 'accepted' => 0, 'pending' => 0, 'failed' => 0, 'success_rate' => 0, 'common_errors' => array());
 
-        $sql = "SELECT status, COUNT(*) as count FROM " . MAIN_DB_PREFIX . $this->table_element;
-        $sql .= " WHERE date_submission > " . (dol_now() - ($days * 86400));
-        $sql .= " GROUP BY status";
+        $sql = "SELECT t.status, COUNT(*) as count FROM " . MAIN_DB_PREFIX . $this->table_element . " as t";
+        $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "facture as f ON f.rowid = t.fk_facture AND f.entity IN (" . getEntity('invoice') . ")";
+        $sql .= " WHERE t.date_submission > " . (dol_now() - ($days * 86400));
+        $sql .= " GROUP BY t.status";
 
         $resql = $this->db->query($sql);
         if ($resql) {
@@ -418,9 +420,10 @@ class KsefSubmission extends CommonObject
             $this->db->free($resql);
         }
 
-        $sql = "SELECT error_code, COUNT(*) as count FROM " . MAIN_DB_PREFIX . $this->table_element;
-        $sql .= " WHERE date_submission > " . (dol_now() - ($days * 86400));
-        $sql .= " AND error_code IS NOT NULL GROUP BY error_code ORDER BY count DESC LIMIT 5";
+        $sql = "SELECT t.error_code, COUNT(*) as count FROM " . MAIN_DB_PREFIX . $this->table_element . " as t";
+        $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "facture as f ON f.rowid = t.fk_facture AND f.entity IN (" . getEntity('invoice') . ")";
+        $sql .= " WHERE t.date_submission > " . (dol_now() - ($days * 86400));
+        $sql .= " AND t.error_code IS NOT NULL GROUP BY t.error_code ORDER BY count DESC LIMIT 5";
 
         $resql = $this->db->query($sql);
         if ($resql) {

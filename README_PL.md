@@ -23,6 +23,7 @@ Kompletna integracja e-fakturowania KSeF (Krajowy System e-Faktur) dla Dolibarr.
 - Obsługa zwolnień podatkowych z konfigurowalną podstawą prawną
 - Konfigurowalne notatki, pola dodatkowe oraz numery zamówień/umów w FA(3) XML
 - Uwierzytelnianie per środowisko (Test/Demo/Produkcja) tokenem lub certyfikatem
+- Wyszukiwanie firm w systemie GUS/REGON na podstawie numeru NIP (wymagany klucz API GUS – instrukcje w sekcji „Jak korzystać”)
 - Endpointy REST API
 - Wykluczenie kontrahentów z KSeF (np. klienci B2C)
 - Wbudowana dokumentacja "Jak używać"

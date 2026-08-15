@@ -425,6 +425,34 @@ class InterfaceKsefTriggers extends DolibarrTriggers
                 // Fall through to shared undo logic
             case 'BILL_UNVALIDATE':
                 // Undo discount-based correction on delete/draft
+                if ($object->type == Facture::TYPE_CREDIT_NOTE) {
+                    require_once DOL_DOCUMENT_ROOT . '/core/class/discount.class.php';
+                    $sql_orphan = "SELECT rowid FROM " . MAIN_DB_PREFIX . "societe_remise_except"
+                        . " WHERE fk_facture_source = " . ((int) $object->id)
+                        . " AND fk_facture IS NULL AND fk_facture_line IS NULL"
+                        . " AND entity IN (" . getEntity('invoice') . ")";
+                    $res_orphan = $this->db->query($sql_orphan);
+                    if ($res_orphan) {
+                        $orphan_ids = array();
+                        while ($obj_o = $this->db->fetch_object($res_orphan)) {
+                            $orphan_ids[] = (int) $obj_o->rowid;
+                        }
+                        $this->db->free($res_orphan);
+                        foreach ($orphan_ids as $orphan_id) {
+                            $disc = new DiscountAbsolute($this->db);
+                            if ($disc->fetch($orphan_id) > 0 && $disc->delete($user) < 0) {
+                                $this->error = "Failed to revoke orphaned credit-note discount " . $orphan_id . ": " . $disc->error;
+                                dol_syslog("KsefTriggers: " . $this->error, LOG_ERR);
+                                return -1;
+                            }
+                        }
+                        if (!empty($orphan_ids)) {
+                            dol_syslog("KsefTriggers: $action - revoked " . count($orphan_ids)
+                                . " unused converted discount(s) for credit note " . $object->id, LOG_INFO);
+                        }
+                    }
+                }
+
                 if ($object->type == Facture::TYPE_REPLACEMENT && !empty($object->fk_facture_source)) {
                     $replacement_id = (int) $object->id;
                     $original_id = (int) $object->fk_facture_source;

@@ -29,6 +29,7 @@ class KsefService extends CommonObject
 {
     public $element = 'ksef';
     public $table_element = 'ksef_submissions';
+    public $failureReason = null;
 
     private $client;
     private $builder;
@@ -113,7 +114,6 @@ class KsefService extends CommonObject
                 }
             }
 
-            // Refresh Latarnia status before submission in case of no cron job
             dol_include_once('/ksef/class/ksef_latarnia.class.php');
             $latarnia = new KsefLatarnia($this->db);
             $latarnia->refreshIfStale();
@@ -417,50 +417,66 @@ class KsefService extends CommonObject
      * @brief Checks status of pending submission
      * @param $invoice_id Invoice ID
      * @param $user User object
-     * @return array Status result
-     * @called_by status.php
+
+     * @return array|false Status result array on success, false on failure
+     * @called_by status.php, KsefApi::checkSubmissionStatus()
      * @calls KsefClient::checkStatus(), ksefUpdateInvoiceExtrafields()
      */
     public function checkStatus($invoice_id, $user)
     {
+        $this->failureReason = null;
+        $submission = new KsefSubmission($this->db);
+        if ($submission->fetchByInvoice($invoice_id) <= 0) {
+            $this->error = "No submission found for invoice: $invoice_id";
+            $this->failureReason = 'notfound';
+            return false;
+        }
+
+        if (!in_array($submission->status, array('PENDING', 'OFFLINE', 'SUBMITTED', 'TIMEOUT'))) {
+            return array(
+                'status' => $submission->status,
+                'ksef_number' => $submission->ksef_number,
+                'message' => 'Submission not in pending state'
+            );
+        }
+
+        if (empty($submission->ksef_reference)) {
+            $this->error = "No KSEF reference number to check";
+            $this->failureReason = 'noref';
+            return false;
+        }
+
         try {
-            $submission = new KsefSubmission($this->db);
-            if ($submission->fetchByInvoice($invoice_id) <= 0) {
-                throw new Exception("No submission found for invoice: $invoice_id");
-            }
-
-            if (!in_array($submission->status, ['PENDING', 'OFFLINE'])) {
-                return array(
-                    'status' => $submission->status,
-                    'ksef_number' => $submission->ksef_number,
-                    'message' => 'Submission not in pending state'
-                );
-            }
-
-            if (empty($submission->ksef_reference)) {
-                throw new Exception("No KSEF reference number to check");
-            }
-
             $status_result = $this->client->checkStatus($submission->ksef_reference);
-
-            if ($status_result['status'] !== $submission->status) {
-                $submission->status = $status_result['status'];
-                $submission->ksef_number = $status_result['ksef_number'] ?? $submission->ksef_number;
-                $submission->api_response = json_encode($status_result);
-                $submission->update($user);
-
-                if ($status_result['status'] === 'ACCEPTED' && !empty($status_result['ksef_number'])) {
-                    ksefUpdateInvoiceExtrafields($this->db, $invoice_id, $status_result['ksef_number'], 'ACCEPTED', null, false);
-                }
-            }
-
-            return $status_result;
-
         } catch (Exception $e) {
             $this->error = $e->getMessage();
-            dol_syslog("KSEF::checkStatus ERROR: " . $e->getMessage(), LOG_ERR);
-            return array('status' => 'ERROR', 'error' => $e->getMessage());
+            dol_syslog("KSEF::checkStatus gateway exception: " . $e->getMessage(), LOG_ERR);
+            return false;
         }
+
+        if ($status_result === false || !is_array($status_result)
+            || empty($status_result['status']) || $status_result['status'] === 'UNKNOWN') {
+            $this->error = !empty($this->client->error) ? $this->client->error : 'KSeF gateway returned no usable status';
+            $this->failureReason = 'gateway';
+            dol_syslog("KSEF::checkStatus gateway failure for invoice $invoice_id: " . $this->error, LOG_ERR);
+            return false;
+        }
+
+        $submission->date_last_check = dol_now();
+        if ($status_result['status'] !== $submission->status) {
+            $submission->status = $status_result['status'];
+            $submission->ksef_number = $status_result['ksef_number'] ?? $submission->ksef_number;
+            $submission->api_response = json_encode($status_result);
+        }
+
+        if ($submission->update($user) <= 0) {
+            $this->error = $submission->error ?: 'Could not persist submission status';
+            $this->failureReason = 'gateway';
+            dol_syslog("KSEF::checkStatus persist failed for invoice $invoice_id: " . $this->error, LOG_ERR);
+            return false;
+        }
+
+        return $status_result;
     }
 
     /**
@@ -761,7 +777,6 @@ class KsefService extends CommonObject
         dol_include_once('/ksef/class/ksef_sync_state.class.php');
         dol_include_once('/ksef/class/ksef_client.class.php');
 
-        // Refresh Latarnia status before sync
         dol_include_once('/ksef/class/ksef_latarnia.class.php');
         $latarnia = new KsefLatarnia($this->db);
         $latarnia->refreshIfStale();
@@ -923,13 +938,11 @@ class KsefService extends CommonObject
             if ($invoiceCount == 0 || $partsCount == 0) {
                 dol_syslog("KSeF: Export completed but no invoices to download (invoiceCount: {$invoiceCount}, parts: {$partsCount})", LOG_INFO);
 
-                // Update HWM
                 if (!empty($status['permanentStorageHwmDate'])) {
                     $syncState->hwm_date = date('c', $status['permanentStorageHwmDate']);
                     dol_syslog("KSeF: Updated HWM to: " . $syncState->hwm_date, LOG_INFO);
                 }
 
-                // Clear fetch state
                 $syncState->fetch_reference = '';
                 $syncState->fetch_status = '';
                 $syncState->fetch_started = 0;
@@ -1512,7 +1525,6 @@ class KsefService extends CommonObject
                 return 0;
             }
 
-            // fetch
             $initResult = $this->initIncomingFetch($user);
 
             if (!$initResult) {
@@ -1522,7 +1534,6 @@ class KsefService extends CommonObject
             }
 
             if ($initResult['status'] === 'ALREADY_PROCESSING') {
-                // Another run already started - fall through to polling
                 dol_syslog("KSEF::cronSyncIncoming fetch already initiated, polling", LOG_INFO);
             }
 
@@ -1636,7 +1647,6 @@ class KsefService extends CommonObject
                 $sub = new KsefSubmission($this->db);
                 if ($sub->fetch($obj->rowid) > 0 && !empty($sub->ksef_number)) {
                     try {
-                        // Extract session reference from stored API response
                         $sessionRef = null;
                         if (!empty($sub->api_response)) {
                             $apiData = json_decode($sub->api_response, true);

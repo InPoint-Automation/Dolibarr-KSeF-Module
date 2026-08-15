@@ -85,6 +85,10 @@ if ($action == 'update') {
     $fa3_bankdesc_val = GETPOST('KSEF_FA3_INCLUDE_BANK_DESC', 'alpha') ? '1' : '0';
     dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_BANK_DESC', $fa3_bankdesc_val, 'chaine', 0, '', $conf->entity);
 
+    // Buyer contact in DaneKontaktowe
+    $fa3_contact_val = GETPOST('KSEF_FA3_INCLUDE_CONTACT', 'alpha') ? '1' : '0';
+    dolibarr_set_const($db, 'KSEF_FA3_INCLUDE_CONTACT', $fa3_contact_val, 'chaine', 0, '', $conf->entity);
+
     // Place of Issue
     $place_of_issue_mode = GETPOST('KSEF_FA3_PLACE_OF_ISSUE_MODE', 'alpha');
     if (in_array($place_of_issue_mode, array('disabled', 'company', 'custom'))) {
@@ -1007,6 +1011,14 @@ print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_I
 print '<td colspan="4">';
 print '<input type="checkbox" name="KSEF_FA3_INCLUDE_BANK_DESC" id="KSEF_FA3_INCLUDE_BANK_DESC" value="1" ' . (getDolGlobalInt('KSEF_FA3_INCLUDE_BANK_DESC') ? 'checked' : '') . '>';
 print ' <label for="KSEF_FA3_INCLUDE_BANK_DESC">' . $langs->trans("KSEF_Enabled") . '</label>';
+print '</td></tr>';
+
+// Buyer contact in DaneKontaktowe
+print '<tr class="oddeven">';
+print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_FA3_INCLUDE_CONTACT'), $langs->trans('KSEF_FA3_INCLUDE_CONTACT_Help')) . '</td>';
+print '<td colspan="4">';
+print '<input type="checkbox" name="KSEF_FA3_INCLUDE_CONTACT" id="KSEF_FA3_INCLUDE_CONTACT" value="1" ' . (getDolGlobalString('KSEF_FA3_INCLUDE_CONTACT', '1') !== '0' ? 'checked' : '') . '>';
+print ' <label for="KSEF_FA3_INCLUDE_CONTACT">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
 print '<tr class="oddeven">';
