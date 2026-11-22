@@ -13,7 +13,6 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 CREATE TABLE llx_ksef_submissions
 (
     rowid                  INTEGER AUTO_INCREMENT PRIMARY KEY NOT NULL,
@@ -22,7 +21,9 @@ CREATE TABLE llx_ksef_submissions
 -- KSeF Identification
     ksef_reference         VARCHAR(100),
     ksef_number            VARCHAR(100),
+    ksef_session_reference VARCHAR(100) DEFAULT NULL,
     invoice_hash           VARCHAR(255) DEFAULT NULL,
+    source                 VARCHAR(32)  DEFAULT NULL,
 
 -- Status & Environment
     status                 VARCHAR(20)  DEFAULT 'PENDING' NOT NULL,
@@ -43,6 +44,8 @@ CREATE TABLE llx_ksef_submissions
     error_message          TEXT,
     error_code             INTEGER      DEFAULT NULL,
     error_details          TEXT         DEFAULT NULL,
+    failure_kind           VARCHAR(16)  DEFAULT NULL,
+    replaced_number        VARCHAR(100) DEFAULT NULL,
     retry_count            INTEGER      DEFAULT 0,
 
 -- Auth & Certificates
@@ -64,6 +67,9 @@ CREATE TABLE llx_ksef_submissions
     offline_mode           VARCHAR(20)  DEFAULT NULL,
     offline_deadline       INTEGER      DEFAULT NULL,
     offline_detected_reason VARCHAR(255) DEFAULT NULL,
-    original_invoice_hash  VARCHAR(255) DEFAULT NULL
+    original_invoice_hash  VARCHAR(255) DEFAULT NULL,
 
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+-- Locked Fields
+    locked_fields          TEXT         DEFAULT NULL
+
+) ENGINE=innodb;

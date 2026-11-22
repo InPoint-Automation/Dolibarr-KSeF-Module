@@ -33,18 +33,16 @@
 /**
  * \file    ksef/incoming_card.php
  * \ingroup ksef
- * \brief   Card view for KSeF incoming invoice
+ * \brief   Incoming invoice card
  *
- * Based on htdocs/fourn/facture/card.php from Dolibarr
- * see https://github.com/Dolibarr/dolibarr/blob/develop/htdocs/fourn/facture/card.php
+ *  Based on htdocs/fourn/facture/card.php from Dolibarr
+ *  see https://github.com/Dolibarr/dolibarr/blob/develop/htdocs/fourn/facture/card.php
  */
 
-// CSRF check
 if (!defined('CSRFCHECK_WITH_TOKEN')) {
     define('CSRFCHECK_WITH_TOKEN', '1');
 }
 
-// Prevent token renewal for actions that exit without page reload
 $action_raw = isset($_GET['action']) ? $_GET['action'] : (isset($_POST['action']) ? $_POST['action'] : '');
 if (in_array($action_raw, array('download_xml', 'view_xml', 'download_pdf'))) {
     if (!defined('NOTOKENRENEWAL')) {
@@ -67,23 +65,22 @@ require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
 dol_include_once('/ksef/class/ksef_incoming.class.php');
 dol_include_once('/ksef/class/fa3_parser.class.php');
 dol_include_once('/ksef/lib/ksef.lib.php');
+dol_include_once('/ksef/lib/ksef_tour.lib.php');
+dol_include_once('/ksef/lib/ksef_import_ui.lib.php');
 
-$langs->loadLangs(array("ksef@ksef", "bills", "companies", "suppliers"));
+$langs->loadLangs(array("ksef@ksef", "bills", "companies", "suppliers", "banks"));
 
-// Security check
-if (!$user->hasRight('ksef', 'read')) accessforbidden();
+if (!$user->hasRight('ksef', 'read') || !empty($user->socid)) accessforbidden();
 
-// Get parameters
 $id = GETPOSTINT('id');
 $action = GETPOST('action', 'aZ09');
 $confirm = GETPOST('confirm', 'alpha');
 
 if (empty($id)) {
-    header('Location: ' . dol_buildpath('/ksef/incoming_list.php', 1));
+    header('Location: ' . dol_buildpath('/ksef/incoming_list.php', 1) . '?restore_lastsearch_values=1');
     exit;
 }
 
-// Initialize objects
 $object = new KsefIncoming($db);
 if ($object->fetch($id) <= 0) {
     accessforbidden('Record not found');
@@ -92,98 +89,72 @@ if ($object->fetch($id) <= 0) {
 $parser = new FA3Parser($db);
 $form = new Form($db);
 
-// Permissions
 $usercanread = $user->hasRight('ksef', 'read');
 $usercanwrite = $user->hasRight('ksef', 'write');
 
-// Initialize a technical object to manage hooks
 $hookmanager->initHooks(array('ksef_incomingcard', 'globalcard'));
 
-
-/*
- * Actions
- */
-
-// Download XML
 if ($action == 'download_xml') {
     if (!empty($object->fa3_xml)) {
-        $filename = 'FA3_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $object->ksef_number) . '.xml';
-        header('Content-Type: application/xml; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $filename . '"');
-        echo $object->fa3_xml;
+        ksefSendDownload($object->fa3_xml, ksefDownloadName('FA3', $object->ksef_number, 'incoming_' . $object->id, 'xml'), 'application/xml');
         exit;
     }
+    setEventMessages($langs->trans('KSEF_XMLNotAvailable'), null, 'warnings');
 }
 
-// View raw XML
-if ($action == 'view_xml') {
-    if (!empty($object->fa3_xml)) {
-        header('Content-Type: application/xml; charset=utf-8');
-        echo $object->fa3_xml;
-        exit;
-    }
-}
-
-// Download PDF visualization
 if ($action == 'download_pdf') {
-    if (!empty($object->rowid) && !empty($object->fa3_xml)) {
-        dol_include_once('/ksef/class/ksef_invoice_pdf.class.php');
-        $pdfGenerator = new KsefInvoicePdf($db);
-        $pdfContent = $pdfGenerator->generate($object);
+    if (!empty($object->rowid)) {
+        $pdfContent = $object->generatePdfVisualization();
 
         if ($pdfContent !== false) {
-            $filename = 'FA3_' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $object->ksef_number) . '.pdf';
-            header('Content-Type: application/pdf');
-            header('Content-Disposition: attachment; filename="' . $filename . '"');
-            header('Content-Length: ' . strlen($pdfContent));
-            echo $pdfContent;
+            ksefSendDownload($pdfContent, ksefDownloadName('FA3', $object->ksef_number, 'incoming_' . $object->id, 'pdf'), 'application/pdf');
             exit;
         } else {
-            setEventMessages($pdfGenerator->error, $pdfGenerator->errors, 'errors');
+            setEventMessages($object->error, null, 'errors');
         }
     }
 }
 
-// Delete record
-if ($action == 'confirm_delete' && $confirm == 'yes' && $usercanwrite) {
+if ($action == 'retry_fetch' && $usercanwrite) {
+    $result = $object->reprocessFromXml($user);
+    if ($result > 0) {
+        setEventMessages($langs->trans('KSEF_RetryFetchDone'), null, 'mesgs');
+        header('Location: ' . $_SERVER['PHP_SELF'] . '?id=' . $object->id);
+        exit;
+    }
+    setEventMessages($object->error, null, $result == 0 ? 'warnings' : 'errors');
+    $object->fetch($object->id);
+}
+
+if ($action == 'confirm_delete' && $confirm == 'yes' && ksefUserCan($user, 'delete_incoming')) {
     $result = $object->delete($user);
     if ($result > 0) {
         setEventMessages($langs->trans("RecordDeleted"), null, 'mesgs');
-        header('Location: ' . dol_buildpath('/ksef/incoming_list.php', 1));
+        header('Location: ' . dol_buildpath('/ksef/incoming_list.php', 1) . '?restore_lastsearch_values=1');
         exit;
     } else {
         setEventMessages($object->error, $object->errors, 'errors');
     }
 }
 
-
-/*
- * View
- */
-
 $title = $langs->trans('KSEF_IncomingInvoice') . ' - ' . $object->invoice_number;
-$help_url = '';
+$help_url = ksefHelpUrl('receiving');
 
 llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-ksef page-incoming-card');
 
-
-// Prepare tabs
 $head = ksef_incoming_prepare_head($object);
 
 print dol_get_fiche_head($head, 'card', $langs->trans('KSEF_IncomingInvoice'), -1, 'supplier_invoice');
 
-
-/*
- * Confirmation dialogs
- */
-
 $formconfirm = '';
 
-if ($action == 'delete') {
+if ($action == 'delete' && ksefUserCan($user, 'delete_incoming')) {
     $formconfirm = $form->formconfirm(
         $_SERVER["PHP_SELF"] . '?id=' . $object->id,
         $langs->trans('Delete'),
-        $langs->trans('ConfirmDeleteIncomingInvoice', $object->invoice_number),
+        ksefTransHtml('ConfirmDeleteIncomingInvoice', array(ksefEscapeText($object->invoice_number)))
+            . ($object->import_status === KsefIncoming::STATUS_FETCH_ERROR ? '<br>' . $langs->trans(!empty($object->fa3_xml) ? 'KSEF_FetchErrorDeleteNote' : 'KSEF_FetchErrorDeleteNoteNoXml') : '')
+            . ($object->import_status !== KsefIncoming::STATUS_IMPORTED ? '<br>' . $langs->trans('KSEF_DeleteNotRefetched') : ''),
         'confirm_delete',
         '',
         0,
@@ -191,7 +162,6 @@ if ($action == 'delete') {
     );
 }
 
-// Call Hook formConfirm
 $parameters = array('formConfirm' => $formconfirm);
 $reshook = $hookmanager->executeHooks('formConfirm', $parameters, $object, $action);
 if (empty($reshook)) {
@@ -200,21 +170,13 @@ if (empty($reshook)) {
     $formconfirm = $hookmanager->resPrint;
 }
 
-// Print form confirm
 print $formconfirm;
-
-
-/*
- * Banner
- */
 
 $linkback = '<a href="' . dol_buildpath('/ksef/incoming_list.php', 1) . '?restore_lastsearch_values=1">' . $langs->trans("BackToList") . '</a>';
 
 $morehtmlref = '<div class="refidno">';
-// Ref supplier (invoice number from supplier)
 $morehtmlref .= $form->editfieldkey("RefSupplierBill", 'ref_supplier', $object->invoice_number, $object, 0, 'string', '', 0, 1);
 $morehtmlref .= $form->editfieldval("RefSupplierBill", 'ref_supplier', $object->invoice_number, $object, 0, 'string', '', null, null, '', 1);
-// Thirdparty (seller)
 $morehtmlref .= '<br>' . $langs->trans("Supplier") . ': <strong>' . dol_escape_htmltag($object->seller_name) . '</strong>';
 if (!empty($object->seller_nip)) {
     $morehtmlref .= ' <span class="opacitymedium">(NIP: ' . ksefFormatNIP($object->seller_nip) . ')</span>';
@@ -226,12 +188,6 @@ $morehtmlref .= '</div>';
 
 dol_banner_tab($object, 'id', $linkback, 1, 'rowid', 'ksef_number', $morehtmlref);
 
-
-/*
- * Card body
- */
-
-// Call Hook tabContentViewKsefIncoming
 $linkedInvoiceExists = false;
 $parameters = array();
 $reshook = $hookmanager->executeHooks('tabContentViewKsefIncoming', $parameters, $object, $action);
@@ -242,17 +198,32 @@ if (empty($reshook)) {
 
     print '<table class="border tableforfield centpercent">';
 
-    // Type
     print '<tr><td class="titlefield">' . $langs->trans('Type') . '</td><td>';
-    print '<span class="badgeneutral">';
-    print ksefGetInvoiceTypeBadge($object->invoice_type);
-    print '</span>';
-    if (!empty($parser->getInvoiceTypeDescription($object->invoice_type))) {
-        print ' <span class="opacitymedium">(' . dol_escape_htmltag($parser->getInvoiceTypeDescription($object->invoice_type)) . ')</span>';
+    if ((string) $object->invoice_type === '') {
+        print '<span class="opacitymedium">-</span>';
+    } else {
+        print '<span class="badgeneutral">';
+        print ksefGetInvoiceTypeBadge($object->invoice_type);
+        print '</span>';
+    }
+    if ((string) $object->invoice_type !== '' && ksefInvoiceTypeLabel($object->invoice_type) !== '') {
+        print ' <span class="opacitymedium">(' . dol_escape_htmltag(ksefInvoiceTypeLabel($object->invoice_type)) . ')</span>';
     }
     print '</td></tr>';
+    if ($object->invoice_type === 'ROZ') {
+        ksefPrintIncomingDepositsRow($object, $object->fk_facture_fourn > 0 ? 0 : $object->findMatchingThirdParty());
+    }
 
-    // Correction reference
+    if ($object->import_status == KsefIncoming::STATUS_FETCH_ERROR || ($object->import_status == KsefIncoming::STATUS_ERROR && !empty($object->import_error))) {
+        $errText = $object->import_status == KsefIncoming::STATUS_FETCH_ERROR ? $object->getFetchErrorText() : (string) $object->import_error;
+        print '<tr><td>' . ksefGetIncomingStatusBadge($object->import_status, $object->import_error) . '</td><td>';
+        print '<span class="error">' . ksefEscapeText($errText) . '</span>';
+        if ($object->import_status == KsefIncoming::STATUS_FETCH_ERROR) {
+            print '<br><span class="opacitymedium small">' . $langs->trans(!empty($object->fa3_xml) ? 'KSEF_FetchErrorKept' : 'KSEF_FetchErrorNoXml') . '</span>';
+        }
+        print '</td></tr>';
+    }
+
     $correctionData = KsefIncoming::isCorrectionType($object->invoice_type) ? $object->getCorrectionData() : null;
     $resolvedCorrections = KsefIncoming::isCorrectionType($object->invoice_type) ? $object->resolveCorrectedInvoices() : array();
     $correctedCount = count($resolvedCorrections);
@@ -262,7 +233,6 @@ if (empty($reshook)) {
         $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $object->ksef_number);
         print '<tr><td>' . $langs->trans("KSEF_CorrectsInvoice") . '</td><td>';
 
-        // Line 1: KSeF number (links to incoming record if available)
         print $langs->trans("KSEF_CorrectsKsefNr") . ': ';
         if ($rc['incoming']) {
             print $rc['incoming']->getNomUrl(1);
@@ -275,16 +245,14 @@ if (empty($reshook)) {
             print '<br><span class="warning"><span class="fa fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_CorrectedKsefNumberSameAsOwn") . '</span>';
         }
 
-        // Line 2: Vendor invoice reference from XML
         if (!empty($rc['invoice_number'])) {
             print '<br>' . $langs->trans("KSEF_VendorRef") . ': ';
             print dol_escape_htmltag($rc['invoice_number']);
         }
 
-        // Line 3: Dolibarr supplier invoice (if imported)
         if ($rc['supplier_invoice']) {
             print '<br>' . $langs->trans("KSEF_ImportedAs") . ': ';
-            print $rc['supplier_invoice']->getNomUrl(1) . ' ' . $rc['supplier_invoice']->getLibStatut(5);
+            print $rc['supplier_invoice']->getNomUrl(1) . ' ' . ksefInvoiceStatusBadge($rc['supplier_invoice'], 5);
         }
 
         print '</td></tr>';
@@ -294,18 +262,15 @@ if (empty($reshook)) {
         print '</td></tr>';
     }
 
-    // Correction reason
     if (!empty($correctionData['reason'])) {
         print '<tr><td>' . $langs->trans("KSEF_CorrectionReason") . '</td>';
-        print '<td>' . dol_escape_htmltag($correctionData['reason']) . '</td></tr>';
+        print '<td>' . ksefHtmlMultiline($correctionData['reason']) . '</td></tr>';
     }
 
-    // Linked Dolibarr invoice(s)
     $linkedInvoiceExists = false;
     $creditNoteExists = false;
     $creditNoteInvoice = null;
 
-    // Check for credit note created via replace mode
     if ($object->fk_credit_note > 0) {
         $creditNoteInvoice = new FactureFournisseur($db);
         if ($creditNoteInvoice->fetch($object->fk_credit_note) > 0) {
@@ -323,83 +288,57 @@ if (empty($reshook)) {
     $isReplaceMode = ($creditNoteExists && $linkedInvoiceExists);
 
     if ($isReplaceMode) {
-        // Replace mode: note in the main table, full cards rendered after the main layout
-        print '<tr><td>' . $langs->trans("KSEF_ImportMode") . '</td>';
+                print '<tr><td>' . $langs->trans("KSEF_ImportMode") . '</td>';
         print '<td><span class="badgeneutral">' . $langs->trans("KSEF_UpwardCorrectionReplace") . '</span></td></tr>';
     } elseif ($object->fk_facture_fourn > 0) {
         if ($linkedInvoiceExists) {
-            print '<tr><td>' . $langs->trans("LinkedSupplierInvoice") . '</td>';
-            print '<td>' . $linkedInvoice->getNomUrl(1) . ' ' . $linkedInvoice->getLibStatut(5) . '</td></tr>';
+            print '<tr><td>' . $langs->trans("KSEF_LinkedSupplierInvoice") . '</td>';
+            print '<td>' . $linkedInvoice->getNomUrl(1) . ' ' . ksefInvoiceStatusBadge($linkedInvoice, 5) . '</td></tr>';
         } else {
-            print '<tr><td>' . $langs->trans("LinkedSupplierInvoice") . '</td>';
+            print '<tr><td>' . $langs->trans("KSEF_LinkedSupplierInvoice") . '</td>';
             print '<td><span class="warning"><span class="fa fa-exclamation-triangle"></span> ' . $langs->trans("KSEF_LinkedInvoiceDeleted") . '</span></td></tr>';
         }
 
         if ($creditNoteExists) {
             print '<tr><td>' . $langs->trans("KSEF_ReplaceCreditNote") . '</td>';
-            print '<td>' . $creditNoteInvoice->getNomUrl(1) . ' ' . $creditNoteInvoice->getLibStatut(5) . '</td></tr>';
+            print '<td>' . $creditNoteInvoice->getNomUrl(1) . ' ' . ksefInvoiceStatusBadge($creditNoteInvoice, 5) . '</td></tr>';
         }
     }
 
-    // Label (Invoice number)
     print '<tr>';
     print '<td>' . $langs->trans("Label") . '</td>';
     print '<td>' . dol_escape_htmltag($object->invoice_number) . '</td>';
     print '</tr>';
 
-    // Invoice Date
     print '<tr><td>' . $langs->trans("DateInvoice") . '</td>';
     print '<td>' . dol_print_date($object->invoice_date, 'day') . '</td></tr>';
 
-    // Sale Date (if different)
     if ($object->sale_date && $object->sale_date != $object->invoice_date) {
         print '<tr><td>' . $langs->trans("KSEF_SaleDate") . '</td>';
         print '<td>' . dol_print_date($object->sale_date, 'day') . '</td></tr>';
     }
 
-    // Payment Due Date
     if ($object->payment_due_date) {
         print '<tr><td>' . $langs->trans("DateMaxPayment") . '</td>';
         print '<td>' . dol_print_date($object->payment_due_date, 'day') . '</td></tr>';
     }
+    $xmlPayRows = ksefPaymentTermsAccountsRows($object->fa3_xml);
+    print $xmlPayRows['terms'];
 
-    // Payment Method
-    if ($object->payment_method) {
+    if ($object->payment_method && (empty($object->payment_status) || $object->payment_status === 'unpaid')) {
         print '<tr><td>' . $langs->trans("PaymentMode") . '</td>';
         print '<td>' . dol_escape_htmltag($parser->getPaymentMethodDescription($object->payment_method)) . '</td></tr>';
     }
 
-    // Bank Account
-    if ($object->bank_account) {
+    if ($xmlPayRows['accounts'] !== '') {
+        print $xmlPayRows['accounts'];
+    } elseif ($object->bank_account) {
         print '<tr><td>' . $langs->trans("BankAccount") . '</td>';
         print '<td>' . dol_escape_htmltag($object->bank_account) . '</td></tr>';
     }
 
-    // Payment Status
-    if (!empty($object->payment_status) && $object->payment_status !== 'unpaid') {
-        $notSpecified = '<span class="opacitymedium">' . $langs->trans("KSEF_NotSpecifiedInXml") . '</span>';
+    ksefPrintCardPaymentRows($object);
 
-        print '<tr><td>' . $langs->trans("KSEF_PaymentStatus") . '</td><td>';
-        if ($object->payment_status === 'paid') {
-            print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaid") . '</span>';
-        } elseif ($object->payment_status === 'paid_installments') {
-            print '<span class="badge badge-status4 badge-status">' . $langs->trans("KSEF_SellerMarkedPaidInstallments") . '</span>';
-        } elseif ($object->payment_status === 'partial') {
-            print '<span class="badge badge-status1 badge-status">' . $langs->trans("KSEF_SellerMarkedPartial") . '</span>';
-        }
-        print '</td></tr>';
-
-        print '<tr><td>' . $langs->trans("KSEF_PaymentDate") . '</td><td>';
-        print $object->payment_date ? dol_print_date($object->payment_date, 'day') : $notSpecified;
-        print '</td></tr>';
-
-        print '<tr><td>' . $langs->trans("KSEF_PaymentMethod") . '</td><td>';
-        $methodLabel = ksefGetPaymentMethodLabel($object->payment_method);
-        print $methodLabel ? dol_escape_htmltag($methodLabel) : $notSpecified;
-        print '</td></tr>';
-    }
-
-    // Seller info
     print '<tr><td>' . $langs->trans("KSEF_Seller") . '</td><td>';
     print '<strong>' . dol_escape_htmltag($object->seller_name) . '</strong>';
     print '<br><span class="opacitymedium">';
@@ -411,7 +350,7 @@ if (empty($reshook)) {
         print 'VAT: ' . dol_escape_htmltag($object->seller_vat_id);
     }
     if ($object->seller_address) {
-        print '<br>' . dol_escape_htmltag($object->seller_address);
+        print '<br>' . ksefHtmlMultiline($object->seller_address);
     }
     if ($object->seller_country) {
         print ', ' . dol_escape_htmltag($object->seller_country);
@@ -419,111 +358,47 @@ if (empty($reshook)) {
     print '</span>';
     print '</td></tr>';
 
-    // KSeF Environment
     print '<tr><td>' . $langs->trans("KSEF_ENVIRONMENT") . '</td>';
     print '<td>' . ksefGetEnvironmentBadge($object->environment) . '</td></tr>';
 
-    // Fetched On
     print '<tr><td>' . $langs->trans("KSEF_FetchedOn") . '</td>';
     print '<td>' . dol_print_date($object->fetch_date, 'dayhour') . '</td></tr>';
 
-    // Import Status
     print '<tr><td>' . $langs->trans("Status") . '</td>';
     print '<td>' . $object->getLibStatut(5) . '</td></tr>';
 
     print '</table>';
 
-    print '</div>'; // fichehalfleft
-
-
-    /*
-     * Right column - Amounts
-     */
+    print '</div>';
 
     print '<div class="fichehalfright">';
     print '<div class="underbanner clearboth"></div>';
 
     print '<table class="border tableforfield centpercent">';
 
-    // Currency row
     print '<tr><td><table class="nobordernopadding centpercent"><tr><td>' . $langs->trans("Currency") . '</td></tr></table></td>';
     print '<td>' . dol_escape_htmltag($object->currency);
-    // Add currency name if we can get it
-    if ($object->currency == 'PLN') {
-        print ' - Poland Zloty';
-    }
     print '</td></tr>';
 
-    // Amount (excl. tax)
     print '<tr>';
     print '<td class="titlefieldmiddle">' . $langs->trans('AmountHT') . '</td>';
-    print '<td class="nowrap amountcard right">' . price($object->total_net, 0, $langs, 0, -1, -1, $object->currency) . '</td>';
+    print '<td class="nowrap amountcard right">' . ($object->total_net === null || $object->total_net === '' ? '-' : price($object->total_net, 0, $langs, 0, -1, -1, $object->currency)) . '</td>';
     print '</tr>';
 
-    // Amount tax
     print '<tr>';
     print '<td>' . $langs->trans('AmountVAT') . '</td>';
-    print '<td class="nowrap amountcard right">' . price($object->total_vat, 0, $langs, 0, -1, -1, $object->currency) . '</td>';
+    print '<td class="nowrap amountcard right">' . ($object->total_vat === null || $object->total_vat === '' ? '-' : price($object->total_vat, 0, $langs, 0, -1, -1, $object->currency)) . '</td>';
     print '</tr>';
 
-    // Amount (inc. tax)
     print '<tr>';
     print '<td>' . $langs->trans('AmountTTC') . '</td>';
-    print '<td class="nowrap amountcard right">' . price($object->total_gross, 0, $langs, 0, -1, -1, $object->currency) . '</td>';
+    print '<td class="nowrap amountcard right">' . ($object->total_gross === null || $object->total_gross === '' ? '-' : price($object->total_gross, 0, $langs, 0, -1, -1, $object->currency)) . '</td>';
     print '</tr>';
 
     print '</table>';
 
+    ksefPrintCardVatSummary($object);
 
-    /*
-     * VAT Summary
-     */
-
-    $vatSummary = $object->getVatSummary();
-    if (!empty($vatSummary)) {
-        print '<div class="div-table-responsive-no-min">';
-        print '<table class="noborder paymenttable centpercent">';
-
-        print '<tr class="liste_titre">';
-        print '<td class="liste_titre">' . $langs->trans("VATRate") . '</td>';
-        print '<td class="right"><span class="hideonsmartphone">' . $langs->trans("KSEF_Net") . '</span></td>';
-        print '<td class="right">' . $langs->trans("VATAmount") . '</td>';
-        print '</tr>';
-
-        $vatRateLabels = array(
-            '23' => '23%', '22' => '22%', '8' => '8%', '7' => '7%', '5' => '5%',
-            '4' => '4%', '3' => '3%', '0' => '0%',
-            '0 KR' => '0% (' . $langs->trans("KSEF_VATDomestic") . ')',
-            '0 WDT' => '0% (WDT)',
-            '0 EX' => '0% (' . $langs->trans("KSEF_VATExport") . ')',
-            'zw' => $langs->trans("KSEF_VATExempt"),
-            'np' => $langs->trans("KSEF_VATNotSubject"),
-            'np I' => $langs->trans("KSEF_VATNotSubject") . ' (I)',
-            'np II' => $langs->trans("KSEF_VATNotSubject") . ' (II)',
-            'oo' => $langs->trans("KSEF_VATReverseCharge"),
-        );
-        foreach ($vatSummary as $rate => $amounts) {
-            print '<tr class="oddeven">';
-            $rateLabel = isset($vatRateLabels[$rate]) ? $vatRateLabels[$rate] : dol_escape_htmltag($rate);
-            $hasVat = !empty($amounts['vat']) && $amounts['vat'] != 0;
-            print '<td>' . $rateLabel . '</td>';
-            print '<td class="right">' . price($amounts['net'], 0, $langs, 1, -1, -1, $object->currency) . '</td>';
-            print '<td class="right">' . ($hasVat ? price($amounts['vat'], 0, $langs, 1, -1, -1, $object->currency) : '-') . '</td>';
-            print '</tr>';
-        }
-
-        // Total row
-        print '<tr>';
-        print '<td colspan="2" class="right"><span class="opacitymedium">' . $langs->trans("Total") . '</span></td>';
-        print '<td class="right">' . price($object->total_vat, 0, $langs, 1, -1, -1, $object->currency) . '</td>';
-        print '</tr>';
-
-        print '</table>';
-        print '</div>';
-    }
-
-
-    // Corrected invoice table (if we have a bunch of corrected invoices)
     if ($correctedCount > 1) {
         print '<div class="div-table-responsive-no-min">';
         print '<table class="noborder paymenttable centpercent">';
@@ -539,7 +414,6 @@ if (empty($reshook)) {
             $isSelfReference = (!empty($rc['ksef_number']) && $rc['ksef_number'] === $object->ksef_number);
             print '<tr class="oddeven">';
 
-            // KSeF reference / link
             print '<td class="tdoverflowmax200">';
             if ($rc['incoming']) {
                 print $rc['incoming']->getNomUrl(1);
@@ -553,7 +427,6 @@ if (empty($reshook)) {
             }
             print '</td>';
 
-            // Invoice number
             print '<td>';
             if (!empty($rc['invoice_number'])) {
                 print dol_escape_htmltag($rc['invoice_number']);
@@ -562,17 +435,15 @@ if (empty($reshook)) {
             }
             print '</td>';
 
-            // Date
             print '<td class="center nowraponall">';
             if (!empty($rc['invoice_date'])) {
                 print dol_print_date(strtotime($rc['invoice_date']), 'day');
             }
             print '</td>';
 
-            // Supplier invoice link
             print '<td class="right">';
             if ($rc['supplier_invoice']) {
-                print $rc['supplier_invoice']->getNomUrl(1) . ' ' . $rc['supplier_invoice']->getLibStatut(3);
+                print $rc['supplier_invoice']->getNomUrl(1) . ' ' . ksefInvoiceStatusBadge($rc['supplier_invoice'], 3);
             } else {
                 print '<span class="opacitymedium">-</span>';
             }
@@ -585,20 +456,13 @@ if (empty($reshook)) {
         print '</div>';
     }
 
+    print '</div>';
 
-    print '</div>'; // fichehalfright
-
-    print '</div>'; // fichecenter
+    print '</div>';
 
     print '<div class="clearboth"></div><br>';
 
-
-    /*
-     * Replace mode invoice cards (credit note + replacement)
-     */
-
     if ($isReplaceMode) {
-        // Resolve original invoice from credit note source
         $originalInv = null;
         if ($creditNoteInvoice->fk_facture_source > 0) {
             $originalInv = new FactureFournisseur($db);
@@ -607,7 +471,6 @@ if (empty($reshook)) {
             }
         }
 
-        // Credit note card
         ksefPrintSupplierInvoiceCard(
             $creditNoteInvoice,
             $langs->trans("KSEF_ReplaceCreditNote"),
@@ -617,7 +480,6 @@ if (empty($reshook)) {
             $originalInv
         );
 
-        // Replacement invoice card
         ksefPrintSupplierInvoiceCard(
             $linkedInvoice,
             $langs->trans("KSEF_ReplaceNewInvoice"),
@@ -629,112 +491,66 @@ if (empty($reshook)) {
         print '<br>';
     }
 
-
-    /*
-     * Invoice Line Items
-     */
-
-    $lines = $object->getLineItems();
-    if (!empty($lines)) {
-        $hasGrossPrice = false;
-        $hasGrossAmount = false;
-        foreach ($lines as $line) {
-            if (!empty($line['unit_price_gross'])) $hasGrossPrice = true;
-            if (!empty($line['gross_amount'])) $hasGrossAmount = true;
-        }
-
-        print '<div class="div-table-responsive-no-min">';
-        print '<table id="tablelines" class="noborder noshadow centpercent">';
-
-        print '<tr class="liste_titre nodrag nodrop">';
-        print '<td class="linecoldescription">' . $langs->trans("Description") . '</td>';
-        print '<td class="linerefsupplier maxwidth125">' . $langs->trans("VendorSKU") . '</td>';
-        print '<td class="linecolvat right nowraponall">' . $langs->trans("VAT") . '</td>';
-        print '<td class="linecoluht right nowraponall">' . $langs->trans("PriceUHT") . '</td>';
-        print '<td class="linecoluttc right nowraponall">' . $langs->trans("PriceUTTC") . '</td>';
-        print '<td class="linecolqty right">' . $langs->trans("Qty") . '</td>';
-        print '<td class="linecoldiscount right nowraponall">' . $langs->trans("ReductionShort") . '</td>';
-        print '<td class="linecolht right">' . $langs->trans("TotalHT") . '</td>';
-        if ($hasGrossAmount) {
-            print '<td class="linecolttc right">' . $langs->trans("TotalTTC") . '</td>';
-        }
-        print '</tr>';
-
-        foreach ($lines as $line) {
-            $vatRate = is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
-
-            if (!empty($line['unit_price_gross'])) {
-                $unitPriceTTC = (float)$line['unit_price_gross'];
-            } else {
-                $unitPriceTTC = $line['unit_price_net'] * (1 + $vatRate / 100);
-            }
-
-            print '<tr class="oddeven">';
-            print '<td class="linecoldescription minwidth300imp">' . dol_escape_htmltag($line['description']) . '</td>';
-            print '<td class="linecolrefsupplier">' . (isset($line['supplier_ref']) ? dol_escape_htmltag($line['supplier_ref']) : '') . '</td>';
-            print '<td class="linecolvat nowrap right">' . ($line['vat_rate'] == 'zw' ? $langs->trans("KSEF_VATExempt") : (int)$line['vat_rate'] . '%') . '</td>';
-            print '<td class="linecoluht nowraponall right">' . price($line['unit_price_net'], 0, '', 1, -1, 2) . '</td>';
-            print '<td class="linecoluttc nowraponall right">' . price($unitPriceTTC, 0, '', 1, -1, 4) . '</td>';
-            print '<td class="linecolqty nowraponall right">' . price($line['quantity'], 0, '', 1, -1, 4) . '</td>';
-            print '<td class="linecoldiscount">&nbsp;</td>';
-            print '<td class="linecolht nowrap right">' . price($line['net_amount'], 0, '', 1, -1, 2) . '</td>';
-            if ($hasGrossAmount) {
-                print '<td class="linecolttc nowrap right">' . price(!empty($line['gross_amount']) ? $line['gross_amount'] : 0, 0, '', 1, -1, 2) . '</td>';
-            }
-            print '</tr>';
-        }
-
-        print '</table>';
-        print '</div>';
-    }
+    ksefPrintCardLines($object);
+    dol_include_once('/ksef/lib/ksef_kor_view.lib.php');
+    print ksefKorViewHtml($db, $object);
 }
 
 print dol_get_fiche_end();
-
-
-/*
- * Action Buttons
- */
 
 print '<div class="tabsAction">';
 
 $parameters = array();
 $reshook = $hookmanager->executeHooks('addMoreActionsButtons', $parameters, $object, $action);
 if (empty($reshook)) {
-    // Import to Dolibarr
-    if (($object->import_status == 'NEW' || $object->import_status == 'ERROR') && $usercanwrite) {
+    $importRights = ksefIncomingImportRights($user);
+    if (($object->import_status == 'NEW' || $object->import_status == 'ERROR') && $usercanwrite && !$importRights['import']) {
+        if (!ksefHideUnauthorized($user)) {
+            print dolGetButtonAction(ksefMissingRightText('import_incoming'), $langs->trans("KSEF_ImportToDolibarr"), 'default', dol_buildpath('/ksef/incoming_import.php', 1) . '?id=' . $object->id, '', false);
+        }
+    } elseif (($object->import_status == 'NEW' || $object->import_status == 'ERROR') && $usercanwrite) {
         print '<a class="butAction" href="' . dol_buildpath('/ksef/incoming_import.php', 1) . '?id=' . $object->id . '">' . $langs->trans("KSEF_ImportToDolibarr") . '</a>';
     } elseif ($object->import_status == 'IMPORTED' && !$linkedInvoiceExists && $usercanwrite) {
         print '<a class="butAction" href="' . dol_buildpath('/ksef/incoming_import.php', 1) . '?id=' . $object->id . '">' . $langs->trans("KSEF_ResetImportStatus") . '</a>';
     } elseif ($object->import_status == 'IMPORTED') {
         print '<span class="butActionRefused classfortooltip" title="' . dol_escape_htmltag($langs->trans("KSEF_AlreadyImported")) . '">' . $langs->trans("KSEF_ImportToDolibarr") . '</span>';
+    } elseif ($object->import_status == KsefIncoming::STATUS_FETCH_ERROR) {
+        print '<span class="butActionRefused classfortooltip" title="' . dol_escape_htmltag($langs->trans("KSEF_FetchErrorNotImportable")) . '">' . $langs->trans("KSEF_ImportToDolibarr") . '</span>';
+    }
+    $isFetchError = ($object->import_status == KsefIncoming::STATUS_FETCH_ERROR);
+
+    if ($isFetchError && $usercanwrite) {
+        if (!empty($object->fa3_xml)) {
+            print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '&action=retry_fetch&token=' . newToken() . '" title="' . dol_escape_htmltag($langs->trans('KSEF_RetryFetchHelp')) . '">' . $langs->trans('KSEF_RetryFetch') . '</a>';
+        } else {
+            print '<span class="butActionRefused classfortooltip" title="' . dol_escape_htmltag($langs->trans('KSEF_RetryFetchNoXml')) . '">' . $langs->trans('KSEF_RetryFetch') . '</span>';
+        }
     }
 
-    // Download XML
     if (!empty($object->fa3_xml)) {
         print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '&action=download_xml&token=' . newToken() . '">' . $langs->trans("KSEF_DownloadXml") . '</a>';
     }
 
-    // View on KSeF Portal
-    if (!empty($object->ksef_number) && !empty($object->fa3_xml)) {
-        $objEnvironment = !empty($object->environment) ? $object->environment : getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+    if (!empty($object->ksef_number) && !empty($object->fa3_xml) && !$isFetchError) {
+        $objEnvironment = !empty($object->environment) ? $object->environment : ksefGetEnvironment();
         $verifyUrl = ksefGetVerificationUrlFromXml($object->ksef_number, $object->fa3_xml, $objEnvironment);
-        print '<a class="butAction" href="' . $verifyUrl . '" target="_blank" rel="noopener noreferrer">' . $langs->trans("KSEF_ViewOnPortal") . '</a>';
+        print '<a class="butAction" href="' . $verifyUrl . '" target="_blank" rel="noopener noreferrer">' . $langs->trans("KSEF_VerifyOnKSEFPortal") . '</a>';
     }
 
-    // Download PDF visualization
-    if (!empty($object->fa3_xml)) {
+    if (!empty($object->fa3_xml) && !$isFetchError) {
         print '<a class="butAction" href="' . $_SERVER["PHP_SELF"] . '?id=' . $object->id . '&action=download_pdf&token=' . newToken() . '">' . $langs->trans("KSEF_DownloadPdf") . '</a>';
     }
 
-    // Delete
-    if ($usercanwrite && $object->import_status == 'NEW') {
-        print dolGetButtonAction('', $langs->trans('Delete'), 'delete', $_SERVER["PHP_SELF"] . '?id=' . $object->id . '&action=delete&token=' . newToken(), '', true);
+    if ($object->canDelete() && $usercanwrite) {
+        $canDelete = ksefUserCan($user, 'delete_incoming');
+        if ($canDelete || !ksefHideUnauthorized($user)) {
+            print dolGetButtonAction($canDelete ? '' : ksefMissingRightText('delete_incoming'), $langs->trans('Delete'), 'delete', $_SERVER["PHP_SELF"] . '?id=' . $object->id . '&action=delete&token=' . newToken(), '', $canDelete);
+        }
     }
 }
 
 print '</div>';
 
-
+print ksefHelpFooter($db, $user);
 llxFooter();
 $db->close();

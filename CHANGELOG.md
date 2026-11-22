@@ -1,5 +1,23 @@
 # Changelog
 
+### Version v1.5.0
+- Requires Dolibarr 22+ and PHP 8.0+. After updating the files, disable/re-enable the module or use "Zastosuj aktualizację" in the banner so the database update runs
+- In-module guided tours (Przewodniki) for setup, sending and receiving, and a "Pomoc" button on module pages to help understand module usage
+- Settings have two new tabs
+- About page now has a database check with repair, and "Pobierz ostatnie błędy KSeF" in case of issues (#37)
+- Sync and import outgoing sales invoices from KSeF (Faktury wychodzące) into Dolibarr (#37)
+- Corrections: "Korekta faktury" works on more invoice types, and imported corrections from KSeF properly become correction invoices, including single corrections of multiple invoices (#38)
+- Settlement invoices (Faktura rozliczeniowa/końcowa): an invoice with applied advance invoices goes to KSeF as a settlement invoice, also when made from an order (#39, #42)
+- Purchase import matches the invoice totals to the grosz (invoices issued from gross) (#40)
+- VAT group and JST markers now work, with the VAT group member as third party (#41)
+- Foreign-currency corrections: keep the original invoice's rate or correct a wrong NBP rate; a rate-only correction sends the PLN VAT difference to KSeF (#43)
+- The KSeF record of an imported correction now has a before/after view
+- Closing an invoice paid short (fee, exchange difference) now adds a write-off journal entry when Accounting is on
+- Importing a chart of accounts through Dolibarr's Import supports both CSV and JPK_KR_PD
+- Warning added when a VAT-exempt (zw) line has no exemption basis
+- Many fixes for foreign currency, advances, imports and VAT reports
+- REST API has been updated
+
 ### Version v1.4.5
 - NBP exchange-rate sync cron for Multicurrency module currencies (#34). Not enabled by default as invoices still collect current NBP
 - Option to hide customer email/phone from KSeF invoices. Global default + per-customer override (#36)

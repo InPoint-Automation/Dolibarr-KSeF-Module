@@ -18,7 +18,7 @@
 /**
  * \file    ksef/class/ksef_client.class.php
  * \ingroup ksef
- * \brief   Client
+ * \brief   KSeF API client
  */
 
 dol_include_once('/ksef/lib/ksef.lib.php');
@@ -38,23 +38,45 @@ class KsefClient
     private $session_expiry;
     private $timeout;
     private $public_key_pem;
+    private $public_key_id;
+    private $public_key_certs;
+    private $export_keys = array();
+    private $in_reauth = false;
+    private $last_curl_errno = 0;
+    private $auth_stage = '';
     public $errors = [];
     public $error;
     public $last_error_code;
+    public $last_session_reference;
+    public $last_invoice_reference;
     public $last_error_details = [];
     public $last_http_code;
+    public $last_transport_error = false;
+    public $last_response_headers = array();
     public $retry_after_seconds;
+    public $rate_limited_hits = 0;
+    public $system_warnings = array();
+    public $retry_wait_cap = 10;
+    public $last_upo_hash;
+    public $last_upo_hash_ok;
+    public $last_part_hash = '';
+    public $last_session_pages = 0;
+    public $last_session_complete = true;
+
+    const SESSION_INVOICE_PAGE_SIZE = 1000;
+    const SESSION_INVOICE_PAGES = 3;
 
     private $sessionExpiryBuffer = 300;
     private $auth_method;
     private $auth_certificate_pem;
+    private $auth_private_key_pem;
     private $auth_certificate_password;
 
-    const API_TEST = 'https://api-test.ksef.mf.gov.pl/api/v2';
-    const API_DEMO = 'https://api-demo.ksef.mf.gov.pl/api/v2';
-    const API_PROD = 'https://api.ksef.mf.gov.pl/api/v2';
+    // not /api/v2
+    const API_TEST = 'https://api-test.ksef.mf.gov.pl/v2';
+    const API_DEMO = 'https://api-demo.ksef.mf.gov.pl/v2';
+    const API_PROD = 'https://api.ksef.mf.gov.pl/v2';
 
-    // KSeF Error Codes (from GitHub issue #325)
     const ERROR_CODES = array(
         9101 => 'Nieprawidłowy dokument',
         9102 => 'Brak podpisu',
@@ -147,14 +169,23 @@ class KsefClient
         21407 => 'Nieprawidłowy podmiot podpisu',
         21408 => 'Nieprawidłowy numer referencyjny',
         21409 => 'Token o podanym identyfikatorze nie istnieje',
+        21178 => 'Brak UPO dla wskazanej faktury',
+        21180 => 'Status sesji nie pozwala na wykonanie operacji',
+        21182 => 'Osiągnięto limit trwających eksportów',
+        21184 => 'Sesja tymczasowo niedostępna, otwórz nową sesję',
+        21470 => 'Nieznany lub wycofany identyfikator klucza publicznego',
         23001 => 'Brak treści',
-        // Session status codes
         100 => 'Sesja interaktywna otwarta',
         200 => 'Przetwarzanie zakończone sukcesem',
         440 => 'Duplikat faktury - numer faktury już istnieje w KSeF',
         445 => 'Błąd weryfikacji, brak poprawnych faktur'
     );
 
+    /**
+     * @brief Constructor
+     * @param DoliDB $db Database handler
+     * @param string|null $environment Null: configured
+     */
     public function __construct($db, $environment = null)
     {
         require_once DOL_DOCUMENT_ROOT . '/core/lib/security.lib.php';
@@ -162,7 +193,7 @@ class KsefClient
         $this->db = $db;
 
         if ($environment === null) {
-            $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+            $environment = ksefGetEnvironment();
         }
         $this->environment = strtoupper($environment);
 
@@ -178,27 +209,27 @@ class KsefClient
                 $this->api_url = self::API_TEST;
                 break;
         }
+        $this->api_url = ksefEndpointOverride('KSEF', $this->api_url);
 
         $envKey = $this->environment;
-        $this->nip = getDolGlobalString('KSEF_COMPANY_NIP', '');
+        $this->nip = ksefSellerNip();
         $this->auth_method = getDolGlobalString('KSEF_AUTH_METHOD_' . $envKey, 'token');
         $encrypted_token = getDolGlobalString('KSEF_AUTH_TOKEN_' . $envKey, '');
         $this->ksef_token = !empty($encrypted_token) ? dol_decode($encrypted_token) : '';
         $this->auth_certificate_pem = '';
         $this->auth_private_key_pem = '';
-        $this->timeout = getDolGlobalInt('KSEF_TIMEOUT', 30);
+        $this->timeout = ksefGetTimeout();
     }
 
     /**
-     * @brief Loads and decrypts authentication certificate and private key
-     * @return bool True if loaded successfully
-     * @called_by authenticateWithCertificate()
+     * @brief Load auth certificate
+     * @return bool
      */
     private function loadAuthCertificateCredentials()
     {
         $credentials = ksefLoadAuthCertificate($this->environment);
         if (!$credentials) {
-            $this->error = 'Authentication certificate not properly configured';
+            $this->error = ksefMsg('KSEF_ErrAuthCertNotConfigured');
             return false;
         }
 
@@ -210,22 +241,19 @@ class KsefClient
     }
 
     /**
-     * @brief Gets error description from code
-     * @param $code Error code
-     * @return string Error description
-     * @called_by Various error handlers
+     * @brief Error code description
+     * @param $code
+     * @return string
      */
     public function getErrorDescription($code)
     {
         return isset(self::ERROR_CODES[$code]) ? self::ERROR_CODES[$code] : 'Unknown error';
     }
 
-
     /**
-     * @brief Parses API error response
-     * @param $response JSON response
-     * @return array Error details
-     * @called_by makeRequest()
+     * @brief Parse error body
+     * @param $response
+     * @return array
      */
     private function parseErrorResponse($response)
     {
@@ -234,130 +262,237 @@ class KsefClient
             'description' => null,
             'details' => array(),
             'service_code' => null,
-            'timestamp' => null
+            'timestamp' => null,
+            'title' => null,
+            'reason_code' => null,
+            'trace_id' => null
         );
 
-        $data = json_decode($response, true);
+        $data = json_decode((string) $response, true);
+        if (!is_array($data)) {
+            $text = trim(preg_replace('/\s+/', ' ', strip_tags((string) $response)));
+            if ($text !== '') {
+                $errorDetails['description'] = dol_trunc($text, 200);
+            }
+            return $errorDetails;
+        }
 
-        if (isset($data['exception']['exceptionDetailList'])) {
-            foreach ($data['exception']['exceptionDetailList'] as $exception) {
-                $code = isset($exception['exceptionCode']) ? (int)$exception['exceptionCode'] : null;
-                $desc = isset($exception['exceptionDescription']) ? $exception['exceptionDescription'] : '';
-                $details = isset($exception['details']) ? $exception['details'] : array();
-
+        $lists = array();
+        if (isset($data['exception']['exceptionDetailList']) && is_array($data['exception']['exceptionDetailList'])) {
+            foreach ($data['exception']['exceptionDetailList'] as $x) {
+                $lists[] = array($x['exceptionCode'] ?? null, $x['exceptionDescription'] ?? '', $x['details'] ?? array());
+            }
+        }
+        if (isset($data['errors']) && is_array($data['errors'])) {
+            foreach ($data['errors'] as $x) {
+                if (is_array($x)) {
+                    $lists[] = array($x['code'] ?? null, $x['description'] ?? '', $x['details'] ?? array());
+                }
+            }
+        }
+        foreach ($lists as $entry) {
+            list($code, $desc, $details) = $entry;
+            $code = is_numeric($code) ? (int) $code : null;
+            if ($errorDetails['code'] === null && $errorDetails['description'] === null) {
                 $errorDetails['code'] = $code;
-                $errorDetails['description'] = $desc;
-                $errorDetails['details'] = array_merge($errorDetails['details'], $details);
+                $errorDetails['description'] = (string) $desc;
+            } elseif ($code !== null || $desc !== '') {
+                $errorDetails['details'][] = trim(($code !== null ? $code . ': ' : '') . $desc);
+            }
+            foreach ((array) $details as $d) {
+                if (is_scalar($d) && (string) $d !== '') {
+                    $errorDetails['details'][] = (string) $d;
+                }
             }
         }
 
         if (isset($data['exception']['serviceCode'])) {
             $errorDetails['service_code'] = $data['exception']['serviceCode'];
         }
-
         if (isset($data['exception']['timestamp'])) {
             $errorDetails['timestamp'] = $data['exception']['timestamp'];
         }
 
-        if (isset($data['status'])) {
-            if (!$errorDetails['code'] && isset($data['status']['code'])) {
-                $errorDetails['code'] = (int)$data['status']['code'];
+        if (isset($data['status']) && is_array($data['status'])) {
+            if ($errorDetails['code'] === null && isset($data['status']['code']) && is_numeric($data['status']['code'])) {
+                $errorDetails['code'] = (int) $data['status']['code'];
             }
             if (!$errorDetails['description'] && isset($data['status']['description'])) {
-                $errorDetails['description'] = $data['status']['description'];
+                $errorDetails['description'] = (string) $data['status']['description'];
+            }
+            foreach ((array) ($data['status']['details'] ?? array()) as $d) {
+                if (is_scalar($d) && (string) $d !== '') {
+                    $errorDetails['details'][] = (string) $d;
+                }
             }
         }
 
+        if (isset($data['title']) || isset($data['detail'])) {
+            $errorDetails['title'] = isset($data['title']) ? (string) $data['title'] : null;
+            $detail = isset($data['detail']) ? trim((string) $data['detail']) : '';
+            if (!$errorDetails['description']) {
+                $errorDetails['description'] = $detail !== '' ? $detail : $errorDetails['title'];
+            } elseif ($detail !== '' && $detail !== $errorDetails['description']) {
+                array_unshift($errorDetails['details'], $detail);
+            }
+            if (isset($data['reasonCode']) && is_scalar($data['reasonCode'])) {
+                $errorDetails['reason_code'] = (string) $data['reasonCode'];
+            }
+            if (isset($data['traceId']) && is_scalar($data['traceId'])) {
+                $errorDetails['trace_id'] = (string) $data['traceId'];
+            }
+            if (!$errorDetails['timestamp'] && isset($data['timestamp'])) {
+                $errorDetails['timestamp'] = $data['timestamp'];
+            }
+        }
+
+        $errorDetails['details'] = array_values(array_unique($errorDetails['details']));
         return $errorDetails;
     }
 
-
     /**
-     * @brief Formats error message for display
-     * @param $errorDetails Error details array
-     * @return string Formatted message
-     * @called_by makeRequest()
+     * @brief Format error details
+     * @param $errorDetails
+     * @return string
      */
     public function formatErrorMessage($errorDetails)
     {
         $message = '';
 
-        if ($errorDetails['code']) {
-            $knownDesc = $this->getErrorDescription($errorDetails['code']);
-            $message .= "KSeF Error {$errorDetails['code']}: {$knownDesc}";
-
-            if ($errorDetails['description'] && $errorDetails['description'] != $knownDesc) {
-                $message .= " ({$errorDetails['description']})";
+        if (!empty($errorDetails['code'])) {
+            $known = isset(self::ERROR_CODES[$errorDetails['code']]) ? self::ERROR_CODES[$errorDetails['code']] : '';
+            if ($known !== '') {
+                $message .= "KSeF Error {$errorDetails['code']}: {$known}";
+                if (!empty($errorDetails['description']) && $errorDetails['description'] != $known) {
+                    $message .= " ({$errorDetails['description']})";
+                }
+            } else {
+                $message .= "KSeF Error {$errorDetails['code']}: " . (!empty($errorDetails['description']) ? $errorDetails['description'] : $this->getErrorDescription($errorDetails['code']));
             }
-        } elseif ($errorDetails['description']) {
+        } elseif (!empty($errorDetails['description'])) {
             $message .= "KSeF Error: {$errorDetails['description']}";
+        }
+
+        if (!empty($errorDetails['reason_code'])) {
+            $message .= " (reason: {$errorDetails['reason_code']})";
         }
 
         if (!empty($errorDetails['details'])) {
             $message .= "\nDetails: " . implode('; ', $errorDetails['details']);
         }
 
-        if ($errorDetails['service_code']) {
+        if (!empty($errorDetails['service_code'])) {
             $message .= "\nService Code: {$errorDetails['service_code']}";
+        }
+
+        if (!empty($errorDetails['trace_id'])) {
+            $message .= "\nTrace ID: {$errorDetails['trace_id']}";
         }
 
         return $message;
     }
 
     /**
-     * @brief Checks invoice status in session
-     * @param $sessionRef Session reference
-     * @param $invoiceRef Invoice reference
-     * @return array|false Status result
-     * @called_by submitInvoice(), KsefSubmission::processPendingSubmissions()
+     * @brief Parse invoice status
+     * @param array $statusData
+     * @return array
+     */
+    public function parseInvoiceStatus($statusData)
+    {
+        $statusData = is_array($statusData) ? $statusData : array();
+        $st = isset($statusData['status']) && is_array($statusData['status']) ? $statusData['status'] : array();
+        $code = isset($st['code']) ? (int) $st['code'] : null;
+        $details = isset($st['details']) ? (array) $st['details'] : array();
+        $result = array(
+            'status' => 'PENDING',
+            'code' => $code,
+            'description' => isset($st['description']) ? (string) $st['description'] : '',
+            'details' => array_values(array_filter(array_map('strval', $details), 'strlen')),
+            'extensions' => isset($st['extensions']) && is_array($st['extensions']) ? $st['extensions'] : array(),
+            'ksef_number' => isset($statusData['ksefNumber']) ? $statusData['ksefNumber'] : null,
+            'reference_number' => isset($statusData['referenceNumber']) ? $statusData['referenceNumber'] : null,
+            'invoice_hash' => isset($statusData['invoiceHash']) ? $statusData['invoiceHash'] : null,
+            'acquisition_date' => isset($statusData['acquisitionDate']) ? $statusData['acquisitionDate'] : null,
+            'invoicing_mode' => isset($statusData['invoicingMode']) ? $statusData['invoicingMode'] : null,
+            'upo_download_url' => isset($statusData['upoDownloadUrl']) ? $statusData['upoDownloadUrl'] : null,
+            'raw_response' => $statusData
+        );
+        if ($code === 200 && !empty($result['ksef_number'])) {
+            $result['status'] = 'ACCEPTED';
+        } elseif ($code !== null && $code >= 400) {
+            $result['status'] = 'FAILED';
+        }
+        return $result;
+    }
+
+    /**
+     * @brief Failed status details
+     * @param array $status
+     * @return array
+     */
+    private function rejectionDetails($status)
+    {
+        $d = array(
+            'code' => $status['code'],
+            'description' => $status['description'],
+            'details' => $status['details'],
+        );
+        if (!empty($status['extensions'])) {
+            $d['extensions'] = $status['extensions'];
+        }
+        if ((int) $status['code'] === 440) {
+            $d['original_ksef_number'] = $status['extensions']['originalKsefNumber'] ?? null;
+            $d['original_session'] = $status['extensions']['originalSessionReferenceNumber'] ?? null;
+        }
+        return $d;
+    }
+
+    /**
+     * @brief Failed status message
+     * @param array $status
+     * @return string
+     */
+    private function rejectionMessage($status)
+    {
+        if ((int) $status['code'] === 440) {
+            $msg = 'Duplicate invoice number - already exists in KSeF';
+            if (!empty($status['extensions']['originalKsefNumber'])) {
+                $msg .= ' as ' . $status['extensions']['originalKsefNumber'];
+            }
+            return $msg . ' (KSeF 440)';
+        }
+        $msg = 'Invoice rejected by KSeF (' . $status['code'] . ')';
+        if ($status['description'] !== '') {
+            $msg .= ': ' . $status['description'];
+        }
+        if (!empty($status['details'])) {
+            $msg .= ' - ' . implode('; ', $status['details']);
+        }
+        return $msg;
+    }
+
+    /**
+     * @brief Get invoice status
+     * @param $sessionRef
+     * @param $invoiceRef
+     * @return array|false
      */
     public function checkInvoiceInSession($sessionRef, $invoiceRef)
     {
-        if (!$this->authenticate()) {
-            $this->error = "Authentication failed";
-            return false;
-        }
+        $this->authenticate();
 
         try {
-            $response = $this->makeRequest('GET',
-                "/sessions/{$sessionRef}/invoices/{$invoiceRef}",
-                null,
-                array(
-                    "Authorization: Bearer {$this->session_token}",
-                    'Accept: application/json'
-                )
-            );
+            $response = $this->makeRequest('GET', "/sessions/{$sessionRef}/invoices/{$invoiceRef}", null, array('Accept: application/json'),
+                array('auth' => true, 'retry' => 'safe'));
 
-            if (!$response) throw new Exception('Failed to check invoice status in session');
+            if (!$response) throw new Exception($this->failText('Failed to check invoice status in session'));
 
-            $statusData = json_decode($response, true);
+            $result = $this->parseInvoiceStatus(json_decode($response, true));
 
-            $result = array(
-                'processing_code' => isset($statusData['processingCode']) ? $statusData['processingCode'] : null,
-                'processing_description' => isset($statusData['processingDescription']) ? $statusData['processingDescription'] : null,
-                'status' => 'UNKNOWN',
-                'ksef_number' => isset($statusData['ksefReferenceNumber']) ? $statusData['ksefReferenceNumber'] : null,
-                'timestamp' => isset($statusData['timestamp']) ? $statusData['timestamp'] : null,
-                'status_details' => isset($statusData['statusDetails']) ? $statusData['statusDetails'] : array(),
-                'raw_response' => $statusData
-            );
-
-            if ($result['processing_code'] === 200) {
-                $result['status'] = 'ACCEPTED';
-            } elseif ($result['processing_code'] >= 400) {
-                $result['status'] = 'REJECTED';
-            } else {
-                $result['status'] = 'PENDING';
-            }
-
-            if ($result['status'] == 'REJECTED') {
-                $this->last_error_code = $result['processing_code'];
-                $this->last_error_details = array(
-                    'code' => $result['processing_code'],
-                    'description' => $result['processing_description'],
-                    'details' => $result['status_details']
-                );
-                dol_syslog("KsefClient: Invoice rejected - " . $this->formatErrorMessage($this->last_error_details), LOG_ERR);
+            if ($result['status'] == 'FAILED') {
+                $this->last_error_code = $result['code'];
+                $this->last_error_details = $this->rejectionDetails($result);
+                dol_syslog("KsefClient: Invoice rejected - " . $this->rejectionMessage($result), LOG_WARNING);
             }
 
             return $result;
@@ -369,66 +504,10 @@ class KsefClient
         }
     }
 
-
     /**
-     * @brief Checks session status
-     * @param $sessionRef Session reference
-     * @return array|false Session status
-     * @called_by submitInvoice()
-     */
-    public function checkSessionStatus($sessionRef)
-    {
-        if (!$this->authenticate()) {
-            $this->error = "Authentication failed";
-            return false;
-        }
-
-        try {
-            $response = $this->makeRequest('GET',
-                "/sessions/{$sessionRef}",
-                null,
-                array(
-                    "Authorization: Bearer {$this->session_token}",
-                    'Accept: application/json'
-                )
-            );
-
-            if (!$response) throw new Exception('Failed to check session status');
-
-            $statusData = json_decode($response, true);
-
-            $result = array(
-                'status_code' => isset($statusData['status']['code']) ? $statusData['status']['code'] : null,
-                'status_description' => isset($statusData['status']['description']) ? $statusData['status']['description'] : null,
-                'valid_until' => isset($statusData['validUntil']) ? $statusData['validUntil'] : null,
-                'invoice_count' => isset($statusData['invoiceCount']) ? $statusData['invoiceCount'] : 0,
-                'failed_invoice_count' => isset($statusData['failedInvoiceCount']) ? $statusData['failedInvoiceCount'] : 0,
-                'raw_response' => $statusData
-            );
-
-            if ($result['status_code'] >= 400 || $result['failed_invoice_count'] > 0) {
-                $this->last_error_code = $result['status_code'];
-                $this->last_error_details = array(
-                    'code' => $result['status_code'],
-                    'description' => $result['status_description'],
-                    'details' => array("Failed invoices: {$result['failed_invoice_count']}")
-                );
-            }
-
-            return $result;
-
-        } catch (Exception $e) {
-            $this->error = "Session status check failed: " . $e->getMessage();
-            dol_syslog("KsefClient::checkSessionStatus ERROR: " . $this->error, LOG_ERR);
-            return false;
-        }
-    }
-
-    /**
-     * @brief Sets request timeout
-     * @param $timeout Timeout in seconds
+     * @brief Set request timeout
+     * @param $timeout Seconds
      * @return void
-     * @called_by KSEF::submitInvoice()
      */
     public function setTimeout($timeout)
     {
@@ -436,18 +515,17 @@ class KsefClient
     }
 
     /**
-     * @brief Tests connection to KSeF API
-     * @return bool True if connected
-     * @called_by setup.php, howtouse.php
+     * @brief Test connection
+     * @return bool
      */
     public function testConnection()
     {
         try {
             dol_syslog("KsefClient: Testing connection to {$this->environment}", LOG_INFO);
-            $response = $this->makeRequest('GET', '/security/public-key-certificates', null, ['Accept: application/json']);
+            $response = $this->makeRequest('GET', '/security/public-key-certificates', null, array('Accept: application/json'));
 
             if ($response === false) {
-                $this->error = "Failed to connect to KSeF API";
+                $this->error = $this->failText("Failed to connect to KSeF API");
                 return false;
             }
 
@@ -465,41 +543,112 @@ class KsefClient
     }
 
     /**
-     * @brief Loads KSeF public key certificate
-     * @return bool True if loaded
-     * @called_by authenticate()
+     * @brief Fetch public certificates
+     * @param bool $refresh
+     * @return array|false
      */
-    private function loadKsefPublicKey()
+    private function getPublicKeyCertificates($refresh = false)
     {
-        try {
-            $response = $this->makeRequest('GET', '/security/public-key-certificates', null, ['Accept: application/json']);
-
-            if (!$response) throw new Exception('Failed to fetch public key certificates');
-
-            $certificates = json_decode($response, true);
-            if (empty($certificates) || !is_array($certificates)) throw new Exception('Invalid certificates response');
-
-            foreach ($certificates as $cert) {
-                if (in_array('KsefTokenEncryption', $cert['usage'] ?? [], true)) {
-                    $this->public_key_pem = "-----BEGIN CERTIFICATE-----\n"
-                        . chunk_split($cert['certificate'], 64, "\n")
-                        . "-----END CERTIFICATE-----\n";
-                    return true;
-                }
-            }
-            throw new Exception('No certificate with KsefTokenEncryption usage found');
-
-        } catch (Exception $e) {
-            $this->error = "Failed to load public key: " . $e->getMessage();
+        if (!$refresh && is_array($this->public_key_certs)) {
+            return $this->public_key_certs;
+        }
+        $response = $this->makeRequest('GET', '/security/public-key-certificates', null, array('Accept: application/json'), array('retry' => 'safe'));
+        if (!$response) {
+            $this->error = $this->failText('Failed to fetch public key certificates');
             return false;
         }
+        $data = json_decode($response, true);
+        $list = is_array($data) && isset($data['certificates']) ? $data['certificates'] : $data;
+        if (empty($list) || !is_array($list)) {
+            $this->error = 'Invalid certificates response';
+            return false;
+        }
+        $this->public_key_certs = array_values(array_filter($list, 'is_array'));
+        return $this->public_key_certs;
     }
 
+    /**
+     * @brief Pick public key
+     * @param string $usage
+     * @param bool $refresh
+     * @return array|false
+     */
+    public function selectPublicKey($usage, $refresh = false)
+    {
+        $certs = $this->getPublicKeyCertificates($refresh);
+        if ($certs === false) {
+            return false;
+        }
+        $now = time();
+        $valid = array();
+        $started = array();
+        $future = array();
+        foreach ($certs as $cert) {
+            $usages = isset($cert['usage']) ? (array) $cert['usage'] : array();
+            $match = false;
+            foreach ($usages as $u) {
+                $match = $match || (is_string($u) && strcasecmp($u, $usage) === 0);
+            }
+            $der = $cert['certificate'] ?? '';
+            if (!$match || $der === '') {
+                continue;
+            }
+            $from = !empty($cert['validFrom']) ? strtotime($cert['validFrom']) : 0;
+            $to = !empty($cert['validTo']) ? strtotime($cert['validTo']) : PHP_INT_MAX;
+            $from = $from === false ? 0 : $from;
+            $to = $to === false ? PHP_INT_MAX : $to;
+            $entry = array('pem' => "-----BEGIN CERTIFICATE-----\n" . chunk_split($der, 64, "\n") . "-----END CERTIFICATE-----\n",
+                'public_key_id' => !empty($cert['publicKeyId']) ? (string) $cert['publicKeyId'] : null,
+                'valid_from' => $from, 'valid_to' => $to);
+            if ($from <= $now && $now < $to) {
+                $valid[] = $entry;
+            } elseif ($from <= $now) {
+                $started[] = $entry;
+            } else {
+                $future[] = $entry;
+            }
+        }
+        $latestFirst = function ($a, $b) {
+            return $b['valid_from'] <=> $a['valid_from'];
+        };
+        usort($valid, $latestFirst);
+        usort($started, $latestFirst);
+        usort($future, function ($a, $b) {
+            return $a['valid_from'] <=> $b['valid_from'];
+        });
+        if ($valid) {
+            return $valid[0];
+        }
+        $pick = $started ? $started[0] : ($future ? $future[0] : null);
+        if ($pick === null) {
+            $this->error = "No certificate with $usage usage found";
+            return false;
+        }
+        dol_syslog("KsefClient: no $usage certificate is valid now; using one valid " . dol_print_date($pick['valid_from'], 'dayhourrfc') . " - "
+            . ($pick['valid_to'] === PHP_INT_MAX ? '?' : dol_print_date($pick['valid_to'], 'dayhourrfc')) . " (check the server clock)", LOG_WARNING);
+        return $pick;
+    }
 
     /**
-     * @brief Checks if session is authenticated
-     * @return bool True if authenticated
-     * @called_by authenticate()
+     * @brief Load token key
+     * @param bool $refresh
+     * @return bool
+     */
+    private function loadKsefPublicKey($refresh = false)
+    {
+        $key = $this->selectPublicKey('KsefTokenEncryption', $refresh);
+        if (!$key) {
+            $this->error = "Failed to load public key: " . $this->error;
+            return false;
+        }
+        $this->public_key_pem = $key['pem'];
+        $this->public_key_id = $key['public_key_id'];
+        return true;
+    }
+
+    /**
+     * @brief Is authenticated
+     * @return bool
      */
     private function isAuthenticated()
     {
@@ -512,9 +661,8 @@ class KsefClient
         return true;
     }
 
-
     /**
-     * @brief Lazy-load phpseclib crypto
+     * @brief Load phpseclib
      */
     private function loadCrypto()
     {
@@ -522,260 +670,449 @@ class KsefClient
     }
 
     /**
-     * @brief Submits invoice to KSeF API
-     * @param $invoiceXml FA3 XML string
-     * @return array|false Submission result
-     * @called_by KSEF::submitInvoice()
-     * @calls authenticate(), makeRequest(), checkInvoiceInSession(), checkSessionStatus()
+     * @brief Submit invoice
+     * @param $invoiceXml
+     * @param array $options
+     * @return array|false
      */
     public function submitInvoice($invoiceXml, $options = array())
     {
+        $this->last_error_code = null;
+        $this->last_transport_error = false;
+        $this->last_error_details = array();
+        $this->last_session_reference = null;
+        $this->last_invoice_reference = null;
         $this->loadCrypto();
-        if (!$this->authenticate()) {
-            $this->error = "Authentication failed";
-            return false;
-        }
+        $this->authenticate();
 
+        $sessionRef = null;
+        $closed = false;
         try {
             dol_syslog("KsefClient: Starting invoice submission", LOG_INFO);
 
-            $keysJson = $this->makeRequest('GET', '/security/public-key-certificates', null, array('Accept: application/json'));
-            if (!$keysJson) throw new Exception('Failed to get public keys');
-
-            $keys = json_decode($keysJson, true);
-            $pubKeyPem = null;
-            foreach ($keys as $key) {
-                if (in_array('SymmetricKeyEncryption', $key['usage'], true)) {
-                    $pubKeyPem = "-----BEGIN CERTIFICATE-----\n" . chunk_split($key['certificate'], 64, "\n") . "-----END CERTIFICATE-----\n";
-                    break;
-                }
-            }
-            if (!$pubKeyPem) throw new Exception('No suitable public key found for symmetric encryption');
-
-            $symmetricKey = random_bytes(32);
-            $iv = random_bytes(16);
-
-            $pubKey = PublicKeyLoader::load($pubKeyPem);
-            $pubKey = $pubKey->withPadding(RSA::ENCRYPTION_OAEP)->withHash('sha256')->withMGFHash('sha256');
-            $encryptedSymmetricKey = $pubKey->encrypt($symmetricKey);
-
-            $encryptedInvoice = openssl_encrypt($invoiceXml, 'AES-256-CBC', $symmetricKey, OPENSSL_RAW_DATA, $iv);
-            if ($encryptedInvoice === false) throw new Exception('Failed to encrypt invoice XML');
-
-            $sessionRequest = array(
-                'formCode' => array('systemCode' => 'FA (3)', 'schemaVersion' => '1-0E', 'value' => 'FA'),
-                'encryption' => array('encryptedSymmetricKey' => base64_encode($encryptedSymmetricKey), 'initializationVector' => base64_encode($iv))
-            );
-
-            if (!empty($options['offline_mode'])) {
-                $sessionRequest['offlineMode'] = true;
-                dol_syslog("KsefClient: Submitting in OFFLINE mode", LOG_INFO);
-            }
-
-            $sessionResp = $this->makeRequest('POST', '/sessions/online', json_encode($sessionRequest), array(
-                "Authorization: Bearer {$this->session_token}",
-                'Content-Type: application/json',
-                'Accept: application/json',
-            ));
-
-            if (!$sessionResp) throw new Exception('Failed to open invoice submission session');
-
-            $sessionData = json_decode($sessionResp, true);
-            $sessionRef = $sessionData['referenceNumber'] ?? null;
-            if (!$sessionRef) throw new Exception('Session reference number missing');
-
-            sleep(1);
+            $session = $this->openOnlineSession();
+            $sessionRef = $session['ref'];
 
             $invoiceHash = !empty($options['invoice_hash'])
                 ? $options['invoice_hash']
                 : base64_encode(hash('sha256', $invoiceXml, true));
 
-            $invoicePayload = array(
-                'invoiceHash' => $invoiceHash,
-                'invoiceSize' => strlen($invoiceXml),
-                'encryptedInvoiceHash' => base64_encode(hash('sha256', $encryptedInvoice, true)),
-                'encryptedInvoiceSize' => strlen($encryptedInvoice),
-                'encryptedInvoiceContent' => base64_encode($encryptedInvoice)
-            );
-
-            if (!empty($options['corrected_hash'])) {
-                $invoicePayload['hashOfCorrectedInvoice'] = $options['corrected_hash'];
-                dol_syslog("KsefClient: Including correction reference to hash: " . substr($options['corrected_hash'], 0, 20) . "...", LOG_INFO);
+            // 21184: new session
+            $invoiceRef = null;
+            $resent = false;
+            for ($round = 1; ; $round++) {
+                $invoicePayload = $this->invoicePayload($invoiceXml, $invoiceHash, $session, $options);
+                $invoiceResp = $this->makeRequest('POST', "/sessions/online/{$sessionRef}/invoices", json_encode($invoicePayload), array(
+                    'Content-Type: application/json',
+                    'Accept: application/json'
+                ), array('auth' => true, 'retry' => 'rate'));
+                if (!$invoiceResp && (int) $this->last_error_code === 21184 && $round === 1) {
+                    dol_syslog("KsefClient: session $sessionRef temporarily unavailable (21184), sending in a new session", LOG_WARNING);
+                    $this->closeOnlineSession($sessionRef);
+                    $session = $this->openOnlineSession();
+                    $sessionRef = $session['ref'];
+                    continue;
+                }
+                if (!$invoiceResp && $this->ambiguousSendFailure()) {
+                    $noAnswer = (int) $this->last_http_code === 0;
+                    $timedOut = $noAnswer && (int) $this->last_curl_errno === 28;
+                    $failed = $this->errorState();
+                    $landed = $this->landedInSession($sessionRef, $invoiceHash, $noAnswer);
+                    $this->restoreErrorState($failed);
+                    if (is_array($landed)) {
+                        dol_syslog("KsefClient: invoice POST failed (" . $this->error . ") but the session holds it as " . $landed['reference_number'], LOG_WARNING);
+                        $invoiceRef = $landed['reference_number'];
+                        break;
+                    }
+                    if ($landed === null && !$resent) {
+                        dol_syslog("KsefClient: invoice POST failed (" . $this->error . "), the session holds nothing: sending once more", LOG_WARNING);
+                        $resent = true;
+                        continue;
+                    }
+                    if ($landed === false || $timedOut) {
+                        // late POST lands
+                        dol_syslog("KsefClient: invoice POST failed (" . $this->error . "), outcome unknown", LOG_WARNING);
+                        global $langs;
+                        $langs->load('ksef@ksef');
+                        return $this->unknownOutcome($sessionRef, null, $invoiceHash, $langs->transnoentitiesnoconv($noAnswer ? 'KSEF_UploadNoAnswer' : 'KSEF_UploadOutcomeUnknown', (string) $this->error));
+                    }
+                }
+                if (!$invoiceResp) throw new Exception($this->failText('Failed to submit invoice'));
+                $invoiceResult = json_decode($invoiceResp, true);
+                $invoiceRef = $invoiceResult['referenceNumber'] ?? null;
+                break;
             }
 
-            $invoiceResp = $this->makeRequest('POST', "/sessions/online/{$sessionRef}/invoices", json_encode($invoicePayload), array(
-                "Authorization: Bearer {$this->session_token}",
-                'Content-Type: application/json',
-                'Accept: application/json'
-            ));
-            if (!$invoiceResp) throw new Exception('Failed to submit invoice');
-
-            $invoiceResult = json_decode($invoiceResp, true);
-            $invoiceRef = $invoiceResult['referenceNumber'] ?? null;
             if (!$invoiceRef) throw new Exception('Invoice reference missing');
+            $this->last_invoice_reference = $invoiceRef;
 
             dol_syslog("KsefClient: Invoice submitted with reference: $invoiceRef", LOG_INFO);
+            if (!empty($options['on_progress']) && is_callable($options['on_progress'])) {
+                call_user_func($options['on_progress'], $sessionRef, $invoiceRef);
+            }
 
-            // Poll for completion
-            $maxAttempts = 30;
-            $attempt = 0;
-            $successfulCount = null;
-
-            while ($attempt < $maxAttempts && $successfulCount === null) {
-                sleep(2);
-                $attempt++;
-
-                $sessionStatusResp = $this->makeRequest('GET', "/sessions/{$sessionRef}", null, array(
-                    "Authorization: Bearer {$this->session_token}",
-                    'Accept: application/json'
-                ));
-
-                if ($sessionStatusResp) {
-                    $sessionStatus = json_decode($sessionStatusResp, true);
-
-                    if ($attempt % 3 == 0) {
-                        $invoiceStatusResp = $this->makeRequest('GET', "/sessions/{$sessionRef}/invoices/{$invoiceRef}", null, array(
-                            "Authorization: Bearer {$this->session_token}",
-                            'Accept: application/json'
-                        ));
-                        if ($invoiceStatusResp) {
-                            $invStatus = json_decode($invoiceStatusResp, true);
-                            if (isset($invStatus['status']['code']) && $invStatus['status']['code'] == 400) {
-                                $this->last_error_code = $invStatus['processingCode'] ?? null;
-                                $this->last_error_details = $invStatus;
-                                throw new Exception('Invoice rejected during processing: ' . ($invStatus['status']['description'] ?? 'Unknown error'));
-                            }
-                        }
-                    }
-
-                    if (isset($sessionStatus['successfulInvoiceCount'])) {
-                        $successfulCount = $sessionStatus['successfulInvoiceCount'];
-                        break;
-                    } else if (isset($sessionStatus['failedInvoiceCount']) && $sessionStatus['failedInvoiceCount'] > 0) {
-                        $invoiceStatus = $this->checkInvoiceInSession($sessionRef, $invoiceRef);
-
-                        if ($invoiceStatus) {
-                            dol_syslog("KsefClient: Invoice status: " . json_encode($invoiceStatus), LOG_DEBUG);
-
-                            $rawResponse = $invoiceStatus['raw_response'] ?? null;
-                            if ($rawResponse && isset($rawResponse['status']['code']) && $rawResponse['status']['code'] == 440) {
-                                $originalKsefNumber = $rawResponse['status']['extensions']['originalKsefNumber'] ?? null;
-                                $this->last_error_code = 440;
-                                $this->last_error_details = array(
-                                    'code' => 440,
-                                    'description' => $rawResponse['status']['description'] ?? 'Duplicate invoice number',
-                                    'details' => $rawResponse['status']['details'] ?? [],
-                                    'original_ksef_number' => $originalKsefNumber,
-                                    'original_session' => $rawResponse['status']['extensions']['originalSessionReferenceNumber'] ?? null,
-                                    'raw_response' => $rawResponse,
-                                    'session_status' => $sessionStatus
-                                );
-
-                                $errorMsg = "Duplicate invoice number - already exists in KSeF";
-                                if ($originalKsefNumber) {
-                                    $errorMsg .= " as " . $originalKsefNumber;
-                                }
-                                throw new Exception($errorMsg);
-                            }
-
-                            $this->last_error_code = $invoiceStatus['processing_code'] ?? null;
-                            $this->last_error_details = array(
-                                'code' => $invoiceStatus['processing_code'] ?? null,
-                                'description' => $invoiceStatus['processing_description'] ?? '',
-                                'details' => $invoiceStatus['status_details'] ?? [],
-                                'raw_response' => $invoiceStatus['raw_response'] ?? null,
-                                'session_status' => $sessionStatus
-                            );
-
-                            $errorMsg = "Invoice validation failed";
-                            if (!empty($invoiceStatus['processing_description'])) {
-                                $errorMsg .= ": " . $invoiceStatus['processing_description'];
-                            }
-                            if (!empty($invoiceStatus['status_details'])) {
-                                $errorMsg .= " - " . implode('; ', $invoiceStatus['status_details']);
-                            }
-                            throw new Exception($errorMsg);
-                        }
-
-                        $this->last_error_details = array(
-                            'session_status' => $sessionStatus,
-                            'failed_count' => $sessionStatus['failedInvoiceCount'] ?? 'unknown'
-                        );
-                        throw new Exception('Invoice validation failed during processing (no detail available)');
-                    }
+            // session counters unreliable
+            $final = null;
+            for ($attempt = 1; $attempt <= KSEF_SEND_MAX_POLLS; $attempt++) {
+                $this->pollWait($attempt);
+                $invoiceStatus = $this->checkInvoiceInSession($sessionRef, $invoiceRef);
+                if ($invoiceStatus && $invoiceStatus['status'] !== 'PENDING') {
+                    $final = $invoiceStatus;
+                    break;
                 }
             }
 
-            if ($successfulCount === null) throw new Exception("Invoice processing timeout");
+            $closed = true;
+            $this->closeOnlineSession($sessionRef);
 
-            $this->makeRequest('POST', "/sessions/online/{$sessionRef}/close", null, array("Authorization: Bearer {$this->session_token}"));
-            sleep(1);
-
-            $invoicesResp = $this->makeRequest('GET', "/sessions/{$sessionRef}/invoices", null, array(
-                "Authorization: Bearer {$this->session_token}",
-                'Accept: application/json'
-            ));
-
-            if ($invoicesResp) {
-                $invoicesData = json_decode($invoicesResp, true);
-                if (!empty($invoicesData['invoices'][0]['ksefNumber'])) {
-                    $ksefNumber = $invoicesData['invoices'][0]['ksefNumber'];
-                    $invoiceHash = $invoicesData['invoices'][0]['invoiceHash'] ?? null;
-
-                    $upoXml = null;
-                    try {
-                        $upoResp = $this->makeRequest('GET', "/sessions/{$sessionRef}/invoices/{$invoiceRef}/upo", null, array(
-                            "Authorization: Bearer {$this->session_token}",
-                            'Accept: application/octet-stream'
-                        ));
-                        if ($upoResp) {
-                            $upoXml = $upoResp;
-                        } else {
-                            dol_syslog("KsefClient: UPO download returned false - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
-                        }
-                    } catch (Exception $e) {
-                        dol_syslog("KsefClient: UPO download exception: " . $e->getMessage(), LOG_WARNING);
-                    }
-
-                    return array(
-                        'status' => 'ACCEPTED',
-                        'reference_number' => $invoiceRef,
-                        'session_reference' => $sessionRef,
-                        'ksef_number' => $ksefNumber,
-                        'invoice_hash' => $invoiceHash,
-                        'upo_xml' => $upoXml
-                    );
-                }
+            if ($final === null) {
+                return $this->unknownOutcome($sessionRef, $invoiceRef, $invoiceHash, ksefMsg('KSEF_ErrStillProcessing', KSEF_SEND_MAX_POLLS));
             }
 
-            throw new Exception('Could not retrieve KSeF number from session');
+            if ($final['status'] === 'FAILED') {
+                throw new Exception($this->rejectionMessage($final));
+            }
 
-        } catch (Exception $e) {
+            // KSeF decides mode
+            $declared = !empty($options['offline_mode']) ? 'Offline' : 'Online';
+            $mismatch = !empty($final['invoicing_mode']) && strcasecmp((string) $final['invoicing_mode'], $declared) !== 0;
+            if ($mismatch) {
+                dol_syslog("KsefClient: KSeF recorded invoice " . $final['ksef_number'] . " as " . $final['invoicing_mode'] . " although it was sent as $declared", LOG_WARNING);
+            }
+
+            $endpoint = "/sessions/{$sessionRef}/invoices/{$invoiceRef}/upo";
+            $upoXml = $this->fetchUpo($endpoint);
+            if ($upoXml === false) {
+                dol_syslog("KsefClient: UPO download failed - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
+                $upoXml = null;
+            }
+
+            return array(
+                'status' => 'ACCEPTED',
+                'reference_number' => $invoiceRef,
+                'session_reference' => $sessionRef,
+                'ksef_number' => $final['ksef_number'],
+                'invoice_hash' => $final['invoice_hash'] ?: $invoiceHash,
+                'invoicing_mode' => $final['invoicing_mode'],
+                'invoicing_mode_mismatch' => $mismatch,
+                'acquisition_date' => $final['acquisition_date'],
+                'upo_xml' => $upoXml
+            );
+
+        } catch (Throwable $e) {
             $this->error = "Invoice submission error: " . $e->getMessage();
             dol_syslog("KsefClient: " . $this->error, LOG_ERR);
+            if ($sessionRef !== null && !$closed) {
+                $this->closeOnlineSession($sessionRef);
+            }
             return false;
         }
     }
 
     /**
-     * @brief Authenticates with KSeF API
-     * @return bool True if authenticated
-     * @called_by submitInvoice(), checkStatus(), downloadUPO()
-     * @calls loadKsefPublicKey(), makeRequest(), authenticateWithCertificate()
+     * @brief Open online session
+     * @return array
+     */
+    private function openOnlineSession()
+    {
+        $symmetricKey = random_bytes(32);
+        $iv = random_bytes(16);
+        for ($attempt = 1; ; $attempt++) {
+            $enc = $this->encryptSymmetricKey($symmetricKey, $attempt > 1);
+            if (!$enc) throw new Exception('No suitable public key found for symmetric encryption: ' . $this->error);
+
+            $sessionRequest = array(
+                'formCode' => array('systemCode' => 'FA (3)', 'schemaVersion' => '1-0E', 'value' => 'FA'),
+                'encryption' => $this->encryptionInfo($enc, $iv)
+            );
+            $sessionResp = $this->makeRequest('POST', '/sessions/online', json_encode($sessionRequest), array(
+                'Content-Type: application/json',
+                'Accept: application/json',
+            ), array('auth' => true, 'retry' => 'safe'));
+            if (!$sessionResp && (int) $this->last_error_code === 21470 && $attempt === 1) {
+                dol_syslog("KsefClient: session open 21470: public key withdrawn, fetching the keys again", LOG_WARNING);
+                continue;
+            }
+            if (!$sessionResp) throw new Exception(ksefMsg('KSEF_ErrSessionOpen', $this->failText('Failed to open invoice submission session')));
+            break;
+        }
+
+        $sessionData = json_decode($sessionResp, true);
+        $sessionRef = $sessionData['referenceNumber'] ?? null;
+        if (!$sessionRef) throw new Exception('Session reference number missing');
+        $this->last_session_reference = $sessionRef;
+        return array('ref' => $sessionRef, 'key' => $symmetricKey, 'iv' => $iv);
+    }
+
+    /**
+     * @brief Build send request
+     * @param string $invoiceXml
+     * @param string $invoiceHash
+     * @param array $session
+     * @param array $options
+     * @return array
+     */
+    private function invoicePayload($invoiceXml, $invoiceHash, $session, $options)
+    {
+        $encryptedInvoice = openssl_encrypt($invoiceXml, 'AES-256-CBC', $session['key'], OPENSSL_RAW_DATA, $session['iv']);
+        if ($encryptedInvoice === false) throw new Exception('Failed to encrypt invoice XML');
+
+        $invoicePayload = array(
+            'invoiceHash' => $invoiceHash,
+            'invoiceSize' => strlen($invoiceXml),
+            'encryptedInvoiceHash' => base64_encode(hash('sha256', $encryptedInvoice, true)),
+            'encryptedInvoiceSize' => strlen($encryptedInvoice),
+            'encryptedInvoiceContent' => base64_encode($encryptedInvoice)
+        );
+
+        if (!empty($options['offline_mode'])) {
+            $invoicePayload['offlineMode'] = true;
+            dol_syslog("KsefClient: Submitting in OFFLINE mode", LOG_INFO);
+        }
+
+        if (!empty($options['corrected_hash'])) {
+            $invoicePayload['hashOfCorrectedInvoice'] = $options['corrected_hash'];
+            dol_syslog("KsefClient: Including correction reference to hash: " . substr($options['corrected_hash'], 0, 20) . "...", LOG_INFO);
+        }
+        return $invoicePayload;
+    }
+
+    /**
+     * @brief Close online session
+     * @param string $sessionRef
+     * @return bool
+     */
+    public function closeOnlineSession($sessionRef)
+    {
+        $state = $this->errorState();
+        $ok = $this->makeRequest('POST', "/sessions/online/{$sessionRef}/close", null, array(), array('auth' => true, 'retry' => 'safe')) !== false;
+        if (!$ok && (int) $this->last_error_code === 21180) {
+            // already closed
+            $ok = true;
+        }
+        if (!$ok) {
+            dol_syslog("KsefClient: closing session $sessionRef failed, KSeF closes it when it expires: " . $this->error, LOG_WARNING);
+        }
+        $this->restoreErrorState($state);
+        return $ok;
+    }
+
+    /**
+     * @brief POST maybe landed
+     * @return bool
+     */
+    private function ambiguousSendFailure()
+    {
+        $http = (int) $this->last_http_code;
+        return $http === 0 || in_array($http, array(500, 502, 503, 504), true);
+    }
+
+    /**
+     * @brief Find landed invoice
+     * @param string $sessionRef
+     * @param string $invoiceHash
+     * @param bool $wait
+     * @return array|null|false false: KSeF unreachable
+     */
+    private function landedInSession($sessionRef, $invoiceHash, $wait)
+    {
+        if ($wait) {
+            $this->pause(2);
+        }
+        $scan = $this->scanSessionInvoices($sessionRef, $invoiceHash, self::SESSION_INVOICE_PAGES);
+        if ($scan === false) {
+            dol_syslog("KsefClient: could not list the invoices of session $sessionRef: " . $this->error, LOG_WARNING);
+            return false;
+        }
+        $pick = $scan['match'] !== null ? $scan['match'] : $scan['first'];
+        if ($pick === null) {
+            return null;
+        }
+        $st = $this->parseInvoiceStatus($pick);
+        return !empty($st['reference_number']) ? $st : null;
+    }
+
+    /**
+     * @brief Build TIMEOUT result
+     * @param string $sessionRef
+     * @param string|null $invoiceRef
+     * @param string $invoiceHash
+     * @param string $why
+     * @return array
+     */
+    private function unknownOutcome($sessionRef, $invoiceRef, $invoiceHash, $why)
+    {
+        $this->error = $why;
+        dol_syslog("KsefClient: outcome unknown, " . $why . " (session $sessionRef, invoice " . ($invoiceRef ?: '-') . ")", LOG_WARNING);
+        return array(
+            'status' => 'TIMEOUT',
+            'session_reference' => $sessionRef,
+            'reference_number' => $invoiceRef,
+            'invoice_hash' => $invoiceHash,
+            'error' => $why
+        );
+    }
+
+    /**
+     * @brief Download invoice
+     * @param string $ksefNumber
+     * @return array|false
+     */
+    public function downloadInvoiceXml($ksefNumber)
+    {
+        $this->last_error_code = null;
+        $this->authenticate();
+        $xml = $this->makeRequest('GET', "/invoices/ksef/{$ksefNumber}", null, array('Accept: application/xml'), array('auth' => true, 'retry' => 'safe'));
+        if ($xml === false || $xml === '') {
+            dol_syslog("KsefClient::downloadInvoiceXml $ksefNumber failed - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
+            return false;
+        }
+        return array(
+            'xml' => $xml,
+            'hash' => base64_encode(hash('sha256', $xml, true)),
+            'header_hash' => (string) ($this->last_response_headers['x-ms-meta-hash'] ?? '')
+        );
+    }
+
+    /**
+     * @brief Find by hash
+     * @param string $sessionRef
+     * @param string $invoiceHash
+     * @param int $maxPages
+     * @return array|false|null Null: not found
+     */
+    public function findInvoiceInSession($sessionRef, $invoiceHash, $maxPages = self::SESSION_INVOICE_PAGES)
+    {
+        $scan = $this->scanSessionInvoices($sessionRef, $invoiceHash, $maxPages);
+        if ($scan === false) {
+            return false;
+        }
+        return $scan['match'] !== null ? $this->parseInvoiceStatus($scan['match']) : null;
+    }
+
+    /**
+     * @brief Scan session pages
+     * @param string $sessionRef
+     * @param string $invoiceHash
+     * @param int $maxPages
+     * @return array|false
+     */
+    private function scanSessionInvoices($sessionRef, $invoiceHash, $maxPages)
+    {
+        $this->last_session_pages = 0;
+        $this->last_session_complete = false;
+        $first = null;
+        $token = null;
+        $maxPages = max(1, (int) $maxPages);
+        do {
+            $list = $this->listSessionInvoices($sessionRef, $token, self::SESSION_INVOICE_PAGE_SIZE);
+            if ($list === false) {
+                return false;
+            }
+            $this->last_session_pages++;
+            foreach ($list['invoices'] as $entry) {
+                if ($first === null) {
+                    $first = $entry;
+                }
+                if ((string) ($entry['invoiceHash'] ?? '') === (string) $invoiceHash) {
+                    return array('match' => $entry, 'first' => $first);
+                }
+            }
+            $token = $list['continuation_token'];
+        } while (!empty($token) && $this->last_session_pages < $maxPages);
+        $this->last_session_complete = empty($token);
+        return array('match' => null, 'first' => $first);
+    }
+
+    /**
+     * @brief List session invoices
+     * @param string $sessionRef
+     * @param string|null $continuationToken
+     * @param int $pageSize 0: KSeF default
+     * @return array|false
+     */
+    public function listSessionInvoices($sessionRef, $continuationToken = null, $pageSize = 0)
+    {
+        $this->authenticate();
+        $headers = array('Accept: application/json');
+        if (!empty($continuationToken)) {
+            $headers[] = 'x-continuation-token: ' . $continuationToken;
+        }
+        $opts = array('auth' => true, 'retry' => 'safe');
+        if ((int) $pageSize > 0) {
+            $opts['query'] = 'pageSize=' . (int) $pageSize;
+        }
+        $resp = $this->makeRequest('GET', "/sessions/{$sessionRef}/invoices", null, $headers, $opts);
+        if (!$resp) {
+            $this->error = $this->failText('Session invoice list failed');
+            return false;
+        }
+        $data = json_decode($resp, true);
+        if (!is_array($data)) {
+            $this->error = 'Session invoice list failed: invalid response';
+            return false;
+        }
+        return array(
+            'invoices' => isset($data['invoices']) && is_array($data['invoices']) ? array_values(array_filter($data['invoices'], 'is_array')) : array(),
+            'continuation_token' => !empty($data['continuationToken']) ? $data['continuationToken'] : null,
+        );
+    }
+
+    /**
+     * @brief Authenticate
+     * @return bool
      */
     public function authenticate()
     {
         $this->loadCrypto();
         if ($this->isAuthenticated()) return true;
 
-        if ($this->auth_method == 'certificate') {
-            return $this->authenticateWithCertificate();
+        for ($attempt = 1; ; $attempt++) {
+            $this->auth_stage = 'config';
+            try {
+                if ($this->auth_method == 'certificate') {
+                    return $this->authenticateWithCertificate();
+                }
+                return $this->authenticateWithToken();
+            } catch (Exception $e) {
+                $wait = $attempt === 1 ? $this->authRetryWait() : false;
+                if ($wait === false) {
+                    throw $e;
+                }
+                dol_syslog("KsefClient: authentication failed (" . $e->getMessage() . "), starting again from a new challenge", LOG_WARNING);
+                $this->pause($wait);
+            }
         }
+    }
 
-        if (empty($this->ksef_token)) throw new Exception('KSeF token not configured');
+    /**
+     * @brief Reauth delay
+     * @return int|false
+     */
+    private function authRetryWait()
+    {
+        if (!in_array($this->auth_stage, array('challenge', 'init'), true)) {
+            return false;
+        }
+        if ((int) $this->last_error_code === 21470 && $this->auth_stage === 'init') {
+            $this->public_key_pem = null;
+            $this->public_key_certs = null;
+            return 0;
+        }
+        return $this->retryWait('safe');
+    }
 
+    /**
+     * @brief Token authentication
+     * @return bool
+     */
+    private function authenticateWithToken()
+    {
+        if (empty($this->ksef_token)) throw new Exception(ksefMsg('KSEF_ErrTokenNotConfigured', $this->environment));
+
+        $this->auth_stage = 'challenge';
         $challengeResp = $this->makeRequest('POST', '/auth/challenge', json_encode(array('contextIdentifier' => array('type' => 'Nip', 'value' => $this->nip))), array('Content-Type: application/json', 'Accept: application/json'));
-        if (!$challengeResp) throw new Exception('Failed to obtain authentication challenge');
+        if (!$challengeResp) throw new Exception(ksefMsg('KSEF_ErrAuthFailed', $this->failText('Failed to obtain authentication challenge')));
 
         $challengeData = json_decode($challengeResp, true);
         if (empty($challengeData['challenge'])) throw new Exception('Invalid challenge response from KSeF');
@@ -784,7 +1121,7 @@ class KsefClient
         $timestamp = $challengeData['timestamp'];
 
         if (empty($this->public_key_pem)) {
-            if (!$this->loadKsefPublicKey()) throw new Exception('Unable to load KSeF public key certificate');
+            if (!$this->loadKsefPublicKey()) throw new Exception('Unable to load KSeF public key certificate: ' . $this->error);
         }
 
         $dt = new DateTime($timestamp, new DateTimeZone('UTC'));
@@ -794,13 +1131,18 @@ class KsefClient
         $key = $key->withPadding(RSA::ENCRYPTION_OAEP)->withHash('sha256')->withMGFHash('sha256');
         $encryptedB64 = base64_encode($key->encrypt($toEncrypt));
 
-        $authResp = $this->makeRequest('POST', '/auth/ksef-token', json_encode(array(
+        $initRequest = array(
             'challenge' => $challenge,
             'contextIdentifier' => array('type' => 'Nip', 'value' => $this->nip),
             'encryptedToken' => $encryptedB64
-        )), array('Content-Type: application/json', 'Accept: application/json'));
+        );
+        if (!empty($this->public_key_id)) {
+            $initRequest['publicKeyId'] = $this->public_key_id;
+        }
+        $this->auth_stage = 'init';
+        $authResp = $this->makeRequest('POST', '/auth/ksef-token', json_encode($initRequest), array('Content-Type: application/json', 'Accept: application/json'));
 
-        if (!$authResp) throw new Exception('Authentication request failed');
+        if (!$authResp) throw new Exception(ksefMsg('KSEF_ErrAuthFailed', $this->failText('Authentication request failed')));
 
         $authData = json_decode($authResp, true);
         $authToken = $authData['authenticationToken']['token'] ?? null;
@@ -808,30 +1150,60 @@ class KsefClient
 
         if (!$authToken || !$referenceNumber) throw new Exception('Invalid authentication response received');
 
-        // Poll status
-        $maxAttempts = 10;
-        $pollInterval = 2;
-        $statusCode = 0;
+        $this->auth_stage = 'status';
+        $this->pollAuthStatus($referenceNumber, $authToken, 12, 'Authentication');
 
+        $this->auth_stage = 'redeem';
+        $this->redeemTokens($referenceNumber, $authToken);
+        return true;
+    }
+
+    /**
+     * @brief Poll auth status
+     * @param string $referenceNumber
+     * @param string $authToken
+     * @param int $maxAttempts
+     * @param string $label
+     * @param float $cap Max wait
+     * @return void
+     */
+    private function pollAuthStatus($referenceNumber, $authToken, $maxAttempts, $label, $cap = 2)
+    {
+        $statusCode = 0;
         for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             $statusResp = $this->makeRequest('GET', '/auth/' . $referenceNumber, null, array("Authorization: Bearer {$authToken}", 'Accept: application/json'));
-            if (!$statusResp) {
-                if ($attempt < $maxAttempts) sleep($pollInterval);
-                continue;
+            if ($statusResp) {
+                $statusData = json_decode($statusResp, true);
+                $statusCode = isset($statusData['status']['code']) ? (int)$statusData['status']['code'] : 0;
+                dol_syslog("KsefClient: Auth status poll attempt $attempt: code $statusCode", LOG_DEBUG);
+                if ($statusCode === 200) {
+                    return;
+                }
+                if ($statusCode >= 400) {
+                    $desc = trim(($statusData['status']['description'] ?? '') . ' ' . implode('; ', (array) ($statusData['status']['details'] ?? array())));
+                    dol_syslog("KsefClient: $label failed (status $statusCode)" . ($desc !== '' ? ": $desc" : ''), LOG_WARNING);
+                    throw new Exception(ksefMsg('KSEF_ErrAuthStatus', $statusCode, $desc !== '' ? ': ' . $desc : ''));
+                }
             }
-            $statusData = json_decode($statusResp, true);
-            $statusCode = isset($statusData['status']['code']) ? (int)$statusData['status']['code'] : 0;
-
-            if ($statusCode === 200) break;
-            if ($statusCode >= 400) throw new Exception("Authentication failed (status $statusCode)");
-            if ($attempt < $maxAttempts) sleep($pollInterval);
+            if ($attempt < $maxAttempts) {
+                $this->pollWait($attempt, $cap);
+            }
         }
+        dol_syslog("KsefClient: $label status verification timeout", LOG_WARNING);
+        throw new Exception(ksefMsg('KSEF_ErrAuthTimeout', !empty($this->error) && (int) $this->last_http_code !== 200 ? ': ' . $this->error : ''));
+    }
 
-        if ($statusCode !== 200) throw new Exception("Authentication status verification timeout");
-
+    /**
+     * @brief Redeem tokens once
+     * @param string $referenceNumber
+     * @param string $authToken
+     * @return void
+     */
+    private function redeemTokens($referenceNumber, $authToken)
+    {
         $redeemResp = $this->makeRequest('POST', '/auth/token/redeem', json_encode(array('referenceNumber' => $referenceNumber, 'authenticationToken' => array('token' => $authToken))), array("Authorization: Bearer {$authToken}", "Content-Type: application/json", "Accept: application/json"));
 
-        if (!$redeemResp) throw new Exception('Token redeem request failed');
+        if (!$redeemResp) throw new Exception(ksefMsg('KSEF_ErrAuthFailed', $this->failText('Token redeem request failed')));
 
         $tokenData = json_decode($redeemResp, true);
         $this->session_token = $tokenData['accessToken']['token'] ?? null;
@@ -839,13 +1211,11 @@ class KsefClient
         $this->session_expiry = isset($tokenData['accessToken']['validUntil']) ? strtotime($tokenData['accessToken']['validUntil']) : null;
 
         if (!$this->session_token) throw new Exception('Invalid tokens returned on redeem');
-        return true;
     }
 
     /**
-     * @brief Authenticates with KSeF API using certificate with XAdES
-     * @return bool True if authenticated
-     * @called_by authenticate()
+     * @brief Certificate authentication
+     * @return bool
      */
     private function authenticateWithCertificate()
     {
@@ -853,13 +1223,14 @@ class KsefClient
             throw new Exception($this->error);
         }
 
+        $this->auth_stage = 'challenge';
         $challengeResp = $this->makeRequest('POST', '/auth/challenge',
             json_encode(array('contextIdentifier' => array('type' => 'Nip', 'value' => $this->nip))),
             array('Content-Type: application/json', 'Accept: application/json')
         );
 
         if (!$challengeResp) {
-            throw new Exception('Failed to obtain authentication challenge');
+            throw new Exception(ksefMsg('KSEF_ErrAuthFailed', $this->failText('Failed to obtain authentication challenge')));
         }
 
         $challengeData = json_decode($challengeResp, true);
@@ -872,19 +1243,21 @@ class KsefClient
 
         $authTokenRequestXml = $this->buildAuthTokenRequestXml($challenge, $timestamp);
 
+        $this->auth_stage = 'sign';
         $signedXml = $this->signXadesAuthRequest($authTokenRequestXml);
 
         if (!$signedXml) {
             throw new Exception('Failed to sign authentication request: ' . $this->error);
         }
 
+        $this->auth_stage = 'init';
         $authResp = $this->makeRequest('POST', '/auth/xades-signature', $signedXml, array(
             'Content-Type: application/xml',
             'Accept: application/json'
         ));
 
         if (!$authResp) {
-            throw new Exception('Certificate authentication request failed: ' . $this->error);
+            throw new Exception(ksefMsg('KSEF_ErrAuthFailed', 'Certificate authentication request failed: ' . $this->error));
         }
 
         $authData = json_decode($authResp, true);
@@ -896,64 +1269,20 @@ class KsefClient
             throw new Exception('Invalid authentication response received');
         }
 
-        $maxAttempts = 20;
-        $pollInterval = 3;
-        $statusCode = 0;
+        $this->auth_stage = 'status';
+        $this->pollAuthStatus($referenceNumber, $authToken, 22, 'Certificate authentication', 3);
 
-        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-            $statusResp = $this->makeRequest('GET', '/auth/' . $referenceNumber, null,
-                array("Authorization: Bearer {$authToken}", 'Accept: application/json')
-            );
-
-            if (!$statusResp) {
-                if ($attempt < $maxAttempts) sleep($pollInterval);
-                continue;
-            }
-
-            $statusData = json_decode($statusResp, true);
-            $statusCode = isset($statusData['status']['code']) ? (int)$statusData['status']['code'] : 0;
-
-            dol_syslog("KsefClient: Auth status poll attempt $attempt: code $statusCode", LOG_DEBUG);
-
-            if ($statusCode === 200) break;
-            if ($statusCode >= 400) {
-                $desc = $statusData['status']['description'] ?? 'Unknown error';
-                throw new Exception("Certificate authentication failed (status $statusCode): $desc");
-            }
-            if ($attempt < $maxAttempts) sleep($pollInterval);
-        }
-
-        if ($statusCode !== 200) {
-            throw new Exception("Certificate authentication status verification timeout");
-        }
-
-        $redeemResp = $this->makeRequest('POST', '/auth/token/redeem',
-            json_encode(array('referenceNumber' => $referenceNumber, 'authenticationToken' => array('token' => $authToken))),
-            array("Authorization: Bearer {$authToken}", "Content-Type: application/json", "Accept: application/json")
-        );
-
-        if (!$redeemResp) {
-            throw new Exception('Token redeem request failed');
-        }
-
-        $tokenData = json_decode($redeemResp, true);
-        $this->session_token = $tokenData['accessToken']['token'] ?? null;
-        $this->refresh_token = $tokenData['refreshToken']['token'] ?? null;
-        $this->session_expiry = isset($tokenData['accessToken']['validUntil']) ? strtotime($tokenData['accessToken']['validUntil']) : null;
-
-        if (!$this->session_token) {
-            throw new Exception('Invalid tokens returned on redeem');
-        }
+        $this->auth_stage = 'redeem';
+        $this->redeemTokens($referenceNumber, $authToken);
 
         return true;
     }
 
     /**
-     * @brief Builds AuthTokenRequest XML for certificate authentication (KSeF API v2)
-     * @param string $challenge Challenge string from /auth/challenge
-     * @param string $timestamp Timestamp from challenge (NOT USED in v2 auth request XML)
-     * @return string XML string
-     * @called_by authenticateWithCertificate()
+     * @brief Build AuthTokenRequest
+     * @param string $challenge
+     * @param string $timestamp Unused
+     * @return string
      */
     private function buildAuthTokenRequestXml($challenge, $timestamp)
     {
@@ -981,17 +1310,16 @@ class KsefClient
     }
 
     /**
-     * @brief Signs XML with XAdES-BES using authentication certificate
-     * @param string $xml XML to sign
-     * @return string|false Signed XML or false on error
-     * @called_by authenticateWithCertificate()
+     * @brief XAdES-BES sign
+     * @param string $xml
+     * @return string|false
      */
     private function signXadesAuthRequest($xml)
     {
         try {
             $privateKey = openssl_pkey_get_private($this->auth_private_key_pem);
             if (!$privateKey) {
-                throw new Exception('Failed to load private key: ' . openssl_error_string());
+                throw new Exception(ksefMsg('KSEF_ErrPrivateKeyLoad', (string) openssl_error_string()));
             }
 
             $keyDetails = openssl_pkey_get_details($privateKey);
@@ -1108,14 +1436,13 @@ class KsefClient
     }
 
     /**
-     * @brief Builds SignedProperties element for XAdES-BES signature
-     * @param string $id SignedProperties ID attribute
-     * @param string $signingTime ISO 8601 signing timestamp
-     * @param string $certDigest Base64-encoded SHA-256 digest of certificate
-     * @param string $issuerName Issuer DN in RFC 2253 format
-     * @param string $serialNumber Certificate serial number
-     * @return string SignedProperties XML string
-     * @called_by signXadesAuthRequest()
+     * @brief Build SignedProperties
+     * @param string $id
+     * @param string $signingTime ISO 8601
+     * @param string $certDigest Base64 SHA-256
+     * @param string $issuerName RFC 2253 DN
+     * @param string $serialNumber
+     * @return string
      */
     private function buildSignedProperties($id, $signingTime, $certDigest, $issuerName, $serialNumber)
     {
@@ -1138,110 +1465,338 @@ class KsefClient
     }
 
     /**
-     * @brief Terminates current session
-     * @return bool True if terminated
-     * @called_by External cleanup
-     * @calls makeRequest()
+     * @brief Get invoice status
+     * @param string $sessionRef
+     * @param string $invoiceRef
+     * @return array|false
      */
-    public function terminateSession()
+    public function checkStatus($sessionRef, $invoiceRef = '')
     {
-        if (empty($this->session_token)) return true;
-        try {
-            $this->makeRequest('DELETE', '/auth/sessions/current', null, array("Authorization: Bearer {$this->session_token}", "Accept: application/json"));
-            $this->session_token = null;
-            $this->refresh_token = null;
-            return true;
-        } catch (Exception $e) {
+        if (empty($sessionRef) || empty($invoiceRef)) {
+            $this->error = 'Status check needs the session and the invoice reference';
             return false;
         }
+        return $this->checkInvoiceInSession($sessionRef, $invoiceRef);
     }
 
     /**
-     * @brief Checks submission status
-     * @param $referenceNumber Reference number
-     * @return array|false Status result
-     * @called_by KSEF::checkStatus()
-     * @calls makeRequest()
-     */
-    public function checkStatus($referenceNumber)
-    {
-        if (!$this->authenticate()) {
-            $this->error = "Authentication failed";
-            return false;
-        }
-
-        try {
-            $response = $this->makeRequest('GET', "/invoices/status/{$referenceNumber}", null, array("Authorization: Bearer {$this->session_token}", 'Accept: application/json'));
-            if (!$response) throw new Exception('Failed to check invoice status');
-
-            $statusData = json_decode($response, true);
-            $status = 'UNKNOWN';
-            if (isset($statusData['processingCode'])) {
-                if ($statusData['processingCode'] === 200) $status = 'ACCEPTED';
-                elseif ($statusData['processingCode'] >= 400) $status = 'REJECTED';
-                else $status = 'PENDING';
-            }
-
-            return array(
-                'status' => $status,
-                'ksef_number' => $statusData['ksefReferenceNumber'] ?? null,
-                'processing_code' => $statusData['processingCode'] ?? null,
-                'message' => $statusData['message'] ?? null,
-                'timestamp' => $statusData['timestamp'] ?? null
-            );
-
-        } catch (Exception $e) {
-            $this->error = "Status check failed: " . $e->getMessage();
-            return false;
-        }
-    }
-
-    /**
-     * @brief Downloads UPO XML
-     * @param $ksefNumber KsefService number
-     * @param $sessionRef Session reference (optional)
-     * @return string|false UPO XML
-     * @called_by KSEF::downloadUPO(), submitInvoice()
-     * @calls makeRequest()
+     * @brief Download UPO
+     * @param $ksefNumber
+     * @param $sessionRef
+     * @return string|false
      */
     public function downloadUPO($ksefNumber, $sessionRef = null)
     {
-        if (!$this->authenticate()) return false;
+        $this->last_upo_hash = null;
+        $this->last_upo_hash_ok = null;
+        if (empty($sessionRef)) {
+            $this->error = 'UPO download failed: Session reference required (KSeF serves the UPO only within the sending session)';
+            return false;
+        }
+        $this->authenticate();
 
-        try {
-            if (!empty($sessionRef)) {
-                $endpoint = "/sessions/{$sessionRef}/invoices/ksef/{$ksefNumber}/upo";
-            } else {
-                $endpoint = "/invoices/{$ksefNumber}/upo";
+        $endpoint = "/sessions/{$sessionRef}/invoices/ksef/{$ksefNumber}/upo";
+        $upoXml = $this->fetchUpo($endpoint);
+        if ($upoXml !== false) return $upoXml;
+        dol_syslog("KsefClient::downloadUPO failed - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
+        $this->error = !empty($this->error) ? $this->error : 'Failed to download UPO';
+        return false;
+    }
+
+    /**
+     * @brief Fetch checked UPO
+     * @param string $endpoint
+     * @return string|false
+     */
+    private function fetchUpo($endpoint)
+    {
+        $this->last_upo_hash = null;
+        $this->last_upo_hash_ok = null;
+        $upoXml = $this->makeRequest('GET', $endpoint, null, array('Accept: application/xml'), array('auth' => true, 'retry' => 'safe'));
+        if ($upoXml === false || $upoXml === '') {
+            return false;
+        }
+        $header = (string) ($this->last_response_headers['x-ms-meta-hash'] ?? '');
+        if ($header !== '') {
+            $this->last_upo_hash = $header;
+            $this->last_upo_hash_ok = hash_equals($header, base64_encode(hash('sha256', $upoXml, true)));
+            if (!$this->last_upo_hash_ok) {
+                $this->error = 'UPO hash mismatch (x-ms-meta-hash): the downloaded UPO is damaged';
+                dol_syslog("KsefClient: " . $this->error . " - $endpoint", LOG_WARNING);
+                return false;
             }
-            $upoXml = $this->makeRequest('GET', $endpoint, null, array("Authorization: Bearer {$this->session_token}", 'Accept: application/octet-stream'));
-            if ($upoXml) return $upoXml;
-            dol_syslog("KsefClient::downloadUPO failed - HTTP " . $this->last_http_code . " - " . $this->error, LOG_WARNING);
-            throw new Exception("Failed to download UPO");
-        } catch (Exception $e) {
-            $this->error = "UPO download failed: " . $e->getMessage();
+        }
+        return $upoXml;
+    }
+
+    /**
+     * @brief List sessions
+     * @param array $filters
+     * @param string|null $continuationToken
+     * @return array|false
+     */
+    public function listSessions($filters = array(), $continuationToken = null)
+    {
+        $this->authenticate();
+        $filters = (array) $filters;
+        $query = array('sessionType' => !empty($filters['sessionType']) ? $filters['sessionType'] : 'Online');
+        foreach (array('referenceNumber', 'dateCreatedFrom', 'dateCreatedTo', 'dateClosedFrom', 'dateClosedTo', 'dateModifiedFrom', 'dateModifiedTo', 'pageSize') as $k) {
+            if (isset($filters[$k]) && $filters[$k] !== '' && $filters[$k] !== null) {
+                $v = $filters[$k];
+                $query[$k] = (strpos($k, 'date') === 0 && is_numeric($v)) ? gmdate('Y-m-d\TH:i:s\Z', (int) $v) : $v;
+            }
+        }
+        $qs = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+        foreach ((array) ($filters['statuses'] ?? array()) as $st) {
+            $qs .= '&statuses=' . rawurlencode($st);
+        }
+        $headers = array('Accept: application/json');
+        if (!empty($continuationToken)) {
+            $headers[] = 'x-continuation-token: ' . $continuationToken;
+        }
+        $resp = $this->makeRequest('GET', '/sessions', null, $headers, array('auth' => true, 'retry' => 'safe', 'query' => $qs));
+        if (!$resp) {
+            $this->error = $this->failText('Session list failed');
+            return false;
+        }
+        $data = json_decode($resp, true);
+        if (!is_array($data)) {
+            $this->error = 'Session list failed: invalid response';
+            return false;
+        }
+        $out = array();
+        foreach ((array) ($data['sessions'] ?? array()) as $sess) {
+            if (!is_array($sess)) {
+                continue;
+            }
+            $out[] = array(
+                'reference_number' => $sess['referenceNumber'] ?? null,
+                'status_code' => isset($sess['status']['code']) ? (int) $sess['status']['code'] : null,
+                'status_description' => (string) ($sess['status']['description'] ?? ''),
+                'date_created' => $sess['dateCreated'] ?? null,
+                'date_updated' => $sess['dateUpdated'] ?? null,
+                'valid_until' => $sess['validUntil'] ?? null,
+                'total_count' => (int) ($sess['totalInvoiceCount'] ?? 0),
+                'successful_count' => (int) ($sess['successfulInvoiceCount'] ?? 0),
+                'failed_count' => (int) ($sess['failedInvoiceCount'] ?? 0),
+            );
+        }
+        return array('sessions' => $out, 'continuation_token' => !empty($data['continuationToken']) ? $data['continuationToken'] : null);
+    }
+
+    /**
+     * @brief API request
+     * @param $method
+     * @param $endpoint
+     * @param $data
+     * @param $headers
+     * @param array $opts
+     * @return string|false
+     */
+    protected function makeRequest($method, $endpoint, $data = null, $headers = array(), $opts = array())
+    {
+        $auth = !empty($opts['auth']);
+        $retry = isset($opts['retry']) ? $opts['retry'] : false;
+        $path = $endpoint . (!empty($opts['query']) ? '?' . $opts['query'] : '');
+        $reauthed = false;
+        $retried = false;
+        while (true) {
+            $h = $headers;
+            if ($auth) {
+                $h[] = "Authorization: Bearer {$this->session_token}";
+            }
+            $response = $this->httpOnce($method, $path, $data, $h);
+            if ($response !== false) {
+                return $response;
+            }
+            if ($auth && !$reauthed && !$this->in_reauth && (int) $this->last_http_code === 401) {
+                $reauthed = true;
+                $failed = $this->errorState();
+                if ($this->reauthenticate()) {
+                    continue;
+                }
+                $this->restoreErrorState($failed);
+                return false;
+            }
+            if (!$retried && $retry) {
+                $wait = $this->retryWait($retry);
+                if ($wait !== false) {
+                    $retried = true;
+                    dol_syslog("KsefClient: $method $endpoint failed (HTTP " . (int) $this->last_http_code . "), retrying once in {$wait} s", LOG_WARNING);
+                    $this->pause($wait);
+                    continue;
+                }
+            }
             return false;
         }
     }
 
     /**
-     * @brief Makes HTTP request to KSeF API
-     * @param $method HTTP method
-     * @param $endpoint API endpoint
-     * @param $data Request data
-     * @param $headers HTTP headers
-     * @return string|false Response or false
-     * @called_by authenticate(), submitInvoice(), checkStatus(), downloadUPO()
-     * @calls parseErrorResponse(), formatErrorMessage()
+     * @brief Retry delay
+     * @param string $retry 'safe' or 'rate'
+     * @return int|false
      */
-    protected function makeRequest($method, $endpoint, $data = null, $headers = array())
+    private function retryWait($retry)
+    {
+        $http = (int) $this->last_http_code;
+        if ($http === 429) {
+            $wait = (int) $this->retry_after_seconds;
+            if ($wait > (int) $this->retry_wait_cap) {
+                dol_syslog("KsefClient: rate limited, Retry-After {$wait} s is above the {$this->retry_wait_cap} s cap: not retried", LOG_WARNING);
+                return false;
+            }
+            return max(0, $wait);
+        }
+        if ($retry !== 'safe') {
+            return false;
+        }
+        if (in_array($http, array(500, 502, 503, 504), true)) {
+            return 1;
+        }
+        // nothing reached KSeF
+        if ($http === 0 && in_array((int) $this->last_curl_errno, array(6, 7), true)) {
+            return 1;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Wait seconds
+     * @param float $seconds
+     * @return void
+     */
+    private function pause($seconds)
+    {
+        if ($seconds <= 0 || (defined('KSEF_ALLOW_TEST_OVERRIDE') && constant('KSEF_ALLOW_TEST_OVERRIDE') && getDolGlobalString('KSEF_TEST_SKIP_SLEEP'))) {
+            return;
+        }
+        usleep((int) round($seconds * 1000000));
+    }
+
+    /**
+     * @brief Poll backoff
+     * @param int $attempt 1-based
+     * @param float $cap Max wait
+     * @return void
+     */
+    private function pollWait($attempt, $cap = 2)
+    {
+        $this->pause(min($cap, 0.5 * pow(2, max(0, $attempt - 1))));
+    }
+
+    /**
+     * @brief Save error fields
+     * @return array
+     */
+    private function errorState()
+    {
+        return array($this->error, $this->last_error_code, $this->last_error_details, $this->last_http_code, $this->retry_after_seconds, $this->last_transport_error);
+    }
+
+    /**
+     * @brief Restore error fields
+     * @param array $state
+     * @return void
+     */
+    private function restoreErrorState($state)
+    {
+        list($this->error, $this->last_error_code, $this->last_error_details, $this->last_http_code, $this->retry_after_seconds, $this->last_transport_error) = $state;
+    }
+
+    /**
+     * @brief Append failure reason
+     * @param string $what
+     * @return string
+     */
+    private function failText($what)
+    {
+        return $what . (!empty($this->error) ? ': ' . $this->error : '');
+    }
+
+    /**
+     * @brief Reauthenticate after 401
+     * @return bool
+     */
+    private function reauthenticate()
+    {
+        $this->in_reauth = true;
+        $this->session_token = null;
+        $this->session_expiry = null;
+        try {
+            if (!empty($this->refresh_token)) {
+                $resp = $this->makeRequest('POST', '/auth/token/refresh', null, array("Authorization: Bearer {$this->refresh_token}", 'Accept: application/json'));
+                $data = $resp ? json_decode($resp, true) : null;
+                if (!empty($data['accessToken']['token'])) {
+                    $this->session_token = $data['accessToken']['token'];
+                    $this->session_expiry = isset($data['accessToken']['validUntil']) ? strtotime($data['accessToken']['validUntil']) : null;
+                    dol_syslog("KsefClient: access token refused (401), new one obtained with the refresh token", LOG_WARNING);
+                    return true;
+                }
+                $this->refresh_token = null;
+            }
+            dol_syslog("KsefClient: access token refused (401), authenticating again", LOG_WARNING);
+            return $this->authenticate();
+        } catch (Exception $e) {
+            $this->error = 'Re-authentication failed: ' . $e->getMessage();
+            dol_syslog("KsefClient: " . $this->error, LOG_WARNING);
+            return false;
+        } finally {
+            $this->in_reauth = false;
+        }
+    }
+
+    /**
+     * @brief Log system warning
+     * @param string $raw Header value
+     * @param string $endpoint
+     * @return void
+     */
+    private function noteSystemWarning($raw, $endpoint)
+    {
+        $found = array();
+        if (preg_match_all('/\[([^\]]+)\]: ([^|]+)/', $raw, $m, PREG_SET_ORDER)) {
+            foreach ($m as $w) {
+                $found[trim($w[1])] = trim($w[2]);
+            }
+        } else {
+            $found[''] = trim($raw);
+        }
+        foreach ($found as $code => $msg) {
+            if (array_key_exists($code, $this->system_warnings)) {
+                continue;
+            }
+            $this->system_warnings[$code] = $msg;
+            dol_syslog("KsefClient: KSeF system warning on $endpoint: " . ($code !== '' ? "[$code]: " : '') . $msg, LOG_WARNING);
+        }
+    }
+
+    /**
+     * @brief Single HTTP call
+     * @param $method
+     * @param $endpoint
+     * @param $data
+     * @param $headers
+     * @return string|false
+     */
+    private function httpOnce($method, $endpoint, $data = null, $headers = array())
     {
         $url = $this->api_url . $endpoint;
+        $this->last_transport_error = false;
+        $this->last_error_code = null;
+        $this->last_error_details = array();
+        $this->last_curl_errno = 0;
 
-        $defaultHeaders = array(
-            'Accept: application/json',
-            'User-Agent: Dolibarr-KSeF/2.0',
-        );
+        $hasAccept = false;
+        $hasErrorFormat = false;
+        foreach ($headers as $hdr) {
+            $hasAccept = $hasAccept || stripos($hdr, 'Accept:') === 0;
+            $hasErrorFormat = $hasErrorFormat || stripos($hdr, 'X-Error-Format:') === 0;
+        }
+        $defaultHeaders = $hasAccept ? array() : array('Accept: application/json');
+        if (!$hasErrorFormat) {
+            $defaultHeaders[] = 'X-Error-Format: problem-details';
+        }
+        $defaultHeaders[] = 'User-Agent: Dolibarr-KSeF/2.0';
         $headers = array_merge($defaultHeaders, $headers);
 
         $this->retry_after_seconds = null;
@@ -1256,6 +1811,7 @@ class KsefClient
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+        ksefCurlApplyProxy($ch);
 
         curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($curl, $header) use (&$responseHeaders) {
             $len = strlen($header);
@@ -1284,13 +1840,20 @@ class KsefClient
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
+        $this->last_curl_errno = curl_errno($ch);
         curl_close($ch);
 
         $this->last_http_code = $httpCode;
+        $this->last_response_headers = $responseHeaders;
 
-        if ($curlError) {
-            $this->error = "Curl error: $curlError";
-            dol_syslog("KsefClient::makeRequest Curl error: $curlError", LOG_ERR);
+        if (!empty($responseHeaders['x-system-warning'])) {
+            $this->noteSystemWarning($responseHeaders['x-system-warning'], strtok($endpoint, '?'));
+        }
+
+        if ($curlError || (int) $httpCode === 0) {
+            $this->last_transport_error = true;
+            $this->error = "Curl error: " . ($curlError ?: 'no HTTP answer');
+            dol_syslog("KsefClient::makeRequest Curl error: " . ($curlError ?: 'no HTTP answer'), LOG_ERR);
             return false;
         }
 
@@ -1300,7 +1863,8 @@ class KsefClient
             $this->last_error_details = $errorDetails;
 
             if ($httpCode == 429) {
-                if (isset($responseHeaders['retry-after'])) {
+                $this->rate_limited_hits++;
+                if (isset($responseHeaders['retry-after']) && is_numeric($responseHeaders['retry-after'])) {
                     $this->retry_after_seconds = (int)$responseHeaders['retry-after'];
                     dol_syslog("KsefClient::makeRequest Rate limited (429), Retry-After: {$this->retry_after_seconds}s", LOG_WARNING);
                 } else {
@@ -1309,7 +1873,13 @@ class KsefClient
                 }
             }
 
-            $this->error = "HTTP $httpCode: " . $this->formatErrorMessage($errorDetails);
+            $text = $this->formatErrorMessage($errorDetails);
+            if ($text === '') {
+                $plain = array(401 => 'Unauthorized: the access token was refused', 403 => 'Forbidden: missing permissions for this operation',
+                    404 => 'Not found', 429 => 'Too many requests', 500 => 'KSeF internal error', 502 => 'Bad gateway', 503 => 'KSeF unavailable', 504 => 'Gateway timeout');
+                $text = isset($plain[(int) $httpCode]) ? $plain[(int) $httpCode] : 'Unknown error';
+            }
+            $this->error = "HTTP $httpCode" . ($httpCode == 429 ? " (retry after {$this->retry_after_seconds} s)" : '') . ": " . $text;
 
             dol_syslog("KsefClient::makeRequest Error: " . $this->error, LOG_ERR);
             dol_syslog("KsefClient::makeRequest Response: " . $response, LOG_DEBUG);
@@ -1320,115 +1890,58 @@ class KsefClient
         return $response;
     }
 
-
     /**
-     * Fetch KSeF's RSA public key used to encrypt the AES key
-     * @return string|false PEM-encoded public key or false on error
+     * @brief Symmetric key certificate
+     * @param bool $refresh Fetch certificates again
+     * @return string|false
      */
-    public function fetchKsefPublicKey()
+    public function fetchKsefPublicKey($refresh = false)
     {
-        try {
-            $url = $this->api_url . '/security/public-key-certificates';
-            dol_syslog("KsefClient::fetchKsefPublicKey Fetching from: $url", LOG_DEBUG);
-
-            $ch = curl_init();
-            curl_setopt_array($ch, array(
-                CURLOPT_URL => $url,
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_HTTPHEADER => array(
-                    'Accept: application/json',
-                    'Content-Type: application/json'
-                ),
-                CURLOPT_TIMEOUT => 30,
-                CURLOPT_SSL_VERIFYPEER => true,
-            ));
-
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            curl_close($ch);
-
-            if ($response === false) {
-                throw new Exception('cURL error: ' . $curlError);
-            }
-
-            if ($httpCode !== 200) {
-                throw new Exception("HTTP error $httpCode: " . substr($response, 0, 500));
-            }
-
-            $data = json_decode($response, true);
-
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new Exception('Invalid JSON response: ' . json_last_error_msg());
-            }
-
-            dol_syslog("KsefClient::fetchKsefPublicKey Response: " . substr($response, 0, 500), LOG_DEBUG);
-
-            $certificates = null;
-
-            if (isset($data['certificates'])) {
-                $certificates = $data['certificates'];
-            } elseif (is_array($data) && isset($data[0])) {
-                $certificates = $data;
-            }
-
-            if (empty($certificates)) {
-                throw new Exception('No certificates in response. Response: ' . substr($response, 0, 200));
-            }
-
-            dol_syslog("KsefClient::fetchKsefPublicKey Found " . count($certificates) . " certificates", LOG_DEBUG);
-
-            $encryptionCert = null;
-
-            foreach ($certificates as $index => $cert) {
-                $rawUsage = isset($cert['usage']) ? $cert['usage'] : null;
-                $isSymmetricKeyEncryption = false;
-                if (is_array($rawUsage)) {
-                    foreach ($rawUsage as $usageValue) {
-                        if (is_string($usageValue) && stripos($usageValue, 'SymmetricKeyEncryption') !== false) {
-                            $isSymmetricKeyEncryption = true;
-                            break;
-                        }
-                    }
-                } elseif (is_string($rawUsage) && !empty($rawUsage)) {
-                    $isSymmetricKeyEncryption = (stripos($rawUsage, 'SymmetricKeyEncryption') !== false);
-                }
-
-                if ($isSymmetricKeyEncryption) {
-                    $encryptionCert = $cert;
-                    dol_syslog("KsefClient::fetchKsefPublicKey Found SymmetricKeyEncryption certificate at index $index", LOG_INFO);
-                    break;
-                }
-            }
-
-            if (!$encryptionCert) {
-                throw new Exception('No suitable encryption certificate found');
-            }
-
-            $certData = $encryptionCert['certificate'] ?? $encryptionCert['cert'] ?? $encryptionCert['publicKey'] ?? null;
-
-            if (empty($certData)) {
-                throw new Exception('Certificate data is empty');
-            }
-
-            $pemCert = "-----BEGIN CERTIFICATE-----\n"
-                . chunk_split($certData, 64, "\n")
-                . "-----END CERTIFICATE-----\n";
-
-            dol_syslog("KsefClient::fetchKsefPublicKey Successfully loaded certificate", LOG_DEBUG);
-            return $pemCert;
-
-        } catch (Exception $e) {
-            $this->error = "Fetch public key failed: " . $e->getMessage();
+        $key = $this->selectPublicKey('SymmetricKeyEncryption', $refresh);
+        if (!$key) {
+            $this->error = "Fetch public key failed: " . $this->error;
             dol_syslog("KsefClient::fetchKsefPublicKey Error: " . $this->error, LOG_ERR);
             return false;
         }
+        return $key['pem'];
     }
 
+    /**
+     * @brief Encrypt AES key
+     * @param string $aesKey
+     * @param bool $refresh Fetch certificates again
+     * @return array|false
+     */
+    private function encryptSymmetricKey($aesKey, $refresh = false)
+    {
+        $this->loadCrypto();
+        $key = $this->selectPublicKey('SymmetricKeyEncryption', $refresh);
+        if (!$key) {
+            return false;
+        }
+        $pub = PublicKeyLoader::load($key['pem']);
+        $pub = $pub->withPadding(RSA::ENCRYPTION_OAEP)->withHash('sha256')->withMGFHash('sha256');
+        return array('encrypted' => base64_encode($pub->encrypt($aesKey)), 'public_key_id' => $key['public_key_id']);
+    }
 
     /**
-     * Generate export encryption data: local AES-256 key + IV, AES key RSA-encrypted with KSeF public key
-     * @return array|false Encryption data or false on error
+     * @brief Build EncryptionInfo
+     * @param array $enc
+     * @param string $iv
+     * @return array
+     */
+    private function encryptionInfo($enc, $iv)
+    {
+        $info = array('encryptedSymmetricKey' => $enc['encrypted'], 'initializationVector' => base64_encode($iv));
+        if (!empty($enc['public_key_id'])) {
+            $info['publicKeyId'] = $enc['public_key_id'];
+        }
+        return $info;
+    }
+
+    /**
+     * @brief Generate export keys
+     * @return array|false
      */
     public function generateEncryptionData()
     {
@@ -1437,27 +1950,18 @@ class KsefClient
             $aesKey = random_bytes(32);
             $iv = random_bytes(16);
 
-            $publicKeyPem = $this->fetchKsefPublicKey();
-            if (!$publicKeyPem) {
-                throw new Exception("Failed to fetch KSeF public key");
+            $enc = $this->encryptSymmetricKey($aesKey);
+            if (!$enc) {
+                throw new Exception("Failed to fetch KSeF public key: " . $this->error);
             }
-
-            $key = PublicKeyLoader::load($publicKeyPem);
-            $key = $key->withPadding(RSA::ENCRYPTION_OAEP)
-                ->withHash('sha256')
-                ->withMGFHash('sha256');
-
-            $encryptedAesKey = $key->encrypt($aesKey);
+            $this->export_keys[$enc['encrypted']] = array($aesKey, $iv);
 
             dol_syslog("KsefClient::generateEncryptionData Generated AES key and encrypted with RSA (OAEP SHA-256)", LOG_DEBUG);
 
             return array(
                 'aes_key' => $aesKey,
                 'iv' => $iv,
-                'encryption_info' => array(
-                    'encryptedSymmetricKey' => base64_encode($encryptedAesKey),
-                    'initializationVector' => base64_encode($iv),
-                ),
+                'encryption_info' => $this->encryptionInfo($enc, $iv),
             );
 
         } catch (Exception $e) {
@@ -1468,23 +1972,19 @@ class KsefClient
     }
 
     /**
-     * Initialize HWM-based invoice export
-     * @param string $fromDateISO Start date in ISO 8601 format (continuation point)
-     * @param string $subjectType Subject type: 'subject1', 'subject2', etc.
-     * @param array $encryptionInfo Encryption info from generateEncryptionData()['encryption_info']
-     * @param string|null $toDateISO Optional end date (omit for continuous sync)
-     * @return array|false Response with referenceNumber or false on error
+     * @brief Start HWM export
+     * @param string $fromDateISO
+     * @param string $subjectType
+     * @param array $encryptionInfo
+     * @param string|null $toDateISO
+     * @return array|false
      */
     public function initHwmExport($fromDateISO, $subjectType, $encryptionInfo, $toDateISO = null)
     {
-        if (!$this->authenticate()) {
-            $this->error = "Authentication failed";
-            return false;
-        }
-
         try {
+            $this->authenticate();
             $dateRange = array(
-                'dateType' => 'permanentStorage',
+                'dateType' => 'PermanentStorage',
                 'from' => $fromDateISO,
                 'restrictToPermanentStorageHwmDate' => true,
             );
@@ -1495,23 +1995,29 @@ class KsefClient
 
             $exportRequest = array(
                 'filters' => array(
-                    'subjectType' => strtolower($subjectType),
+                    'subjectType' => ucfirst(strtolower($subjectType)),
                     'dateRange' => $dateRange,
                 ),
                 'encryption' => $encryptionInfo,
             );
 
-            $response = $this->makeRequest(
-                'POST',
-                '/invoices/exports',
-                json_encode($exportRequest),
-                array(
-                    "Authorization: Bearer {$this->session_token}",
-                    'Content-Type: application/json',
-                    'Accept: application/json',
-                    'X-KSeF-Feature: include-metadata',
-                )
-            );
+            $response = $this->makeRequest('POST', '/invoices/exports', json_encode($exportRequest), array(
+                'Content-Type: application/json',
+                'Accept: application/json',
+            ), array('auth' => true, 'retry' => 'rate'));
+
+            $raw = $this->export_keys[$encryptionInfo['encryptedSymmetricKey'] ?? ''] ?? null;
+            if (!$response && (int) $this->last_error_code === 21470 && $raw !== null) {
+                dol_syslog("KsefClient::initHwmExport 21470: public key withdrawn, encrypting with the current key and starting again", LOG_WARNING);
+                $enc = $this->encryptSymmetricKey($raw[0], true);
+                if ($enc) {
+                    $exportRequest['encryption'] = $this->encryptionInfo($enc, $raw[1]);
+                    $response = $this->makeRequest('POST', '/invoices/exports', json_encode($exportRequest), array(
+                        'Content-Type: application/json',
+                        'Accept: application/json',
+                    ), array('auth' => true, 'retry' => 'rate'));
+                }
+            }
 
             if (!$response) {
                 throw new Exception('Failed to init export: ' . $this->error);
@@ -1538,27 +2044,15 @@ class KsefClient
     }
 
     /**
-     * Get export status with HWM data
-     * @param string $referenceNumber Export reference number
-     * @return array|false Status data or false on error
+     * @brief Get export status
+     * @param string $referenceNumber
+     * @return array|false
      */
     public function getExportStatus($referenceNumber)
     {
-        if (!$this->authenticate()) {
-            $this->error = "Authentication failed";
-            return false;
-        }
-
         try {
-            $response = $this->makeRequest(
-                'GET',
-                '/invoices/exports/' . urlencode($referenceNumber),
-                null,
-                array(
-                    "Authorization: Bearer {$this->session_token}",
-                    'Accept: application/json'
-                )
-            );
+            $this->authenticate();
+            $response = $this->makeRequest('GET', '/invoices/exports/' . urlencode($referenceNumber), null, array('Accept: application/json'), array('auth' => true, 'retry' => 'safe'));
 
             if (!$response) {
                 throw new Exception('Failed to get export status: ' . $this->error);
@@ -1569,6 +2063,7 @@ class KsefClient
             $result = array(
                 'status' => 'PROCESSING',
                 'processingCode' => null,
+                'description' => isset($data['status']['description']) ? (string) $data['status']['description'] : '',
                 'parts' => array(),
                 'isTruncated' => false,
                 'permanentStorageHwmDate' => null,
@@ -1589,10 +2084,13 @@ class KsefClient
 
                 if ($code === 200) {
                     $result['status'] = 'COMPLETED';
-                } elseif ($code >= 400) {
-                    $result['status'] = 'FAILED';
                 } elseif ($code >= 100 && $code < 200) {
                     $result['status'] = 'PROCESSING';
+                } else {
+                    $result['status'] = 'FAILED';
+                    if ($result['description'] === '') {
+                        $result['description'] = $code === 210 ? 'Export expired, the package is no longer available' : 'Export failed';
+                    }
                 }
             }
 
@@ -1636,10 +2134,9 @@ class KsefClient
     }
 
     /**
-     * Download a package part
-     *
-     * @param array $part Part info with 'url' or 'partUrl'
-     * @return string|false Encrypted binary data or false on error
+     * @brief Download package part
+     * @param array $part
+     * @return string|false
      */
     public function downloadPackagePart($part)
     {
@@ -1658,38 +2155,50 @@ class KsefClient
                 $url = $this->api_url . $partUrl;
             }
 
-            $isStorageUrl = (strpos($url, '/storage/') !== false);
-
-            $headers = array('Accept: application/octet-stream');
-
-            if (!$isStorageUrl) {
-                if (!$this->authenticate()) {
-                    $this->error = "Authentication failed";
-                    return false;
+            $this->last_part_hash = '';
+            for ($attempt = 1; ; $attempt++) {
+                $partHeaders = array();
+                $httpCode = 0;
+                $curlError = '';
+                $hopUrl = $url;
+                // token stays on-host
+                for ($hop = 0; ; $hop++) {
+                    $response = $this->partRequestOnce($hopUrl, $partHeaders, $httpCode, $curlError);
+                    if ($curlError || $httpCode < 300 || $httpCode >= 400 || empty($partHeaders['location'])) {
+                        break;
+                    }
+                    if ($hop >= 5) {
+                        throw new Exception("Too many redirects");
+                    }
+                    $next = $this->resolvePartRedirect($hopUrl, $partHeaders['location']);
+                    if ($next === '') {
+                        throw new Exception("Redirect to an unsupported URL");
+                    }
+                    $hopUrl = $next;
                 }
-                $headers[] = "Authorization: Bearer {$this->session_token}";
+
+                $this->last_http_code = $httpCode;
+                $this->retry_after_seconds = null;
+                if ($httpCode === 429) {
+                    $this->rate_limited_hits++;
+                    $this->retry_after_seconds = isset($partHeaders['retry-after']) && is_numeric($partHeaders['retry-after']) ? (int) $partHeaders['retry-after'] : 60;
+                }
+                if (!$curlError && $httpCode > 0 && $httpCode < 400) {
+                    break;
+                }
+                $wait = $attempt === 1 ? $this->retryWait('safe') : false;
+                if ($wait === false) {
+                    if ($curlError) {
+                        throw new Exception("Curl error: $curlError");
+                    }
+                    throw new Exception("HTTP $httpCode" . ($httpCode === 429 ? " (retry after {$this->retry_after_seconds} s)" : ''));
+                }
+                dol_syslog("KsefClient::downloadPackagePart HTTP $httpCode" . ($curlError ? " ($curlError)" : '') . ", retrying once in {$wait} s", LOG_WARNING);
+                $this->pause($wait);
             }
 
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 120);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-
-            $response = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $curlError = curl_error($ch);
-            curl_close($ch);
-
-            if ($curlError) {
-                throw new Exception("Curl error: $curlError");
-            }
-
-            if ($httpCode >= 400) {
-                throw new Exception("HTTP $httpCode");
-            }
-
+            $this->last_response_headers = $partHeaders;
+            $this->last_part_hash = (string) ($partHeaders['x-ms-meta-hash'] ?? '');
             dol_syslog("KsefClient::downloadPackagePart Downloaded " . strlen($response) . " bytes", LOG_DEBUG);
             return $response;
 
@@ -1701,11 +2210,131 @@ class KsefClient
     }
 
     /**
-     * Decrypt package data using AES key
-     * @param string $encryptedData Encrypted binary data
-     * @param string $aesKey AES-256 key (32 bytes, raw)
-     * @param string $iv IV (16 bytes, raw)
-     * @return string|false Decrypted data or false on error
+     * @brief GET part once
+     * @param string $url
+     * @param array $partHeaders Out: headers
+     * @param int $httpCode Out
+     * @param string $curlError Out
+     * @return string|false
+     */
+    private function partRequestOnce($url, &$partHeaders, &$httpCode, &$curlError)
+    {
+        $headers = array('Accept: application/octet-stream');
+        if ($this->partUrlGetsToken($url)) {
+            $this->authenticate();
+            $headers[] = "Authorization: Bearer {$this->session_token}";
+        }
+
+        $partHeaders = array();
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+        curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        ksefCurlApplyProxy($ch);
+        curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $header) use (&$partHeaders) {
+            $p = explode(':', $header, 2);
+            if (count($p) === 2) {
+                $partHeaders[strtolower(trim($p[0]))] = trim($p[1]);
+            }
+            return strlen($header);
+        });
+
+        $response = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        $this->last_curl_errno = curl_errno($ch);
+        curl_close($ch);
+
+        return $response;
+    }
+
+    /**
+     * @brief URL gets token
+     * @param string $url
+     * @return bool
+     */
+    private function partUrlGetsToken($url)
+    {
+        // presigned: own signature
+        if (strpos($url, '/storage/') !== false) {
+            return false;
+        }
+        $target = parse_url($url);
+        $api = parse_url($this->api_url);
+        if (!is_array($target) || !is_array($api) || empty($target['host']) || empty($api['host'])) {
+            return false;
+        }
+        $defaultPorts = array('http' => 80, 'https' => 443);
+        $targetScheme = strtolower($target['scheme'] ?? '');
+        $apiScheme = strtolower($api['scheme'] ?? '');
+        $targetPort = isset($target['port']) ? (int) $target['port'] : ($defaultPorts[$targetScheme] ?? 0);
+        $apiPort = isset($api['port']) ? (int) $api['port'] : ($defaultPorts[$apiScheme] ?? 0);
+        return $targetScheme === $apiScheme && strtolower($target['host']) === strtolower($api['host']) && $targetPort === $apiPort;
+    }
+
+    /**
+     * @brief Resolve redirect URL
+     * @param string $current
+     * @param string $location
+     * @return string '' when unusable
+     */
+    private function resolvePartRedirect($current, $location)
+    {
+        if (preg_match('#^https?://#i', $location)) {
+            return $location;
+        }
+        if (preg_match('#^[a-z][a-z0-9+.-]*:#i', $location)) {
+            return '';
+        }
+        $base = parse_url($current);
+        if (!is_array($base) || empty($base['scheme']) || empty($base['host'])) {
+            return '';
+        }
+        if (strpos($location, '//') === 0) {
+            return $base['scheme'] . ':' . $location;
+        }
+        $origin = $base['scheme'] . '://' . $base['host'] . (isset($base['port']) ? ':' . $base['port'] : '');
+        if (strpos($location, '/') === 0) {
+            return $origin . $location;
+        }
+        $dir = isset($base['path']) ? substr($base['path'], 0, strrpos($base['path'], '/') + 1) : '/';
+        return $origin . ($dir === '' ? '/' : $dir) . $location;
+    }
+
+    /**
+     * @brief Verify export part
+     * @param array $part
+     * @param string $encrypted
+     * @param string|null $decrypted Null: skip
+     * @return string '' on match
+     */
+    public function verifyPartHash($part, $encrypted, $decrypted = null)
+    {
+        $checks = array(array('encryptedPartHash', 'encryptedPartSize', $encrypted));
+        if ($decrypted !== null) {
+            $checks[] = array('partHash', 'partSize', $decrypted);
+        }
+        foreach ($checks as $c) {
+            list($hashKey, $sizeKey, $bytes) = $c;
+            if (isset($part[$sizeKey]) && is_numeric($part[$sizeKey]) && (int) $part[$sizeKey] !== strlen((string) $bytes)) {
+                return "$sizeKey mismatch (" . strlen((string) $bytes) . " bytes, expected " . (int) $part[$sizeKey] . ")";
+            }
+            if (!empty($part[$hashKey]) && !hash_equals((string) $part[$hashKey], base64_encode(hash('sha256', (string) $bytes, true)))) {
+                return "$hashKey mismatch";
+            }
+        }
+        return '';
+    }
+
+    /**
+     * @brief Decrypt package
+     * @param string $encryptedData
+     * @param string $aesKey 32 bytes
+     * @param string $iv 16 bytes
+     * @return string|false
      */
     public function decryptPackageData($encryptedData, $aesKey, $iv)
     {
@@ -1733,72 +2362,15 @@ class KsefClient
     }
 
     /**
-     * Download and decrypt package to a temp file
-     * @param array $parts Package parts from getExportStatus
-     * @param string $aesKey AES decryption key
-     * @param string $iv Initialization vector
-     * @return string|false Path to temp file containing decrypted ZIP, or false on error
-     */
-    public function downloadPackageToFile($parts, $aesKey, $iv)
-    {
-        try {
-            if (empty($parts)) {
-                return false;
-            }
-
-            $tempFile = tempnam(sys_get_temp_dir(), 'ksef_dl_');
-            if ($tempFile === false) {
-                throw new Exception("Failed to create temp file");
-            }
-
-            $fp = fopen($tempFile, 'wb');
-            if ($fp === false) {
-                throw new Exception("Failed to open temp file for writing");
-            }
-
-            foreach ($parts as $index => $part) {
-                $encrypted = $this->downloadPackagePart($part);
-                if ($encrypted === false) {
-                    fclose($fp);
-                    @unlink($tempFile);
-                    throw new Exception("Failed to download part $index");
-                }
-
-                $decrypted = $this->decryptPackageData($encrypted, $aesKey, $iv);
-                if ($decrypted === false) {
-                    fclose($fp);
-                    @unlink($tempFile);
-                    throw new Exception("Failed to decrypt part $index");
-                }
-
-                fwrite($fp, $decrypted);
-                unset($encrypted, $decrypted);
-            }
-
-            fclose($fp);
-
-            $fileSize = filesize($tempFile);
-            dol_syslog("KsefClient::downloadPackageToFile Saved {$fileSize} bytes to {$tempFile}", LOG_INFO);
-
-            return $tempFile;
-
-        } catch (Exception $e) {
-            $this->error = "Download to file failed: " . $e->getMessage();
-            dol_syslog("KsefClient::downloadPackageToFile Error: " . $this->error, LOG_ERR);
-            return false;
-        }
-    }
-
-
-    /**
-     * Process ZIP package in batches - otherwise OOM error if not
-     * @param string $zipFilePath Path to ZIP file
-     * @param int $batchSize Number of invoices per batch (default 1000)
-     * @param callable $callback Function to call for each batch: function($batch, $batchNum, $totalFiles)
-     * @return array|false Summary ['total' => X, 'batches' => Y, 'metadata' => [...]] or false on error
+     * @brief Process ZIP batches
+     * @param string $zipFilePath
+     * @param int $batchSize
+     * @param callable $callback
+     * @return array|false
      */
     public function processPackageInBatches($zipFilePath, $batchSize, $callback)
     {
+        $zip = null;
         try {
             if (!file_exists($zipFilePath)) {
                 throw new Exception("ZIP file not found: $zipFilePath");
@@ -1808,6 +2380,7 @@ class KsefClient
             $openResult = $zip->open($zipFilePath);
 
             if ($openResult !== true) {
+                $zip = null;
                 throw new Exception("Failed to open ZIP: error $openResult");
             }
 
@@ -1815,23 +2388,29 @@ class KsefClient
             dol_syslog("KsefClient::processPackageInBatches Opening ZIP with {$totalFiles} files, batch size {$batchSize}", LOG_INFO);
 
             $metadata = array();
+            $metaIndex = $zip->locateName('_metadata.json', ZipArchive::FL_NOCASE);
+            if ($metaIndex !== false) {
+                $decoded = json_decode((string) $zip->getFromIndex($metaIndex), true);
+                $list = is_array($decoded) ? ($decoded['invoices'] ?? $decoded) : array();
+                foreach ((array) $list as $m) {
+                    if (is_array($m) && !empty($m['ksefNumber'])) {
+                        $metadata[(string) $m['ksefNumber']] = $m;
+                    }
+                }
+            }
+
             $batch = array();
             $batchNum = 0;
             $invoiceCount = 0;
+            $seen = array();
 
             for ($i = 0; $i < $totalFiles; $i++) {
                 $filename = $zip->getNameIndex($i);
+
+                if (strcasecmp($filename, '_metadata.json') === 0 || !preg_match('/\.xml$/i', $filename)) {
+                    continue;
+                }
                 $content = $zip->getFromIndex($i);
-
-                if (strcasecmp($filename, '_metadata.json') === 0) {
-                    $decoded = json_decode($content, true);
-                    $metadata = $decoded['invoices'] ?? $decoded ?? array();
-                    continue;
-                }
-
-                if (!preg_match('/\.xml$/i', $filename)) {
-                    continue;
-                }
 
                 $ksefNumber = $this->extractKsefNumberFromContent($content, $filename);
                 if ($ksefNumber) {
@@ -1839,6 +2418,7 @@ class KsefClient
                         dol_syslog("KsefClient::processPackageInBatches WARNING: duplicate KSeF number {$ksefNumber} from file {$filename} - overwriting previous entry", LOG_WARNING);
                     }
                     $batch[$ksefNumber] = $content;
+                    $seen[$ksefNumber] = true;
                     $invoiceCount++;
                 } else {
                     dol_syslog("KsefClient::processPackageInBatches WARNING: could not extract KSeF number from file {$filename} - skipping", LOG_WARNING);
@@ -1847,7 +2427,7 @@ class KsefClient
                 if (count($batch) >= $batchSize) {
                     $batchNum++;
                     dol_syslog("KsefClient::processPackageInBatches Processing batch {$batchNum} ({$invoiceCount} invoices so far)", LOG_INFO);
-                    $callback($batch, $batchNum, $totalFiles);
+                    $callback($batch, $batchNum, $totalFiles, $metadata);
                     $batch = array();
                 }
             }
@@ -1855,7 +2435,7 @@ class KsefClient
             if (!empty($batch)) {
                 $batchNum++;
                 dol_syslog("KsefClient::processPackageInBatches Processing final batch {$batchNum} ({$invoiceCount} invoices total)", LOG_INFO);
-                $callback($batch, $batchNum, $totalFiles);
+                $callback($batch, $batchNum, $totalFiles, $metadata);
             }
 
             $zip->close();
@@ -1865,21 +2445,24 @@ class KsefClient
                 'total' => $invoiceCount,
                 'batches' => $batchNum,
                 'metadata' => $metadata,
+                'missing' => array_values(array_diff(array_keys($metadata), array_keys($seen))),
             );
 
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+            if ($zip) {
+                @$zip->close();
+            }
             $this->error = "Batch processing failed: " . $e->getMessage();
             dol_syslog("KsefClient::processPackageInBatches Error: " . $this->error, LOG_ERR);
             return false;
         }
     }
 
-
     /**
-     * Extract KSeF number
-     * @param string $content XML content
-     * @param string $filename Original filename
-     * @return string|null KSeF number
+     * @brief Extract KSeF number
+     * @param string $content
+     * @param string $filename
+     * @return string|null
      */
     private function extractKsefNumberFromContent($content, $filename)
     {

@@ -13,7 +13,6 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 CREATE TABLE llx_ksef_incoming
 (
     rowid                       INTEGER AUTO_INCREMENT PRIMARY KEY NOT NULL,
@@ -24,16 +23,16 @@ CREATE TABLE llx_ksef_incoming
 -- Seller (Podmiot1)
     seller_nip                  VARCHAR(20),
     seller_vat_id               VARCHAR(50),
-    seller_name                 VARCHAR(255),
+    seller_name                 VARCHAR(512),
     seller_country              VARCHAR(2) DEFAULT 'PL',
     seller_address              TEXT,
 
 -- Buyer (Podmiot2)
-    buyer_nip                   VARCHAR(20),
-    buyer_name                  VARCHAR(255),
+    buyer_nip                   VARCHAR(50),
+    buyer_name                  VARCHAR(512),
 
 -- Invoice Header
-    invoice_number              VARCHAR(100),
+    invoice_number              VARCHAR(256),
     invoice_type                VARCHAR(10),
     invoice_date                INTEGER,
     sale_date                   INTEGER,
@@ -59,7 +58,7 @@ CREATE TABLE llx_ksef_incoming
 
 -- Correction Reference
     corrected_ksef_number       VARCHAR(50),
-    corrected_invoice_number    VARCHAR(100),
+    corrected_invoice_number    VARCHAR(256),
     corrected_invoice_date      INTEGER,
     correction_data             MEDIUMTEXT,
 
@@ -68,7 +67,7 @@ CREATE TABLE llx_ksef_incoming
 
 -- Metadata
     fa3_creation_date           INTEGER,
-    fa3_system_info             VARCHAR(255),
+    fa3_system_info             VARCHAR(256),
 
 -- Fetch Metadata
     fetch_date                  INTEGER NOT NULL,
@@ -82,4 +81,4 @@ CREATE TABLE llx_ksef_incoming
     import_error                TEXT,
     entity                      INTEGER DEFAULT 1
 
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+) ENGINE=innodb;

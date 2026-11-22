@@ -57,22 +57,32 @@ if (!$res) {
 require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
 require_once DOL_DOCUMENT_ROOT . '/core/class/html.form.class.php';
 dol_include_once('/ksef/lib/ksef.lib.php');
+dol_include_once('/ksef/lib/ksef_tour.lib.php');
 
 if (!$user->admin) {
     accessforbidden();
 }
 
-$langs->loadLangs(array("admin", "ksef@ksef"));
+$langs->loadLangs(array("admin", "bills", "ksef@ksef"));
 
 $action = GETPOST('action', 'aZ09');
 
 if ($action == 'update') {
-    // Auto-create suppliers
     dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_SUPPLIERS', GETPOST('KSEF_BATCH_AUTO_CREATE_SUPPLIERS', 'int') ? '1' : '0', 'chaine', 0, '', $conf->entity);
-    // Auto-create products
     dolibarr_set_const($db, 'KSEF_BATCH_AUTO_CREATE_PRODUCTS', GETPOST('KSEF_BATCH_AUTO_CREATE_PRODUCTS', 'int') ? '1' : '0', 'chaine', 0, '', $conf->entity);
-    // Use INDEKS as product ref
     dolibarr_set_const($db, 'KSEF_PRODUCT_REF_USE_INDEKS', GETPOST('KSEF_PRODUCT_REF_USE_INDEKS', 'int') ? '1' : '0', 'chaine', 0, '', $conf->entity);
+    $importModes = array();
+    $postedModes = GETPOST('ksef_importmode', 'array');
+    if (is_array($postedModes)) {
+        foreach ($postedModes as $formCode => $payCode) {
+            $formCode = (string) $formCode;
+            $payCode = preg_replace('/[^A-Za-z0-9_]/', '', (string) $payCode);
+            if (preg_match('/^[1-7]$/', $formCode) && $payCode !== '') {
+                $importModes[$formCode] = $payCode;
+            }
+        }
+    }
+    dolibarr_set_const($db, 'KSEF_IMPORT_PAYMENT_MODE_MAP', $importModes ? json_encode($importModes) : '', 'chaine', 0, '', $conf->entity);
 
     setEventMessages($langs->trans("SetupSaved"), null, 'mesgs');
     header("Location: " . $_SERVER["PHP_SELF"]);
@@ -82,32 +92,32 @@ if ($action == 'update') {
 $form = new Form($db);
 $page_name = "KSEF_Setup";
 
-llxHeader('', $langs->trans($page_name), '');
+llxHeader('', $langs->trans($page_name), ksefHelpUrl('receiving'));
 
 $linkback = '<a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1">' . $langs->trans("KSEF_BackToModuleList") . '</a>';
-print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
+print load_fiche_titre($langs->trans($page_name), ksefHelpTitleButton($user, 'incoming', array('receiving' => 'KSEF_ReceivingInvoices', 'config' => 'KSEF_ConfigurationSection'), array('setup_incoming')) . $linkback, 'title_setup');
 
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'incoming', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
 
-// Reactivation + update banners
 echo ksefShowAdminBanners();
 
-// Config warnings
 $warnings = ksefGetConfigWarnings();
 if (!empty($warnings)) {
     echo ksefRenderConfigWarnings($warnings, 'incoming');
 }
 
-print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '">';
+print '<span class="ksef-tab-intro">' . $langs->trans("KSEF_IncomingSetupIntro") . '</span><br><br>';
+
+print '<form method="POST" action="' . $_SERVER["PHP_SELF"] . '" data-ksef-guarded="1">';
 print '<input type="hidden" name="token" value="' . newToken() . '">';
 print '<input type="hidden" name="action" value="update">';
 
-// Importing Settings
-print '<table class="noborder centpercent">';
-print '<tr class="liste_titre"><td colspan="2">' . $langs->trans("KSEF_IMPORTING_CONFIG") . '</td></tr>';
+print '<div class="ksef-settings-box">';
 
-// Auto-create suppliers
+print '<table class="noborder centpercent">';
+print '<tr class="liste_titre ksef-section-head"><td colspan="2">' . $langs->trans("KSEF_IMPORTING_CONFIG") . ksefSectionDesc('KSEF_IMPORTING_CONFIG_Desc') . '</td></tr>';
+
 print '<tr class="oddeven">';
 print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_SUPPLIERS_SETTING_Help')) . '</td>';
 print '<td>';
@@ -115,7 +125,6 @@ print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_SUPPLIERS" id="KSEF_B
 print ' <label for="KSEF_BATCH_AUTO_CREATE_SUPPLIERS">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
-// Auto-create products
 print '<tr class="oddeven">';
 print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING'), $langs->trans('KSEF_BATCH_AUTO_CREATE_PRODUCTS_SETTING_Help')) . '</td>';
 print '<td>';
@@ -123,7 +132,6 @@ print '<input type="checkbox" name="KSEF_BATCH_AUTO_CREATE_PRODUCTS" id="KSEF_BA
 print ' <label for="KSEF_BATCH_AUTO_CREATE_PRODUCTS">' . $langs->trans("KSEF_Enabled") . '</label>';
 print '</td></tr>';
 
-// Use indeks as product ref
 print '<tr class="oddeven">';
 print '<td class="titlefield">' . $form->textwithpicto($langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING'), $langs->trans('KSEF_PRODUCT_REF_USE_INDEKS_SETTING_Help')) . '</td>';
 print '<td>';
@@ -133,6 +141,29 @@ print '</td></tr>';
 
 print '</table>';
 
+print '<br><table class="noborder centpercent">';
+print '<tr class="liste_titre ksef-section-head"><td colspan="2">' . $form->textwithpicto($langs->trans('KSEF_IMPORT_PAYMENT_MODE_MAP_Title'), $langs->trans('KSEF_IMPORT_PAYMENT_MODE_MAP_Help')) . ksefSectionDesc('KSEF_IMPORT_PAYMENT_MODE_MAP_Title_Desc') . '</td></tr>';
+$_pmmodes = array();
+$_pmres = $db->query("SELECT code, libelle FROM " . MAIN_DB_PREFIX . "c_paiement WHERE active = 1 AND entity IN (" . getEntity('c_paiement') . ") ORDER BY code");
+while ($_pmres && ($_pmp = $db->fetch_object($_pmres))) {
+    $_pmlabel = $langs->transnoentitiesnoconv('PaymentType' . $_pmp->code);
+    if ($_pmlabel === 'PaymentType' . $_pmp->code) {
+        $_pmlabel = $_pmp->libelle;
+    }
+    $_pmmodes[(string) $_pmp->code] = $_pmlabel . ' (' . $_pmp->code . ')';
+}
+$_pmmap = ksefImportPaymentModeMap();
+foreach (ksefImportPaymentModeDefaults() as $_pmform => $_pmdef) {
+    $_pmopts = array('' => $langs->trans('KSEF_ImportPaymentModeDefault', isset($_pmmodes[$_pmdef]) ? $_pmmodes[$_pmdef] : $_pmdef)) + $_pmmodes;
+    print '<tr class="oddeven"><td class="titlefield">' . dol_escape_htmltag($_pmform . ' - ' . ksefGetPaymentMethodLabel((string) $_pmform)) . '</td><td>';
+    print $form->selectarray('ksef_importmode[' . $_pmform . ']', $_pmopts, $_pmmap[$_pmform] ?? '', 0, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+    print '</td></tr>';
+}
+print '</table>';
+
+
+print '</div>';
+
 print '<div class="center" style="margin-top: 10px;">';
 print '<input type="submit" class="button button-save" value="' . $langs->trans("Save") . '">';
 print '</div>';
@@ -140,4 +171,7 @@ print '</form>';
 
 print dol_get_fiche_end();
 
+print ksefAdminDirtyGuardJs();
+print ksefCollapsibleSectionsJs();
+print ksefHelpFooter($db, $user);
 llxFooter();

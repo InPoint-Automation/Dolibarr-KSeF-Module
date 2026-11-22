@@ -56,171 +56,61 @@ if (!$res) {
 
 require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
 dol_include_once('/ksef/lib/ksef.lib.php');
+dol_include_once('/ksef/lib/ksef_tour.lib.php');
 
-if (!$user->admin) {
+if (!ksefUserCanReadModule($user)) {
     accessforbidden();
 }
 
 $langs->loadLangs(array("ksef@ksef", "admin"));
 
-$action = GETPOST('action', 'aZ09');
 $backtopage = GETPOST('backtopage', 'alpha');
 
 $page_name = "KSEF_HowToUse";
 
-// Get current environment
-$current_env = !empty($conf->global->KSEF_ENVIRONMENT) ? $conf->global->KSEF_ENVIRONMENT : 'DEMO';
-
-if ($action == 'testconnection') {
-    dol_include_once('/ksef/class/ksef_client.class.php');
-
-    $environment = $current_env;
-
-    try {
-        $client = new KsefClient($db, $environment);
-        dol_syslog("Testing KSeF connection to $environment environment", LOG_INFO);
-
-        if ($client->testConnection()) {
-            setEventMessages(
-                    $langs->trans('KSEF_CONNECTION_SUCCESS') . ' [' . $environment . ']',
-                    null,
-                    'mesgs'
-            );
-        } else {
-            setEventMessages(
-                    $langs->trans('KSEF_CONNECTION_FAILED') . ': ' . $client->error,
-                    null,
-                    'errors'
-            );
-        }
-    } catch (Exception $e) {
-        dol_syslog("Connection test exception: " . $e->getMessage(), LOG_ERR);
-        setEventMessages(
-                $langs->trans('KSEF_CONNECTION_ERROR') . ': ' . $e->getMessage(),
-                null,
-                'errors'
-        );
-    }
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-if ($action == 'testcertauth') {
-    dol_include_once('/ksef/class/ksef_client.class.php');
-
-    $environment = $current_env;
-
-    $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_env)) &&
-            !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $current_env)) &&
-            !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $current_env));
-
-    if (!$has_auth_cert) {
-        setEventMessages($langs->trans('KSEF_CertificateNotConfigured'), null, 'errors');
-        header("Location: " . $_SERVER["PHP_SELF"]);
-        exit;
-    }
-
-    $envKey = 'KSEF_AUTH_METHOD_' . $current_env;
-    $orig_method = getDolGlobalString($envKey, 'token');
-    $conf->global->$envKey = 'certificate';
-
-    try {
-        $client = new KsefClient($db, $environment);
-
-        if ($client->authenticate()) {
-            setEventMessages(
-                    $langs->trans('KSEF_CERT_AUTH_SUCCESS') . ' [' . $environment . ']',
-                    null,
-                    'mesgs'
-            );
-        } else {
-            setEventMessages(
-                    $langs->trans('KSEF_CERT_AUTH_FAILED') . ': ' . $client->error,
-                    null,
-                    'errors'
-            );
-        }
-    } catch (Exception $e) {
-        setEventMessages(
-                $langs->trans('KSEF_CERT_AUTH_ERROR') . ': ' . $e->getMessage(),
-                null,
-                'errors'
-        );
-    }
-
-    $conf->global->$envKey = $orig_method;
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
-
-if ($action == 'testtokenauth') {
-    dol_include_once('/ksef/class/ksef_client.class.php');
-
-    $environment = $current_env;
-
-    $envKey = 'KSEF_AUTH_METHOD_' . $current_env;
-    $orig_method = getDolGlobalString($envKey, 'token');
-    $conf->global->$envKey = 'token';
-
-    try {
-        dol_syslog("Testing KSeF token authentication with $environment environment", LOG_INFO);
-        $client = new KsefClient($db, $environment);
-
-        if (!$client->authenticate()) {
-            setEventMessages(
-                    $langs->trans('KSEF_AUTH_FAILED') . ': ' . $client->error,
-                    null,
-                    'errors'
-            );
-        } else {
-            setEventMessages(
-                    $langs->trans('KSEF_AUTH_SUCCESS') . ' [' . $environment . ']',
-                    null,
-                    'mesgs'
-            );
-        }
-    } catch (Exception $e) {
-        dol_syslog("Authentication test exception: " . $e->getMessage(), LOG_ERR);
-        setEventMessages(
-                $langs->trans('KSEF_AUTH_ERROR') . ': ' . $e->getMessage(),
-                null,
-                'errors'
-        );
-    }
-
-    $conf->global->$envKey = $orig_method;
-
-    header("Location: " . $_SERVER["PHP_SELF"]);
-    exit;
-}
+$current_env = ksefGetEnvironment();
 
 $form = new Form($db);
 
 llxHeader('', $langs->trans($page_name));
 
-$linkback = '<a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1' . '">' . $langs->trans("KSEF_BackToModuleList") . '</a>';
+$linkback = !empty($user->admin) ? '<a href="' . DOL_URL_ROOT . '/admin/modules.php?restore_lastsearch_values=1' . '">' . $langs->trans("KSEF_BackToModuleList") . '</a>' : '';
 print load_fiche_titre($langs->trans($page_name), $linkback, 'title_setup');
 
 $head = ksefAdminPrepareHead();
 print dol_get_fiche_head($head, 'howtouse', $langs->trans("KSEF_Module"), -1, 'ksef@ksef');
+print ksefShowDolibarrVersionWarning();
+$isAdmin = !empty($user->admin);
 
-$has_token = !empty(getDolGlobalString('KSEF_AUTH_TOKEN_' . $current_env));
-$has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_env)) &&
-        !empty(getDolGlobalString('KSEF_AUTH_PRIVATE_KEY_' . $current_env)) &&
-        !empty(getDolGlobalString('KSEF_AUTH_KEY_PASSWORD_' . $current_env));
+$guideSections = array(
+    'quickstart' => array('KSEF_QuickStartGuide', array('setup_company', 'setup_env', 'setup_auth', 'setup_vat', 'setup_defaults', 'setup_incoming', 'setup_optional')),
+    'sending' => array('KSEF_SendingInvoices', array('send_vat', 'send_offline')),
+    'corrections' => array('KSEF_HowTo_Corrections', array('send_kor', 'send_kor_zal')),
+    'deposits' => array('KSEF_HowTo_Deposits', array('send_zal', 'send_zal_pay', 'send_roz', 'send_kor_zal')),
+    'reconcile' => array('KSEF_HowTo_ReconcileTitle', array('send_sales')),
+    'receiving' => array('KSEF_ReceivingInvoices', array('recv_fetch', 'recv_import', 'recv_kor', 'recv_deposits')),
+);
+$guide = array();
+$guideDialogs = '';
+foreach ($guideSections as $guideKey => $guideDef) {
+    $g = ksefTourGuideHtml($user, $guideKey, $guideDef[0], $guideDef[1]);
+    $guide[$guideKey] = $g['button'] !== '' ? '<span class="nowraponall ksef-howto-guidehead">' . $g['button'] . '</span>' : '';
+    $guideDialogs .= $g['dialog'];
+}
 
 ?>
 
+    <div class="opacitymedium ksef-howto-intro"><?php echo $langs->trans("KSEF_HowTo_Intro"); ?> &middot;
+        <a href="<?php echo dol_buildpath('/ksef/ksefindex.php', 1); ?>#ksef-help"><?php echo $langs->trans("KSEF_Help_ChecklistLink"); ?></a></div>
+
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-bolt paddingright"></span><?php echo $langs->trans("KSEF_QuickStartGuide"); ?></th>
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-quickstart">
+            <th><?php echo $guide['quickstart']; ?><span class="fas fa-bolt paddingright"></span><?php echo $langs->trans("KSEF_QuickStartGuide"); ?><?php echo ksefSectionDesc("KSEF_QuickStartGuide_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
                 <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #dc3545;">
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: var(--ksef-surface, #f8f9fa); border-left: 4px solid #dc3545;">
                         <h4 style="margin-top: 0;">1. <?php echo $langs->trans("KSEF_GetCredentials"); ?></h4>
                         <p><?php echo $langs->trans("KSEF_GetCredentialsDesc"); ?></p>
                         <p><strong><?php echo $langs->trans("KSEF_Portals"); ?>:</strong></p>
@@ -233,7 +123,7 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                         foreach ($portals as $env => $portal) {
                             $is_active = ($env === $current_env);
                             $style = $is_active ? 'font-weight: bold;' : 'opacity: 0.5;';
-                            $icon = $is_active ? '<span class="fas fa-check-circle" style="color: #28a745;"></span> ' : '';
+                            $icon = $is_active ? '<span class="fas fa-check-circle ' . ksefToneTextClass('ok') . '"></span> ' : '';
                             print '<div style="' . $style . ' margin-bottom: 4px;">';
                             print $icon . '<a href="' . $portal['url'] . '" target="_blank">' . $portal['label'] . '</a>';
                             if ($is_active) {
@@ -243,59 +133,39 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                         }
                         ?>
 
-                        <div style="margin-top: 12px; padding: 10px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px;">
-                            <span class="fas fa-exclamation-triangle" style="color: #856404;"></span>
+                        <div class="ksef-note-check" style="margin-top: 12px; padding: 10px; border-radius: 4px;">
+                            <span class="fas fa-exclamation-triangle <?php echo ksefToneTextClass('check'); ?>"></span>
                             <strong><?php echo $langs->trans("KSEF_Important"); ?>:</strong>
                             <?php echo $langs->trans("KSEF_PermissionsWarning"); ?>
                         </div>
                     </div>
 
-                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #fd7e14;">
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: var(--ksef-surface, #f8f9fa); border-left: 4px solid #fd7e14;">
                         <h4 style="margin-top: 0;">2. <?php echo $langs->trans("KSEF_ConfigureModule"); ?></h4>
                         <p><?php echo $langs->trans("KSEF_ConfigureModuleDesc"); ?></p>
                         <p><?php echo $langs->trans("KSEF_DefaultEnvironmentNote"); ?></p>
+                        <?php if ($isAdmin) { ?>
                         <p><a href="<?php echo dol_buildpath('/ksef/admin/setup_auth.php', 1); ?>" class="button small">
                                 <span class="fas fa-cog paddingright"></span><?php echo $langs->trans("KSEF_GoToSetup"); ?>
                             </a></p>
+                        <?php } ?>
                     </div>
 
-                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #ffc107;">
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: var(--ksef-surface, #f8f9fa); border-left: 4px solid #ffc107;">
                         <h4 style="margin-top: 0;">3. <?php echo $langs->trans("KSEF_TestConnection"); ?></h4>
                         <p><?php echo $langs->trans("KSEF_TestConnectionDesc"); ?></p>
 
-                        <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testconnection&token=<?php echo newToken(); ?>"
-                           class="button small" style="margin-bottom: 8px; display: block;">
-                            <span class="fas fa-plug paddingright"></span><?php echo $langs->trans("KSEF_TEST_CONNECTION"); ?>
-                        </a>
-
-                        <?php if ($has_token) { ?>
-                            <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testtokenauth&token=<?php echo newToken(); ?>"
-                               class="button small" style="margin-bottom: 8px; display: block;">
-                                <span class="fas fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
+                        <?php if ($isAdmin) { ?>
+                            <a href="<?php echo dol_buildpath('/ksef/admin/setup_auth.php', 1); ?>#env-<?php echo $current_env; ?>"
+                               class="button small ksef-howto-testlink" style="margin-bottom: 8px; display: block;">
+                                <span class="fas fa-plug paddingright"></span><?php echo $langs->trans("KSEF_TestOnAuthTab"); ?>
                             </a>
                         <?php } else { ?>
-                            <span class="button small butActionRefused classfortooltip"
-                                  style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
-                                  title="<?php echo $langs->trans('KSEF_ConfigureTokenFirst'); ?>">
-                            <span class="fas fa-key paddingright"></span><?php echo $langs->trans("KSEF_TEST_TOKEN_AUTH"); ?>
-                        </span>
-                        <?php } ?>
-
-                        <?php if ($has_auth_cert) { ?>
-                            <a href="<?php echo $_SERVER["PHP_SELF"]; ?>?action=testcertauth&token=<?php echo newToken(); ?>"
-                               class="button small" style="margin-bottom: 8px; display: block;">
-                                <span class="fas fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
-                            </a>
-                        <?php } else { ?>
-                            <span class="button small butActionRefused classfortooltip"
-                                  style="margin-bottom: 8px; display: block; opacity: 0.6; cursor: not-allowed;"
-                                  title="<?php echo $langs->trans('KSEF_ConfigureCertificateFirst'); ?>">
-                            <span class="fas fa-certificate paddingright"></span><?php echo $langs->trans("KSEF_TEST_CERT_AUTH"); ?>
-                        </span>
+                            <p class="opacitymedium"><?php echo $langs->trans("KSEF_TestAskAdmin"); ?></p>
                         <?php } ?>
                     </div>
 
-                    <div style="flex: 1; min-width: 220px; padding: 15px; background: #f8f9fa; border-left: 4px solid #28a745;">
+                    <div style="flex: 1; min-width: 220px; padding: 15px; background: var(--ksef-surface, #f8f9fa); border-left: 4px solid #28a745;">
                         <h4 style="margin-top: 0;">4. <?php echo $langs->trans("KSEF_SubmitFirstInvoice"); ?></h4>
                         <p><?php echo $langs->trans("KSEF_SubmitFirstInvoiceDesc"); ?></p>
                     </div>
@@ -308,8 +178,8 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
     <br>
 
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-cog paddingright"></span><?php echo $langs->trans("KSEF_ConfigurationSection"); ?></th>
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-config">
+            <th><span class="fas fa-cog paddingright"></span><?php echo $langs->trans("KSEF_ConfigurationSection"); ?><?php echo ksefSectionDesc("KSEF_ConfigurationSection_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -319,12 +189,16 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <li><strong><?php echo $langs->trans("KSEF_ENV_DEMO"); ?></strong> - <?php echo $langs->trans("KSEF_ENV_DEMO_FullDesc"); ?></li>
                     <li><strong><?php echo $langs->trans("KSEF_ENV_PRODUCTION"); ?></strong> - <?php echo $langs->trans("KSEF_ENV_PRODUCTION_FullDesc"); ?></li>
                 </ul>
+                <p><?php echo $langs->trans("KSEF_HowTo_EnvFilter"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_Authentication"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_AuthenticationDesc"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_HowTo_Config_PerEnvAuth"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_PerEnvAuthDesc"); ?></p>
+
+                <h4 id="ksef-howto-rights"><?php echo $langs->trans("KSEF_HowTo_Rights"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_RightsDesc"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_HowTo_Config_PaymentDefaults"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_PaymentDefaultsDesc"); ?></p>
@@ -335,7 +209,7 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <h4><?php echo $langs->trans("KSEF_HowTo_Config_Notes"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_NotesIntro"); ?></p>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_NotesModes"); ?></p>
-                <div style="background: #f8f9fa; border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-family: monospace; font-size: 13px;">
+                <div style="background: var(--ksef-surface, #f8f9fa); border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-family: monospace; font-size: 13px;">
                     <?php echo $langs->trans("KSEF_HowTo_Config_NotesKeyValueExample1"); ?><br>
                     <?php echo $langs->trans("KSEF_HowTo_Config_NotesKeyValueExample2"); ?>
                 </div>
@@ -368,33 +242,33 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <li><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Step4"); ?></li>
                 </ol>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesCodes_Outro"); ?></p>
-                <div style="background: #f8f9fa; border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-size: 13px;">
+                <div style="background: var(--ksef-surface, #f8f9fa); border-left: 3px solid #6c757d; padding: 8px 12px; margin: 8px 0; font-size: 13px;">
                     <table style="width:100%; border-collapse:collapse;">
                         <tr style="border-bottom:1px solid #ccc;">
                             <th style="text-align:left; padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_ColCode"); ?></th>
                             <th style="text-align:left; padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_ColUse"); ?></th>
                         </tr>
-                        <tr style="border-bottom:1px solid #eee;">
+                        <tr style="border-bottom:1px solid var(--ksef-surface-border, #eee);">
                             <td style="padding:4px;"><i><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_None"); ?></i></td>
                             <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_NoneUse"); ?></td>
                         </tr>
-                        <tr style="border-bottom:1px solid #eee;">
+                        <tr style="border-bottom:1px solid var(--ksef-surface-border, #eee);">
                             <td style="padding:4px;"><b>ZW</b></td>
                             <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_ZWUse"); ?></td>
                         </tr>
-                        <tr style="border-bottom:1px solid #eee;">
+                        <tr style="border-bottom:1px solid var(--ksef-surface-border, #eee);">
                             <td style="padding:4px;"><b>RC</b></td>
                             <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_RCUse"); ?></td>
                         </tr>
-                        <tr style="border-bottom:1px solid #eee;">
+                        <tr style="border-bottom:1px solid var(--ksef-surface-border, #eee);">
                             <td style="padding:4px;"><b>NP</b></td>
                             <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_NPUse"); ?></td>
                         </tr>
-                        <tr style="border-bottom:1px solid #eee;">
+                        <tr style="border-bottom:1px solid var(--ksef-surface-border, #eee);">
                             <td style="padding:4px;"><b>NP2</b></td>
                             <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_NP2Use"); ?></td>
                         </tr>
-                        <tr style="border-bottom:1px solid #eee;">
+                        <tr style="border-bottom:1px solid var(--ksef-surface-border, #eee);">
                             <td style="padding:4px;"><b>WDT</b></td>
                             <td style="padding:4px;"><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesTable_WDTUse"); ?></td>
                         </tr>
@@ -405,6 +279,7 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     </table>
                 </div>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_VatRatesSetup"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_Config_VatRates5"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptSetup"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Config_VatExemptIntro"); ?></p>
@@ -469,6 +344,7 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <ul>
                     <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Faktor"); ?></li>
                     <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Role4"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Podmiot3_Subject3"); ?></li>
                 </ul>
             </td>
         </tr>
@@ -477,8 +353,8 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
     <br>
 
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-search paddingright"></span><?php echo $langs->trans("KSEF_GusHowTo_Title"); ?></th>
+        <tr class="liste_titre ksef-section-head">
+            <th><span class="fas fa-search paddingright"></span><?php echo $langs->trans("KSEF_GusHowTo_Title"); ?><?php echo ksefSectionDesc("KSEF_GusHowTo_Title_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -499,7 +375,46 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <li><?php echo $langs->trans("KSEF_GusKeyApplyStep4"); ?></li>
                 </ol>
                 <p><?php echo $langs->trans("KSEF_GusHowTo_EmailLabel"); ?></p>
-                <pre style="background: #f5f5f5; border: 1px solid #ddd; padding: 10px; white-space: pre-wrap;"><?php echo htmlspecialchars(ksefGusRequestEmail()); ?></pre>
+                <pre style="background: var(--ksef-surface, #f5f5f5); border: 1px solid var(--ksef-surface-border, #ddd); padding: 10px; white-space: pre-wrap;"><?php echo htmlspecialchars(ksefGusRequestEmail()); ?></pre>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent ksef-howto-jobs">
+        <tr class="liste_titre ksef-section-head">
+            <th><span class="fas fa-clock paddingright"></span><?php echo $langs->trans("KSEF_HowTo_JobsTitle"); ?><?php echo ksefSectionDesc("KSEF_HowTo_JobsTitle_Desc"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <h4 id="ksef-howto-contact"><?php echo $langs->trans("KSEF_HowTo_ContactTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_ContactDesc"); ?></p>
+
+                <h4 id="ksef-howto-nbp"><?php echo $langs->trans("KSEF_HowTo_NbpTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_NbpDesc"); ?></p>
+
+                <h4 id="ksef-howto-jobs"><?php echo $langs->trans("KSEF_HowTo_JobsIntroTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_JobsIntro"); ?></p>
+                <table class="noborder ksef-howto-jobs-table">
+                    <tr class="liste_titre">
+                        <th><?php echo $langs->trans("KSEF_HowTo_JobsColJob"); ?></th>
+                        <th><?php echo $langs->trans("KSEF_HowTo_JobsColDefault"); ?></th>
+                    </tr>
+                    <?php
+                    $howtoJobs = array(
+                        'cronCheckStatuses' => 1, 'cronSyncIncoming' => 0, 'cronDownloadUPOs' => 0,
+                        'cronWarnDeadlines' => 1, 'cronCheckLatarniaStatus' => 1, 'cronSyncMulticurrencyRates' => 0,
+                    );
+                    foreach ($howtoJobs as $howtoMethod => $howtoOn) {
+                        print '<tr class="oddeven" data-ksef-job="' . $howtoMethod . '"><td>' . $langs->trans('KSEF_CronJob_' . $howtoMethod) . '</td>';
+                        print '<td>' . $langs->trans($howtoOn ? 'KSEF_CronEnabled' : 'KSEF_CronDisabled') . '</td></tr>';
+                    }
+                    ?>
+                </table>
+                <p><?php echo $langs->trans("KSEF_HowTo_JobsEnable"); ?>
+                    <a href="<?php echo DOL_URL_ROOT; ?>/cron/list.php?search_module_name=ksef"><?php echo $langs->trans("KSEF_HowTo_JobsListLink"); ?></a>
+                </p>
             </td>
         </tr>
     </table>
@@ -507,8 +422,8 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
     <br>
 
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-file-invoice paddingright"></span><?php echo $langs->trans("KSEF_SendingInvoices"); ?></th>
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-sending">
+            <th><?php echo $guide['sending']; ?><span class="fas fa-file-invoice paddingright"></span><?php echo $langs->trans("KSEF_SendingInvoices"); ?><?php echo ksefSectionDesc("KSEF_SendingInvoices_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -532,12 +447,27 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <ul style="list-style: none; padding-left: 0;">
                     <li style="margin-bottom: 8px;"><span class="badge badge-status4"><?php echo $langs->trans("KSEF_STATUS_ACCEPTED"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_ACCEPTED_Desc"); ?></li>
                     <li style="margin-bottom: 8px;"><span class="badge badge-status3"><?php echo $langs->trans("KSEF_STATUS_PENDING"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_PENDING_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><?php echo ksefGetStatusBadge('TIMEOUT'); ?> - <?php echo $langs->trans("KSEF_STATUS_TIMEOUT_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><?php echo ksefGetStatusBadge('INTERRUPTED'); ?> - <?php echo $langs->trans("KSEF_STATUS_INTERRUPTED_Desc"); ?></li>
                     <li style="margin-bottom: 8px;"><span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_REJECTED"); ?></span> / <span class="badge badge-status8"><?php echo $langs->trans("KSEF_STATUS_FAILED"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_REJECTED_Desc"); ?></li>
-                    <li style="margin-bottom: 8px;"><span class="badge badge-status1"><?php echo $langs->trans("KSEF_STATUS_OFFLINE"); ?></span> - <?php echo $langs->trans("KSEF_STATUS_OFFLINE_Desc"); ?></li>
+                    <li style="margin-bottom: 8px;"><?php echo ksefGetStatusBadge('OFFLINE'); ?> - <?php echo $langs->trans("KSEF_STATUS_OFFLINE_Desc"); ?></li>
                 </ul>
 
                 <h4><?php echo $langs->trans("KSEF_ForeignCurrencyInvoices"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_ForeignCurrencyDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_Offline"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_OfflineDesc"); ?></p>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_OfflineWhen"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Offline1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Offline2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Offline3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Offline4"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Offline5"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_OfflineTest"); ?></li>
+                </ul>
+                <p class="ksef-howto-offline-do"><?php echo $langs->trans("KSEF_HowTo_OfflineDo"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_BankAccountOnInvoice"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_BankAccountOnInvoiceDesc"); ?></p>
@@ -559,10 +489,32 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <h4><?php echo $langs->trans("KSEF_AfterAcceptance"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_AfterAcceptanceDesc"); ?></p>
 
+                <h4><?php echo $langs->trans("KSEF_HowTo_EditSent"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_EditSentDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_HowTo_NumberNoRecord"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_NumberNoRecordDesc"); ?></p>
+
                 <h4><?php echo $langs->trans("KSEF_CheckingStatus"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_CheckingStatusDesc"); ?>
-                    <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_SubmissionStatus"); ?></a>
+                    <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_OutgoingInvoices"); ?></a>
                 </p>
+
+                <h4 id="ksef-howto-hash-search"><?php echo $langs->trans("KSEF_HowTo_HashSearch"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_HashSearchDesc"); ?></p>
+                <ul style="list-style: none; padding-left: 0;" class="ksef-howto-hash-statuses">
+                    <?php
+                    $hashStatuses = array('INTERRUPTED' => 'KSEF_HowTo_HashSearch_Searching', 'NOT_FOUND' => 'KSEF_HowTo_HashSearch_NotFound',
+                        'REPLACED' => 'KSEF_HowTo_HashSearch_Replaced', 'IN_SALES_UNLINKED' => 'KSEF_HowTo_HashSearch_InSales',
+                        'AMBIGUOUS' => 'KSEF_HowTo_HashSearch_Ambiguous', 'PROBABLY_IN_KSEF' => 'KSEF_HowTo_HashSearch_Held');
+                    foreach ($hashStatuses as $hashCode => $hashKey) {
+                        print '<li style="margin-bottom: 8px;">' . ksefGetStatusBadge($hashCode) . ' - ' . $langs->trans($hashKey) . '</li>';
+                    }
+                    ?>
+                </ul>
+
+                <h4 id="ksef-howto-exclusions"><?php echo $langs->trans("KSEF_CustomerExclusions"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_CustomerExclusionsDesc"); ?></p>
             </td>
         </tr>
     </table>
@@ -570,8 +522,8 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
     <br>
 
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-exchange-alt paddingright"></span><?php echo $langs->trans("KSEF_HowTo_Corrections"); ?></th>
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-corrections">
+            <th><?php echo $guide['corrections']; ?><span class="fas fa-exchange-alt paddingright"></span><?php echo $langs->trans("KSEF_HowTo_Corrections"); ?><?php echo ksefSectionDesc("KSEF_HowTo_Corrections_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -579,8 +531,8 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
 
                 <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_WhenTitle"); ?></h4>
                 <ul>
-                    <li><?php echo $langs->trans("KSEF_HowTo_Corrections_CreditNote"); ?></li>
                     <li><?php echo $langs->trans("KSEF_HowTo_Corrections_Replacement"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Corrections_CreditNote"); ?></li>
                 </ul>
 
                 <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_CreateTitle"); ?></h4>
@@ -603,6 +555,23 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                 <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_ChainTitle"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Chain"); ?></p>
 
+                <h4 id="ksef-correction-reports"><?php echo $langs->trans("KSEF_HowTo_Corrections_ReportsTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Corrections_ReportsIntro"); ?></p>
+                <table class="noborder centpercent ksef-correction-reports">
+                    <tr class="liste_titre">
+                        <th><?php echo $langs->trans("KSEF_HowTo_Corrections_ReportsColReport"); ?></th>
+                        <th><?php echo $langs->trans("KSEF_HowTo_Corrections_ReportsColEffect"); ?></th>
+                    </tr>
+                    <?php
+                    foreach (array('Journal', 'Recap', 'Vat', 'Result', 'Localtax', 'Stats', 'Simple') as $ksefReport) {
+                        print '<tr class="oddeven" data-ksef-report="' . strtolower($ksefReport) . '">';
+                        print '<td>' . $langs->trans('KSEF_HowTo_Corrections_Reports' . $ksefReport) . '</td>';
+                        print '<td>' . $langs->trans('KSEF_HowTo_Corrections_Reports' . $ksefReport . 'Effect') . '</td>';
+                        print '</tr>';
+                    }
+                    ?>
+                </table>
+
                 <h4><?php echo $langs->trans("KSEF_HowTo_Corrections_ConfigTitle"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_HowTo_Corrections_Config"); ?></p>
             </td>
@@ -611,9 +580,62 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
 
     <br>
 
+    <table class="noborder centpercent ksef-howto-deposits">
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-deposits">
+            <th><?php echo $guide['deposits']; ?><span class="fas fa-hand-holding-usd paddingright"></span><?php echo $langs->trans("KSEF_HowTo_Deposits"); ?><?php echo ksefSectionDesc("KSEF_HowTo_Deposits_Desc"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_HowTo_DepositsDesc"); ?></p>
+                <ol>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step4"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step5"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step6"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Step7"); ?></li>
+                </ol>
+                <h4><?php echo $langs->trans("KSEF_HowTo_Deposits_FullTitle"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_Deposits_Full"); ?></p>
+                <h4><?php echo $langs->trans("KSEF_HowTo_Deposits_RulesTitle"); ?></h4>
+                <ul>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule1"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule2"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule3"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule4"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule5"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule6"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule7"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule8"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule9"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_HowTo_Deposits_Rule10"); ?></li>
+                </ul>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+    <table class="noborder centpercent ksef-howto-reconcile">
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-reconcile">
+            <th><?php echo $guide['reconcile']; ?><span class="fas fa-balance-scale paddingright"></span><?php echo $langs->trans("KSEF_HowTo_ReconcileTitle"); ?><?php echo ksefSectionDesc("KSEF_HowTo_ReconcileTitle_Desc"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_HowTo_ReconcileDesc"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_ReconcileImport"); ?></p>
+                <p class="ksef-howto-reconcile-upo"><?php echo $langs->trans("KSEF_HowTo_ReconcileUpo"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_ReconcileReset"); ?></p>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-download paddingright"></span><?php echo $langs->trans("KSEF_ReceivingInvoices"); ?></th>
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-receiving">
+            <th><?php echo $guide['receiving']; ?><span class="fas fa-download paddingright"></span><?php echo $langs->trans("KSEF_ReceivingInvoices"); ?><?php echo ksefSectionDesc("KSEF_ReceivingInvoices_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
@@ -626,6 +648,7 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <li><?php echo $langs->trans("KSEF_Receiving_Step3"); ?></li>
                 </ol>
                 <p><?php echo $langs->trans("KSEF_ReceivingActions"); ?></p>
+                <p class="opacitymedium"><?php echo $langs->trans("KSEF_TourUi_NoneTestNip"); ?></p>
 
                 <h4><?php echo $langs->trans("KSEF_ImportingToDolibarr"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_ImportingToDolibarrDesc"); ?></p>
@@ -636,6 +659,7 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <li><?php echo $langs->trans("KSEF_Importing_Step2"); ?></li>
                     <li><?php echo $langs->trans("KSEF_Importing_Step3"); ?></li>
                     <li><?php echo $langs->trans("KSEF_Importing_Step4"); ?></li>
+                    <li><?php echo $langs->trans("KSEF_Importing_Step5"); ?></li>
                 </ol>
 
                 <p><strong><?php echo $langs->trans("KSEF_Importing_Individual"); ?></strong> - <?php echo $langs->trans("KSEF_Importing_IndividualDesc"); ?></p>
@@ -645,19 +669,92 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
                     <a href="<?php echo DOL_URL_ROOT; ?>/admin/stock.php"><?php echo $langs->trans("KSEF_Importing_StockNoteLink"); ?></a>.
                     <?php echo $langs->trans("KSEF_Importing_StockNoteFreeText"); ?>
                 </p>
+                <p><strong><?php echo $langs->trans("KSEF_Importing_Totals"); ?></strong> - <?php echo $langs->trans("KSEF_Importing_TotalsDesc"); ?></p>
             </td>
         </tr>
     </table>
 
     <br>
 
-    <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-user-slash paddingright"></span><?php echo $langs->trans("KSEF_CustomerExclusions"); ?></th>
+<?php
+$langs->loadLangs(array('bills', 'banks', 'accountancy', 'main'));
+$payL = function ($key) use ($langs) {
+    return $langs->transnoentitiesnoconv($key);
+};
+?>
+    <table class="noborder centpercent ksef-howto-payments">
+        <tr class="liste_titre ksef-section-head">
+            <th><span class="fas fa-coins paddingright"></span><?php echo $langs->trans("KSEF_HowTo_Pay"); ?><?php echo ksefSectionDesc("KSEF_HowTo_Pay_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
-                <p><?php echo $langs->trans("KSEF_CustomerExclusionsDesc"); ?></p>
+                <p id="ksef-howto-pay"><?php echo $langs->trans("KSEF_HowTo_Pay_Intro"); ?></p>
+                <ul class="ksef-howto-pay-tools">
+                    <li class="ksef-howto-pay-short"><?php echo $langs->trans("KSEF_HowTo_Pay_Short", $payL('ClassifyPaidPartially'), $payL('ConfirmClassifyPaidPartiallyReasonBankCharge'), $payL('Other')); ?>
+                        <?php echo $langs->trans("KSEF_HowTo_Pay_ShortAccount", $payL('AccountingJournalType1'), $payL('ReOpen')); ?></li>
+                    <li class="ksef-howto-pay-extra"><?php echo $langs->trans("KSEF_HowTo_Pay_Extra", $payL('NewVariousPayment'), $payL('MenuVariousPayment')); ?></li>
+                    <li class="ksef-howto-pay-over"><?php echo $langs->trans("KSEF_HowTo_Pay_Over", $payL('ConvertExcessReceivedToReduc'), $payL('ConvertExcessPaidToReduc')); ?></li>
+                    <li class="ksef-howto-pay-later"><?php echo $langs->trans("KSEF_HowTo_Pay_PayLater", $payL('DoPayment')); ?></li>
+                    <li class="ksef-howto-pay-discount"><?php echo $langs->trans("KSEF_HowTo_Pay_Discount", $payL('KSEF_CreateCorrection')); ?></li>
+                </ul>
+                <p class="ksef-howto-pay-eur"><?php echo $langs->trans("KSEF_HowTo_Pay_Eur", $payL('KSEF_PayFxInfoTitle'), $payL('NewVariousPayment')); ?></p>
+                <p class="ksef-howto-pay-mpp"><?php echo $langs->trans("KSEF_HowTo_Pay_Mpp"); ?></p>
+                <p class="ksef-howto-pay-accountant"><?php echo $langs->trans("KSEF_HowTo_Pay_Accountant"); ?></p>
+                <?php if ($isAdmin && isModEnabled('accounting')) { ?>
+                <p><a href="<?php echo DOL_URL_ROOT; ?>/accountancy/admin/account.php#ksef-chart-load" class="ksef-howto-pay-settings">
+                    <span class="fas fa-cog paddingright"></span><?php echo $langs->trans("KSEF_HowTo_Pay_Settings"); ?></a></p>
+                <?php } ?>
+            </td>
+        </tr>
+    </table>
+
+    <br>
+
+<?php
+
+$restBase = DOL_MAIN_URL_ROOT . '/api/index.php/ksefapi/';
+$restExplorer = DOL_MAIN_URL_ROOT . '/api/index.php/explorer/';
+$restRoutes = array(
+    'KSEF_HowTo_RestGroupSubmissions' => array(
+        'GET /submissions', 'GET /submissions/stats', 'GET /submissions/{id}', 'GET /submissions/invoice/{invoice_id}',
+        'POST /submissions/{invoice_id}/submit', 'POST /submissions/{invoice_id}/submit-offline', 'POST /submissions/{invoice_id}/retry',
+        'POST /submissions/{invoice_id}/link', 'GET /submissions/{invoice_id}/status', 'GET /submissions/{invoice_id}/upo',
+        'GET /submissions/{invoice_id}/xml', 'PUT /submissions/{invoice_id}/correction', 'DELETE /corrections/{invoice_id}',
+    ),
+    'KSEF_HowTo_RestGroupSales' => array('GET /sales', 'GET /sales/counts', 'GET /sales/gaps', 'GET /sales/{id}', 'GET /sales/{id}/xml'),
+    'KSEF_HowTo_RestGroupIncoming' => array(
+        'GET /incoming', 'GET /incoming/{id}', 'GET /incoming/{id}/xml', 'GET /incoming/{id}/pdf', 'POST /incoming/{id}/link',
+        'DELETE /incoming/{id}', 'POST /incoming/sync', 'POST /incoming/sync/advance', 'GET /incoming/sync/status', 'POST /incoming/sync/reset',
+    ),
+    'KSEF_HowTo_RestGroupCreditNotes' => array(
+        'GET /creditnotes/{id}/discounts', 'POST /creditnotes/{id}/convert', 'POST /creditnotes/{id}/apply-line',
+        'POST /creditnotes/{id}/apply-payment', 'POST /creditnotes/{id}/refund', 'GET /creditnotes/{id}/resolution-state',
+    ),
+    'KSEF_HowTo_RestGroupOther' => array('GET /status', 'GET /config', 'POST /test-connection', 'GET /gus/{nip}'),
+);
+?>
+    <table class="noborder centpercent ksef-howto-rest">
+        <tr class="liste_titre ksef-section-head">
+            <th><span class="fas fa-plug paddingright"></span><?php echo $langs->trans("KSEF_HowTo_RestTitle"); ?><?php echo ksefSectionDesc("KSEF_HowTo_RestTitle_Desc"); ?></th>
+        </tr>
+        <tr class="oddeven">
+            <td>
+                <p><?php echo $langs->trans("KSEF_HowTo_RestIntro"); ?><br>
+                    <code><?php echo dol_escape_htmltag($restBase); ?></code></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_RestSetup"); ?>
+                    <a href="<?php echo dol_escape_htmltag($restExplorer); ?>" target="_blank" rel="noopener"><?php echo dol_escape_htmltag($restExplorer); ?></a></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_RestRights"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_RestCodes"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_RestSync"); ?></p>
+                <p><?php echo $langs->trans("KSEF_HowTo_RestApplyLine"); ?></p>
+                <h4><?php echo $langs->trans("KSEF_HowTo_RestRoutes"); ?></h4>
+                <?php foreach ($restRoutes as $groupKey => $routes) { ?>
+                <p><strong><?php echo $langs->trans($groupKey); ?></strong><br>
+                    <?php foreach ($routes as $route) { ?>
+                    <code><?php echo dol_escape_htmltag($route); ?></code><br>
+                    <?php } ?>
+                </p>
+                <?php } ?>
             </td>
         </tr>
     </table>
@@ -665,14 +762,14 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
     <br>
 
     <table class="noborder centpercent">
-        <tr class="liste_titre">
-            <th><span class="fas fa-wrench paddingright"></span><?php echo $langs->trans("KSEF_Troubleshooting"); ?></th>
+        <tr class="liste_titre ksef-section-head" id="ksef-howto-sec-troubleshooting">
+            <th><span class="fas fa-wrench paddingright"></span><?php echo $langs->trans("KSEF_Troubleshooting"); ?><?php echo ksefSectionDesc("KSEF_Troubleshooting_Desc"); ?></th>
         </tr>
         <tr class="oddeven">
             <td>
                 <h4><?php echo $langs->trans("KSEF_FindingErrorDetails"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_FindingErrorDetailsDesc"); ?>
-                    <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_SubmissionStatus"); ?></a>
+                    <a href="<?php echo dol_buildpath('/ksef/status.php', 1); ?>"><?php echo $langs->trans("KSEF_OutgoingInvoices"); ?></a>
                 </p>
 
                 <h4><?php echo $langs->trans("KSEF_CommonIssues"); ?></h4>
@@ -692,14 +789,21 @@ $has_auth_cert = !empty(getDolGlobalString('KSEF_AUTH_CERTIFICATE_' . $current_e
 
                 <h4><?php echo $langs->trans("KSEF_RetryLimits"); ?></h4>
                 <p><?php echo $langs->trans("KSEF_RetryLimitsDesc"); ?></p>
+
+                <h4><?php echo $langs->trans("KSEF_DbCheck"); ?></h4>
+                <p><?php echo $langs->trans("KSEF_HowTo_DbCheckDesc"); ?></p>
             </td>
         </tr>
     </table>
 
 <?php
 
+print $guideDialogs;
+print ksefCollapsibleSectionsJs();
+
 print dol_get_fiche_end();
 
+print ksefHelpFooter($db, $user);
 llxFooter();
 $db->close();
 ?>

@@ -18,12 +18,15 @@
 /**
  * \file    ksef/class/ksef_sync_state.class.php
  * \ingroup ksef
- * \brief   KSeF Sync State - tracks HWM, async fetch state, and sync history
+ * \brief   Incoming sync state
  */
 
 require_once DOL_DOCUMENT_ROOT . '/core/lib/admin.lib.php';
 require_once DOL_DOCUMENT_ROOT . '/core/lib/security.lib.php';
 
+/**
+ * @brief Incoming sync state
+ */
 class KsefSyncState
 {
     private $db;
@@ -35,7 +38,13 @@ class KsefSyncState
     public $last_sync_existing;
     public $last_sync_total;
     public $last_sync_errors;
+    /** @var int */
+    public $last_sync_fetch_errors;
+    /** @var int */
+    public $last_sync_unsupported;
     public $rate_limit_until;
+    /** @var string ts|http */
+    public $last_fail;
     public $fetch_reference;
     public $fetch_status;
     public $fetch_started;
@@ -49,6 +58,9 @@ class KsefSyncState
     public $process_existing;
     public $fetch_parts;
     public $fetch_hwm_data;
+    public $heartbeat;
+    public $environment;
+    private $other_process_file = '';
 
     const FETCH_STATUS_PROCESSING = 'PROCESSING';
     const FETCH_STATUS_READY_TO_PROCESS = 'READY_TO_PROCESS';
@@ -59,11 +71,16 @@ class KsefSyncState
 
     const PROCESS_BATCH_SIZE = 1000;
 
+    const DEFAULT_HWM = '2026-01-31T00:00:00+01:00';
+
     const CONST_PREFIX = 'KSEF_SYNC_';
     const FETCH_TIMEOUT_SECONDS = 1200;
     const PROCESS_TIMEOUT_SECONDS = 900;
 
-
+    /**
+     * @brief Constructor
+     * @param DoliDB $db Database handler
+     */
     public function __construct($db)
     {
         global $conf;
@@ -71,17 +88,20 @@ class KsefSyncState
         $this->entity = $conf->entity;
     }
 
-
+    /**
+     * @brief Constant name
+     * @param string $field
+     * @return string
+     */
     private function getConstName($field)
     {
         return self::CONST_PREFIX . strtoupper($field) . '_' . strtoupper($this->sync_type);
     }
 
-
     /**
-     * @brief Load sync state from Dolibarr constants
-     * @param string $sync_type Type of sync
-     * @return int 1 if OK
+     * @brief Load state
+     * @param string $sync_type
+     * @return int
      */
     public function load($sync_type)
     {
@@ -93,7 +113,10 @@ class KsefSyncState
         $this->last_sync_existing = getDolGlobalInt($this->getConstName('LAST_EXISTING'), 0);
         $this->last_sync_total = getDolGlobalInt($this->getConstName('LAST_TOTAL'), 0);
         $this->last_sync_errors = getDolGlobalString($this->getConstName('LAST_ERRORS'), '');
+        $this->last_sync_fetch_errors = getDolGlobalInt($this->getConstName('LAST_FETCH_ERRORS'), 0);
+        $this->last_sync_unsupported = getDolGlobalInt($this->getConstName('LAST_UNSUPPORTED'), 0);
         $this->rate_limit_until = getDolGlobalInt($this->getConstName('RATE_LIMIT'), 0);
+        $this->last_fail = getDolGlobalString($this->getConstName('LAST_FAIL'), '');
 
         $this->fetch_reference = getDolGlobalString($this->getConstName('FETCH_REF'), '');
         $this->fetch_status = getDolGlobalString($this->getConstName('FETCH_STATUS'), '');
@@ -109,14 +132,54 @@ class KsefSyncState
         $this->process_offset = getDolGlobalInt($this->getConstName('PROC_OFFSET'), 0);
         $this->process_new = getDolGlobalInt($this->getConstName('PROC_NEW'), 0);
         $this->process_existing = getDolGlobalInt($this->getConstName('PROC_EXISTING'), 0);
+        $this->heartbeat = getDolGlobalInt($this->getConstName('HEARTBEAT'), 0);
+        $this->environment = getDolGlobalString($this->getConstName('ENV'), '');
+        if (!function_exists('ksefGetEnvironment')) {
+            dol_include_once('/ksef/lib/ksef.lib.php');
+        }
+        if ($this->environment !== '' && $this->environment !== ksefGetEnvironment()) {
+            $this->clearForOtherEnvironment();
+        }
+        $this->getDisplayValues();
 
         return 1;
     }
 
+    /**
+     * @brief Hide other environment
+     * @return void
+     */
+    private function clearForOtherEnvironment()
+    {
+        $this->hwm_date = self::DEFAULT_HWM;
+        $this->last_sync = 0;
+        $this->last_sync_new = 0;
+        $this->last_sync_existing = 0;
+        $this->last_sync_total = 0;
+        $this->last_sync_errors = '';
+        $this->last_sync_fetch_errors = 0;
+        $this->last_sync_unsupported = 0;
+        $this->rate_limit_until = 0;
+        $this->last_fail = '';
+        $this->fetch_reference = '';
+        $this->fetch_status = '';
+        $this->fetch_started = 0;
+        $this->fetch_key = '';
+        $this->fetch_iv = '';
+        $this->fetch_error = '';
+        $this->fetch_parts = '';
+        $this->fetch_hwm_data = '';
+        $this->other_process_file = $this->process_file;
+        $this->process_file = '';
+        $this->process_total = 0;
+        $this->process_offset = 0;
+        $this->process_new = 0;
+        $this->process_existing = 0;
+    }
 
     /**
-     * @brief Save sync state to Dolibarr constants
-     * @return int 1 if OK, <0 if KO
+     * @brief Save state
+     * @return int <0 on error
      */
     public function save()
     {
@@ -128,7 +191,10 @@ class KsefSyncState
         if (dolibarr_set_const($this->db, $this->getConstName('LAST_EXISTING'), $this->last_sync_existing ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('LAST_TOTAL'), $this->last_sync_total ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('LAST_ERRORS'), $this->last_sync_errors ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('LAST_FETCH_ERRORS'), $this->last_sync_fetch_errors ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('LAST_UNSUPPORTED'), $this->last_sync_unsupported ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('RATE_LIMIT'), $this->rate_limit_until ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('LAST_FAIL'), $this->last_fail ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
 
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_REF'), $this->fetch_reference ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('FETCH_STATUS'), $this->fetch_status ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
@@ -144,10 +210,161 @@ class KsefSyncState
         if (dolibarr_set_const($this->db, $this->getConstName('PROC_OFFSET'), $this->process_offset ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('PROC_NEW'), $this->process_new ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
         if (dolibarr_set_const($this->db, $this->getConstName('PROC_EXISTING'), $this->process_existing ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('HEARTBEAT'), $this->heartbeat ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('ENV'), $this->environment ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        $this->getDisplayValues();
 
         return $error ? -1 : 1;
     }
 
+    /**
+     * @brief Save sweep fields
+     * @return int <0 on error
+     */
+    public function saveSweep()
+    {
+        $error = 0;
+        if (dolibarr_set_const($this->db, $this->getConstName('HWM_DATE'), $this->hwm_date ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('ENV'), $this->environment ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('LAST_SYNC'), $this->last_sync ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('LAST_ERRORS'), $this->last_sync_errors ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        $this->getDisplayValues();
+        return $error ? -1 : 1;
+    }
+
+    /**
+     * @brief Claim sweep run
+     * @param int $staleAfter Stale seconds
+     * @return bool True if claimed
+     */
+    public function claimRun($staleAfter)
+    {
+        $name = $this->getConstName('HEARTBEAT');
+        $now = dol_now();
+        $sql = "SELECT value FROM " . MAIN_DB_PREFIX . "const WHERE name = '" . $this->db->escape($name) . "' AND entity = " . (int) $this->entity;
+        $resql = $this->db->query($sql);
+        if ($resql && !$this->db->fetch_object($resql)) {
+            dolibarr_set_const($this->db, $name, '0', 'chaine', 0, '', $this->entity);
+        }
+        // same-length timestamps
+        $sql = "UPDATE " . MAIN_DB_PREFIX . "const SET value = '" . (int) $now . "'";
+        $sql .= " WHERE name = '" . $this->db->escape($name) . "' AND entity = " . (int) $this->entity;
+        $sql .= " AND (value = '' OR value = '0' OR value < '" . (int) ($now - (int) $staleAfter) . "')";
+        $resql = $this->db->query($sql);
+        if (!$resql || (int) $this->db->affected_rows($resql) !== 1) {
+            return false;
+        }
+        $this->heartbeat = $now;
+        return true;
+    }
+
+    /**
+     * @brief Release run
+     * @return void
+     */
+    public function releaseRun()
+    {
+        $this->heartbeat = 0;
+        dolibarr_set_const($this->db, $this->getConstName('HEARTBEAT'), '0', 'chaine', 0, '', $this->entity);
+    }
+
+    /**
+     * @brief Save progress
+     * @return int 0 if reset, <0 on error
+     */
+    public function saveProgress()
+    {
+        $error = 0;
+        if ((string) $this->fetch_reference !== '' && $this->storedFetchReference() !== (string) $this->fetch_reference) {
+            return 0;
+        }
+        $this->heartbeat = dol_now();
+        if (!empty($this->process_file) && file_exists($this->process_file)) {
+            @touch($this->process_file);
+        }
+        if (dolibarr_set_const($this->db, $this->getConstName('FETCH_STATUS'), $this->fetch_status ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('PROC_FILE'), $this->process_file ?: '', 'chaine', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('PROC_TOTAL'), $this->process_total ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('PROC_OFFSET'), $this->process_offset ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('PROC_NEW'), $this->process_new ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('PROC_EXISTING'), $this->process_existing ?: 0, 'int', 0, '', $this->entity) < 0) $error++;
+        if (dolibarr_set_const($this->db, $this->getConstName('HEARTBEAT'), $this->heartbeat, 'int', 0, '', $this->entity) < 0) $error++;
+        return $error ? -1 : 1;
+    }
+
+    /**
+     * @brief Stored fetch reference
+     * @return string
+     */
+    public function storedFetchReference()
+    {
+        $sql = "SELECT value FROM " . MAIN_DB_PREFIX . "const";
+        $sql .= " WHERE name = '" . $this->db->escape($this->getConstName('FETCH_REF')) . "'";
+        $sql .= " AND entity = " . (int) $this->entity;
+        $resql = $this->db->query($sql);
+        if ($resql && ($obj = $this->db->fetch_object($resql))) {
+            return (string) $obj->value;
+        }
+        return '';
+    }
+
+    /**
+     * @brief Save environment
+     * @param string $environment
+     * @return int <0 on error
+     */
+    public function adoptEnvironment($environment)
+    {
+        $this->environment = $environment;
+        return dolibarr_set_const($this->db, $this->getConstName('ENV'), $environment, 'chaine', 0, '', $this->entity) < 0 ? -1 : 1;
+    }
+
+    /**
+     * @brief Reset state
+     * @param string $environment
+     * @param string $hwm Continuation point
+     * @return int <0 on error
+     */
+    public function resetAll($environment, $hwm = '')
+    {
+        foreach (array($this->process_file, $this->other_process_file) as $file) {
+            if (!empty($file) && file_exists($file)) {
+                @unlink($file);
+            }
+        }
+        $this->other_process_file = '';
+        $this->hwm_date = $hwm !== '' ? $hwm : self::DEFAULT_HWM;
+        $this->last_sync = 0;
+        $this->last_sync_new = 0;
+        $this->last_sync_existing = 0;
+        $this->last_sync_total = 0;
+        $this->last_sync_errors = '';
+        $this->last_sync_fetch_errors = 0;
+        $this->last_sync_unsupported = 0;
+        $this->rate_limit_until = 0;
+        $this->last_fail = '';
+        $this->fetch_reference = '';
+        $this->fetch_status = '';
+        $this->fetch_started = 0;
+        $this->fetch_key = '';
+        $this->fetch_iv = '';
+        $this->fetch_error = '';
+        $this->fetch_parts = '';
+        $this->fetch_hwm_data = '';
+        $this->process_file = '';
+        $this->process_total = 0;
+        $this->process_offset = 0;
+        $this->process_new = 0;
+        $this->process_existing = 0;
+        $this->heartbeat = 0;
+        $this->environment = $environment;
+        return $this->save();
+    }
+
+    /**
+     * @brief Export running
+     * @return bool
+     */
     public function isFetchInProgress()
     {
         if (empty($this->fetch_reference)) {
@@ -161,14 +378,22 @@ class KsefSyncState
         ));
     }
 
+    /**
+     * @brief Export timed out
+     * @return bool
+     */
     public function isFetchTimedOut()
     {
         if (!$this->isFetchInProgress() || empty($this->fetch_started)) {
             return false;
         }
-        return (dol_now() - $this->fetch_started) > self::FETCH_TIMEOUT_SECONDS;
+        return (dol_now() - max((int) $this->fetch_started, (int) $this->heartbeat)) > self::FETCH_TIMEOUT_SECONDS;
     }
 
+    /**
+     * @brief Clear fetch state
+     * @return int <0 on error
+     */
     public function clearFetchState()
     {
         $this->fetch_reference = '';
@@ -182,11 +407,19 @@ class KsefSyncState
         return $this->save();
     }
 
+    /**
+     * @brief Processing running
+     * @return bool
+     */
     public function isProcessingInProgress()
     {
         return !empty($this->process_file) && file_exists($this->process_file);
     }
 
+    /**
+     * @brief Processing timed out
+     * @return bool
+     */
     public function isProcessingTimedOut()
     {
         if (!$this->isProcessingInProgress()) {
@@ -196,12 +429,15 @@ class KsefSyncState
         if ($mtime === false) {
             return true;
         }
-        return (dol_now() - $mtime) > self::PROCESS_TIMEOUT_SECONDS;
+        return (dol_now() - max((int) $mtime, (int) $this->heartbeat)) > self::PROCESS_TIMEOUT_SECONDS;
     }
 
+    /**
+     * @brief Clear processing state
+     * @return int <0 on error
+     */
     public function clearProcessingState()
     {
-        // Delete temp file
         if (!empty($this->process_file) && file_exists($this->process_file)) {
             @unlink($this->process_file);
         }
@@ -213,6 +449,10 @@ class KsefSyncState
         return $this->save();
     }
 
+    /**
+     * @brief Processing progress
+     * @return array|null Null when idle
+     */
     public function getProcessingProgress()
     {
         if (!$this->isProcessingInProgress()) {
@@ -228,8 +468,8 @@ class KsefSyncState
     }
 
     /**
-     * @brief Get continuation date for display
-     * @return int|null Unix timestamp or null
+     * @brief Continuation date
+     * @return int|null
      */
     public function getContinuationDate()
     {
@@ -240,29 +480,72 @@ class KsefSyncState
     public $continuation_date;
     public $last_sync_date;
 
+    /**
+     * @brief Fill display dates
+     * @return void
+     */
     public function getDisplayValues()
     {
         $this->continuation_date = $this->getContinuationDate();
         $this->last_sync_date = $this->last_sync ?: null;
     }
 
+    /**
+     * @brief Rate limited
+     * @return bool
+     */
     public function isRateLimited()
     {
         return $this->rate_limit_until > dol_now();
     }
 
+    /**
+     * @brief Record rate limit
+     * @param int $seconds Retry-After
+     * @return int <0 on error
+     */
+    public function setRateLimit($seconds)
+    {
+        $seconds = (int) $seconds > 0 ? (int) $seconds : 60;
+        $this->rate_limit_until = dol_now() + $seconds;
+        return dolibarr_set_const($this->db, $this->getConstName('RATE_LIMIT'), $this->rate_limit_until, 'int', 0, '', $this->entity) < 0 ? -1 : 1;
+    }
+
+    /**
+     * @brief Record start failure
+     * @param int|null $httpCode null clears
+     * @return int <0 on error
+     */
+    public function noteStartFailure($httpCode)
+    {
+        $this->last_fail = $httpCode === null ? '' : dol_now() . '|' . (int) $httpCode;
+        return dolibarr_set_const($this->db, $this->getConstName('LAST_FAIL'), $this->last_fail, 'chaine', 0, '', $this->entity) < 0 ? -1 : 1;
+    }
+
+    /**
+     * @brief Rate limit left
+     * @return int
+     */
     public function secondsUntilNextSync()
     {
         if (!$this->isRateLimited()) return 0;
         return $this->rate_limit_until - dol_now();
     }
 
+    /**
+     * @brief Rate limit expiry
+     * @return string
+     */
     public function getRateLimitExpiryFormatted()
     {
         if (!$this->isRateLimited()) return '';
         return dol_print_date($this->rate_limit_until, 'dayhour');
     }
 
+    /**
+     * @brief Sync allowed now
+     * @return bool
+     */
     public function canSyncNow()
     {
         if ($this->isFetchInProgress()) {
@@ -284,9 +567,38 @@ class KsefSyncState
         return true;
     }
 
-    public function setRateLimit($seconds)
+    /**
+     * @brief Fetch resumable
+     * @return bool
+     */
+    public function canResumeFetch()
     {
-        $this->rate_limit_until = dol_now() + $seconds;
-        return $this->save();
+        if (!$this->isFetchInProgress() || $this->isFetchTimedOut()) {
+            return false;
+        }
+        if (!in_array($this->fetch_status, array(self::FETCH_STATUS_PROCESSING, self::FETCH_STATUS_READY_TO_PROCESS), true)) {
+            return false;
+        }
+        return !$this->isProcessingInProgress() && !$this->isRateLimited();
+    }
+
+    /**
+     * @brief Claim fetch status
+     * @param string $from Expected status
+     * @param string $to
+     * @return bool True if claimed
+     */
+    public function claimFetchStatus($from, $to)
+    {
+        $sql = "UPDATE " . MAIN_DB_PREFIX . "const SET value = '" . $this->db->escape($to) . "'";
+        $sql .= " WHERE name = '" . $this->db->escape($this->getConstName('FETCH_STATUS')) . "'";
+        $sql .= " AND entity = " . (int) $this->entity;
+        $sql .= " AND value = '" . $this->db->escape($from) . "'";
+        $resql = $this->db->query($sql);
+        if (!$resql || (int) $this->db->affected_rows($resql) !== 1) {
+            return false;
+        }
+        $this->fetch_status = $to;
+        return true;
     }
 }

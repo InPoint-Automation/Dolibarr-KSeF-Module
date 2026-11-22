@@ -18,7 +18,7 @@
 /**
  * \file    ksef/class/ksef_gus_client.class.php
  * \ingroup ksef
- * \brief   GUS REGON BIR1 web service client
+ * \brief   GUS REGON client
  */
 
 dol_include_once('/ksef/lib/ksef.lib.php');
@@ -36,7 +36,7 @@ class KsefGusClient
     const NS_DATA = 'http://CIS/BIR/PUBL/2014/07/DataContract';
     const ACTION_BASE = 'http://CIS/BIR/PUBL/2014/07/IUslugaBIRzewnPubl/';
 
-    const SESSION_KEY = 'KSEF_GUS_SID';
+    const KRS_REGISTER_SYMBOLS = array('138', '139');
 
     public $error;
     public $errors = array();
@@ -51,10 +51,9 @@ class KsefGusClient
 
     /**
      * @brief Constructor
-     * @param DoliDB $db Database handler
-     * @param $env Environment (TEST or PROD)
+     * @param DoliDB $db
+     * @param $env TEST or PROD
      * @return void
-     * @called_by class/actions_ksef.class.php, admin/setup_auth.php
      */
     public function __construct($db, $env = null)
     {
@@ -62,7 +61,7 @@ class KsefGusClient
 
         $this->db = $db;
         $this->env = strtoupper($env ? $env : getDolGlobalString('KSEF_GUS_ENV', 'TEST'));
-        $this->endpoint = ($this->env === 'PROD') ? self::ENDPOINT_PROD : self::ENDPOINT_TEST;
+        $this->endpoint = ksefEndpointOverride('GUS', ($this->env === 'PROD') ? self::ENDPOINT_PROD : self::ENDPOINT_TEST);
 
         $storedKey = trim(dol_decode(getDolGlobalString('KSEF_GUS_KEY', '')));
         if (empty($storedKey) && $this->env !== 'PROD') {
@@ -70,28 +69,16 @@ class KsefGusClient
         }
         $this->key = $storedKey;
 
-        $this->timeout = getDolGlobalInt('KSEF_TIMEOUT', 7);
+        $this->timeout = ksefGetTimeout();
         $this->nameStyle = getDolGlobalString('KSEF_GUS_NAME_STYLE', 'full');
         $this->error = '';
         $this->sid = '';
     }
 
     /**
-     * @brief Session key for the cached sid, qualified by environment
-     * @return string Env qualified session key
-     * @called_by login(), logout(), ensureSession()
-     */
-    private function sessionKey()
-    {
-        return self::SESSION_KEY . '_' . $this->env;
-    }
-
-    /**
-     * @brief Looks up a Polish company in GUS by NIP
-     * @param $nip NIP in any format (cleaned internally)
-     * @return array|false Normalized company data, or false on error
-     * @called_by class/actions_ksef.class.php
-     * @calls login(), search(), fullReport(), logout()
+     * @brief Look up NIP
+     * @param $nip
+     * @return array|false
      */
     public function lookupByNip($nip)
     {
@@ -103,11 +90,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Lookup body, wrapped by lookupByNip() for guaranteed logout
-     * @param $nip NIP in any format (cleaned internally)
-     * @return array|false Normalized company data, or false on error
-     * @called_by lookupByNip()
-     * @calls login(), search(), fullReport()
+     * @brief Lookup body
+     * @param $nip
+     * @return array|false
      */
     private function doLookupByNip($nip)
     {
@@ -148,7 +133,7 @@ class KsefGusClient
             }
             $result = $this->normalizeLegal($report);
         } elseif ($typ === 'F') {
-            // Only CEIDG
+            // SilosID 1: CEIDG
             if ($silosId !== '1') {
                 $this->error = 'unsupported_type';
                 return false;
@@ -168,10 +153,8 @@ class KsefGusClient
     }
 
     /**
-     * @brief Logs in and stores the session identifier
-     * @return bool True on success (sid available), false otherwise
-     * @called_by lookupByNip()
-     * @calls request()
+     * @brief Log in
+     * @return bool
      */
     public function login()
     {
@@ -192,16 +175,13 @@ class KsefGusClient
         }
 
         $this->sid = $sid;
-        ksefSessionWrite($this->sessionKey(), $sid);
         return true;
     }
 
     /**
-     * @brief Searches for entities by NIP
-     * @param $nip Cleaned NIP
-     * @return array|false List of dane rows (assoc arrays), false on error
-     * @called_by lookupByNip()
-     * @calls requestWithSession(), parseDaneRows()
+     * @brief Search by NIP
+     * @param $nip
+     * @return array|false
      */
     public function search($nip)
     {
@@ -224,12 +204,10 @@ class KsefGusClient
     }
 
     /**
-     * @brief Fetches a full report for a REGON
-     * @param $regon 9 digit REGON
-     * @param $reportName BIR12 report name
-     * @return array|false Report fields (assoc), or false on error
-     * @called_by lookupByNip()
-     * @calls requestWithSession(), parseDaneRows()
+     * @brief Fetch full report
+     * @param $regon
+     * @param $reportName
+     * @return array|false
      */
     public function fullReport($regon, $reportName)
     {
@@ -253,10 +231,8 @@ class KsefGusClient
     }
 
     /**
-     * @brief Logs out
+     * @brief Log out
      * @return void
-     * @called_by lookupByNip()
-     * @calls request()
      */
     public function logout()
     {
@@ -266,17 +242,14 @@ class KsefGusClient
         $body = '<ns:Wyloguj><ns:pIdentyfikatorSesji>' . $this->escapeXml($this->sid) . '</ns:pIdentyfikatorSesji></ns:Wyloguj>';
         $this->request(self::ACTION_BASE . 'Wyloguj', $body, 'WylogujResult', true);
         $this->sid = '';
-        ksefSessionUnset($this->sessionKey());
     }
 
     /**
-     * @brief Performs a session call, re-logging if session expired
-     * @param $actionUri WS-Addressing action URI
-     * @param $bodyXml SOAP body inner XML
-     * @param $resultLocalName Local name of the *Result element
-     * @return string|false Inner result string, or false on error
-     * @called_by search(), fullReport()
-     * @calls ensureSession(), login(), request()
+     * @brief Call with relogin
+     * @param $actionUri
+     * @param $bodyXml
+     * @param $resultLocalName
+     * @return string|false
      */
     private function requestWithSession($actionUri, $bodyXml, $resultLocalName)
     {
@@ -289,7 +262,6 @@ class KsefGusClient
             return false;
         }
 
-        // Expired session returns empty
         if (trim($result) === '') {
             if (!$this->login()) {
                 return false;
@@ -308,33 +280,24 @@ class KsefGusClient
     }
 
     /**
-     * @brief Ensures a session identifier is available
-     * @return bool True if a sid is available
-     * @called_by requestWithSession()
-     * @calls login()
+     * @brief Ensure session
+     * @return bool
      */
     private function ensureSession()
     {
         if (!empty($this->sid)) {
             return true;
         }
-        $cached = ksefSessionRead($this->sessionKey(), '');
-        if (!empty($cached)) {
-            $this->sid = $cached;
-            return true;
-        }
         return $this->login();
     }
 
     /**
-     * @brief Sends one SOAP request and return result
-     * @param $actionUri WS-Addressing action URI
-     * @param $bodyXml SOAP body inner XML
-     * @param $resultLocalName Local name of the *Result element to extract
-     * @param $withSid Whether to send the sid HTTP header
-     * @return string|null Result element text, or null on transport error
-     * @called_by login(), logout(), requestWithSession()
-     * @calls buildEnvelope(), extractResult()
+     * @brief Send SOAP request
+     * @param $actionUri
+     * @param $bodyXml
+     * @param $resultLocalName
+     * @param $withSid
+     * @return string|null null on error
      */
     private function request($actionUri, $bodyXml, $resultLocalName, $withSid)
     {
@@ -345,7 +308,8 @@ class KsefGusClient
             $headers[] = 'sid: ' . str_replace(array("\r", "\n"), '', $this->sid);
         }
 
-        $response = getURLContent($this->endpoint, 'POSTALREADYFORMATED', $envelope, 1, $headers, array('https'), 0, 1, 0, $this->timeout);
+        $isTestFake = ksefEndpointIsOverridden('GUS');
+        $response = getURLContent($this->endpoint, 'POSTALREADYFORMATED', $envelope, 1, $headers, $isTestFake ? array('http', 'https') : array('https'), $isTestFake ? 2 : 0, 1, 0, $this->timeout);
 
         if (!empty($response['curl_error_no']) || empty($response['http_code'])) {
             $this->error = 'transport_error';
@@ -369,11 +333,10 @@ class KsefGusClient
     }
 
     /**
-     * @brief Build envelope
-     * @param $actionUri WS-Addressing action URI
-     * @param $bodyXml SOAP body inner XML
-     * @return string Full envelope
-     * @called_by request()
+     * @brief Build SOAP envelope
+     * @param $actionUri
+     * @param $bodyXml
+     * @return string
      */
     private function buildEnvelope($actionUri, $bodyXml)
     {
@@ -388,11 +351,10 @@ class KsefGusClient
     }
 
     /**
-     * @brief Extracts the text
-     * @param $soapXml Raw SOAP response body
-     * @param $resultLocalName Local name of the element to read
-     * @return string|null Element text, or null if absent
-     * @called_by request()
+     * @brief Extract result text
+     * @param $soapXml
+     * @param $resultLocalName
+     * @return string|null
      */
     private function extractResult($soapXml, $resultLocalName)
     {
@@ -400,7 +362,6 @@ class KsefGusClient
             return null;
         }
 
-        // Strip wrapper
         if (preg_match('/<(?:\w+:)?Envelope\b.*?<\/(?:\w+:)?Envelope>/s', $soapXml, $m)) {
             $soapXml = $m[0];
         }
@@ -424,10 +385,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Parses GUS report XML into rows
-     * @param $innerXml Namespace-less <root><dane>... XML string
-     * @return array List of assoc arrays
-     * @called_by search(), fullReport()
+     * @brief Parse dane rows
+     * @param $innerXml
+     * @return array
      */
     private function parseDaneRows($innerXml)
     {
@@ -460,10 +420,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Chooses the best dane row
-     * @param $rows List of dane rows
-     * @return array|null Selected row, or null if none usable
-     * @called_by lookupByNip()
+     * @brief Pick best row
+     * @param $rows
+     * @return array|null
      */
     private function pickRow($rows)
     {
@@ -479,10 +438,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Tells whether a parsed row is error
-     * @param $row Dane row
-     * @return bool True if the row carries an ErrorCode
-     * @called_by search(), fullReport()
+     * @brief Check error row
+     * @param $row
+     * @return bool
      */
     private function rowIsError($row)
     {
@@ -490,37 +448,54 @@ class KsefGusClient
     }
 
     /**
-     * @brief Normalizes a legal person report
+     * @brief Normalize legal person
      * @param $r Report fields
-     * @return array Normalized company data
-     * @called_by lookupByNip()
-     * @calls composeAddress(), isActive()
+     * @return array
      */
     private function normalizeLegal($r)
     {
         $data = $this->normalizeCommon($r, 'praw_', 'P');
 
-        $registerName = $this->val($r, 'praw_rodzajRejestruEwidencji_Nazwa');
-        if (stripos($registerName, 'KRS') !== false || stripos($registerName, 'Krajowego Rejestru') !== false) {
-            $data['krs'] = $this->val($r, 'praw_numerWRejestrzeEwidencji');
-        }
+        $data['krs'] = $this->krsNumber($r);
 
         return $data;
     }
 
     /**
-     * @brief Normalizes a sole proprietor report pair
-     * @param $c CEIDG report fields (name, address, dates)
-     * @param $o General data report fields (nip, status)
-     * @return array Normalized company data
-     * @called_by lookupByNip()
-     * @calls normalizeCommon()
+     * @brief Get KRS number
+     * @param $r Report fields
+     * @return string
+     */
+    private function krsNumber($r)
+    {
+        $symbol = $this->val($r, 'praw_rodzajRejestruEwidencji_Symbol');
+        if ($symbol !== '') {
+            $isKrs = in_array($symbol, self::KRS_REGISTER_SYMBOLS, true);
+        } else {
+            $isKrs = stripos($this->val($r, 'praw_organRejestrowy_Nazwa'), 'KRAJOWEGO REJESTRU S') !== false
+                || stripos($this->val($r, 'praw_rodzajRejestruEwidencji_Nazwa'), 'Krajowego Rejestru') !== false;
+        }
+        if (!$isKrs) {
+            return '';
+        }
+
+        $number = preg_replace('/\s+/', '', $this->val($r, 'praw_numerWRejestrzeEwidencji'));
+        if (!preg_match('/^\d{1,10}$/', $number)) {
+            return '';
+        }
+        return str_pad($number, 10, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * @brief Normalize sole proprietor
+     * @param $c CEIDG report
+     * @param $o General report
+     * @return array
      */
     private function normalizeSoleProp($c, $o)
     {
         $data = $this->normalizeCommon($c, 'fiz_', 'F');
 
-        // NIP and status come from the general data report, phone is not provided
         $data['nip'] = $this->val($o, 'fiz_nip');
         $data['status_nip'] = $this->val($o, 'fiz_statusNip');
         $data['phone'] = '';
@@ -529,13 +504,11 @@ class KsefGusClient
     }
 
     /**
-     * @brief Normalizes the fields shared by both report types
+     * @brief Normalize common fields
      * @param $r Report fields
-     * @param $prefix Field prefix (praw_ or fiz_)
-     * @param $typ Entity type (P or F)
-     * @return array Normalized company data
-     * @called_by normalizeLegal(), normalizeSoleProp()
-     * @calls val(), formatZip(), composeAddress(), isActive()
+     * @param $prefix praw_ or fiz_
+     * @param $typ P or F
+     * @return array
      */
     private function normalizeCommon($r, $prefix, $typ)
     {
@@ -562,10 +535,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Replaces org types with acronyms, per KSEF_GUS_NAME_STYLE
-     * @param $name Company name as returned by GUS (uppercase)
-     * @return string Name
-     * @called_by normalizeCommon()
+     * @brief Shorten org type
+     * @param $name
+     * @return string
      */
     private function shortenOrgType($name)
     {
@@ -606,11 +578,10 @@ class KsefGusClient
     }
 
     /**
-     * @brief Builds a single-line street address from GUS address
+     * @brief Compose street address
      * @param $r Report fields
-     * @param $prefix Field prefix (praw_ or fiz_)
-     * @return string Composed address (street building/apt)
-     * @called_by normalizeLegal(), normalizeSoleProp()
+     * @param $prefix praw_ or fiz_
+     * @return string
      */
     private function composeAddress($r, $prefix)
     {
@@ -627,16 +598,14 @@ class KsefGusClient
     }
 
     /**
-     * @brief Whether an entity is active
+     * @brief Check entity active
      * @param $r Report fields
-     * @param $prefix Field prefix (praw_ or fiz_)
-     * @return bool True if not suspended, closed or removed
-     * @called_by normalizeLegal(), normalizeSoleProp()
+     * @param $prefix praw_ or fiz_
+     * @return bool
      */
     private function isActive($r, $prefix)
     {
         $blockers = array(
-            $prefix . 'dataZawieszeniaDzialalnosci',
             $prefix . 'dataZakonczeniaDzialalnosci',
             $prefix . 'dataSkresleniaZRegon',
             $prefix . 'dataSkresleniaDzialalnosciZRegon',
@@ -648,15 +617,23 @@ class KsefGusClient
                 return false;
             }
         }
+
+        // BIR 1.2 3.3.2
+        $suspended = substr($this->val($r, $prefix . 'dataZawieszeniaDzialalnosci'), 0, 10);
+        if ($suspended !== '') {
+            $resumed = substr($this->val($r, $prefix . 'dataWznowieniaDzialalnosci'), 0, 10);
+            if ($resumed === '' || strcmp($suspended, $resumed) >= 0) {
+                return false;
+            }
+        }
         return true;
     }
 
     /**
-     * @brief Reads a trimmed field value
+     * @brief Read trimmed field
      * @param $r Report fields
-     * @param $key Field name
-     * @return string Value or empty string
-     * @called_by normalizeLegal(), normalizeSoleProp(), composeAddress(), isActive()
+     * @param $key
+     * @return string
      */
     private function val($r, $key)
     {
@@ -664,10 +641,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Strips control characters
-     * @param $value Raw string (GUS warns values may carry HTML/SQL payloads)
-     * @return string Sanitized, trimmed value
-     * @called_by parseDaneRows()
+     * @brief Strip control chars
+     * @param $value
+     * @return string
      */
     private function sanitize($value)
     {
@@ -676,10 +652,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Formats postal code
-     * @param $zip Raw postal code (GUS full reports omit the dash)
-     * @return string Formatted code, or the input unchanged if not 5 digits
-     * @called_by normalizeLegal(), normalizeSoleProp()
+     * @brief Format postal code
+     * @param $zip
+     * @return string
      */
     private function formatZip($zip)
     {
@@ -690,10 +665,9 @@ class KsefGusClient
     }
 
     /**
-     * @brief Escapes a value
-     * @param $value Raw value
-     * @return string XML safe value (dol_escape_xml is a no-op, so escape here)
-     * @called_by login(), search(), fullReport(), logout()
+     * @brief Escape XML text
+     * @param $value
+     * @return string
      */
     private function escapeXml($value)
     {

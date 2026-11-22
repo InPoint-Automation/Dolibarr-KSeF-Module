@@ -13,7 +13,6 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 -- Indexes
 CREATE INDEX idx_ksef_submissions_fk_facture ON llx_ksef_submissions (fk_facture);
 CREATE INDEX idx_ksef_submissions_status ON llx_ksef_submissions (status);

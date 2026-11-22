@@ -13,21 +13,30 @@ A complete KSeF (Krajowy System e-Faktur) e-invoicing integration for Dolibarr. 
 ## Features
 
 - Generation, signing, and submission of FA(3) XML invoices to KSeF (online and offline modes)
-- Correction invoices (KOR) with chain tracking and payment settlement across corrections
+- Correction invoices (KOR) for VAT, advance and settlement invoices, with chain tracking and payment settlement across corrections
+- Advance and settlement (final) invoices (Faktura zaliczkowa / rozliczeniowa, końcowa), also from orders
 - Download, sync, and import of incoming invoices with supplier and product matching
 - Batch import with auto-creation of suppliers and products
+- Sync of your sales invoices from KSeF, matched against Dolibarr, with import of missing ones
 - KSeF system monitoring via Latarnia/Lighthouse API with outage warnings
 - NBP exchange rate integration for foreign currency invoices
 - KSeF-style PDF invoice visualizations for outgoing and incoming invoices
 - Automatic QR code on PDF invoices (online + offline)
 - Tax exemption support with configurable legal basis
+- VAT group (GV) and JST markers with the group member as third party
 - Configurable notes, extrafields, and order/contract references in FA(3) XML
 - Per-environment authentication (Test/Demo/Production) with token or certificate
 - GUS/REGON company lookup by NIP (requires GUS API key - instructions in How To Use)
+- Chart of accounts import (CSV or JPK_KR_PD) and write-off journal entries when closing invoices paid short (e.g. bank fee, exchange difference)
 - REST API endpoints
 - Third party KSeF exclusion (e.g. B2C customers)
-- In-module How To Use documentation
+- In-module How To Use documentation, guided tours and a setup checklist
+- Database check with repair on the About page
 - Scheduled jobs for status checking, incoming sync, offline retry, and KSeF monitoring
+
+<p align="center" width="100%">
+<img alt="Sending an invoice to KSeF" src="./img/readme/en/SendLoop.webp" width="100%" />
+</p>
 
 ## Documentation
 There is complete in-module documentation in the “How To Use” tab. However, we also have finished a more detailed documentation with a bunch of screenshots which is available on our website as well in English and Polish. If you run into issues or think something is missing, please let us know and we’ll add it!
@@ -38,8 +47,8 @@ https://inpointautomation.com/content/ksef-integration-module-for-dolibarr/
 
 ### System Requirements
 
-- Dolibarr: Tested and works on v22 and above
-- PHP: 7.4 or higher
+- Dolibarr: 22.0 or higher (tested on v22 and above)
+- PHP: 8.0 or higher
 - PHP Extensions:
     - `OpenSSL`
     - `cURL`

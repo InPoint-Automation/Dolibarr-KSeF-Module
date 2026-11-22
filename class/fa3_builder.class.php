@@ -38,40 +38,63 @@ class FA3Builder
     private $lastInvoiceType;
     private $currentInvoiceCurrency;
     private $currentKursWaluty;
+    /** @var float|null */
+    private $beforeKursWaluty;
+    /** @var callable|null */
+    private $lineKursResolve = null;
+    /** @var array */
+    private $payParts = array();
+    /** @var array|null */
+    private $korPlan = null;
+    /** @var bool */
+    private $noRowKurs = false;
     private $currentCustomer;
     private $currentCustomerCountry;
     private $currentCustomerIsEU;
     private $reconstructing = false;
     private $productCache = array();
+    private $depositCtx = null;
+    /** @var bool */
+    private $grossMethod = false;
+    /** @var bool */
+    private $lineVatOn = false;
+    private $lineDates = array();
+    /** @var array|null */
+    private $sourceLineDates = null;
+    /** @var array */
+    private $settlement = array();
+    private $origSettlement = array();
+    /** @var array */
+    private $absorbedNotes = array();
+    /** @var array */
+    private $legacyZeroKeys = array();
 
+    /**
+     * @brief Constructor
+     * @param DoliDB $db
+     */
     public function __construct($db)
     {
         $this->db = $db;
     }
 
-
     /**
-     * @brief Builds FA(3) XML from Dolibarr invoice
-     * @param int $invoice_id Invoice ID
-     * @param array $options Optional settings:
-     *   - offline_mode: bool - Whether invoice is being submitted in offline mode
-     *   - include_attachments: bool - Attachments
-     * @return string|false XML string or false on error
-     * @called_by KSEF::generateFA3XML(), KSEF::submitInvoice(), KSEF::submitInvoiceOffline()
-     * @calls buildNaglowek(), buildPodmiot1(), buildPodmiot2(), buildFa()
+     * @brief Build invoice XML
+     * @param int $invoice_id
+     * @param array $options Build options
+     * @return string|false False on error
      */
     public function buildFromInvoice($invoice_id, $options = array())
     {
         global $conf, $mysoc, $extrafields;
 
-        // Reset hash
         $this->lastXmlHash = null;
         $this->lastCreationDate = null;
         $this->lastInvoiceType = null;
         $this->productCache = array();
+        $this->legacyZeroKeys = array();
 
         try {
-            // Reload extrafield definitions
             if (!isset($extrafields) || !is_object($extrafields)) {
                 dol_include_once('/core/class/extrafields.class.php');
                 $extrafields = new ExtraFields($this->db);
@@ -96,12 +119,14 @@ class FA3Builder
                 $this->error = "Customer not found: " . $invoice->socid;
                 return false;
             }
-            if (method_exists($customer, 'fetch_optionals')) {
-                $customer->fetch_optionals();
-            }
+            $customer->fetch_optionals();
             $this->currentCustomer = $customer;
 
-            // For corrective invoices, load original + original XML
+            $this->depositCtx = ksefDepositContext($this->db, $invoice);
+            if (!$this->reconstructing && ksefDepositBlockCode($this->depositCtx) !== '') {
+                throw new Exception(ksefDepositBlockMessage($this->db, $invoice, $this->depositCtx));
+            }
+
             $originalInvoice = null;
             $originalXmlData = null;
             if (($invoice->type == Facture::TYPE_CREDIT_NOTE || $invoice->type == Facture::TYPE_REPLACEMENT) && !empty($invoice->fk_facture_source)) {
@@ -112,9 +137,7 @@ class FA3Builder
                 }
                 $originalInvoice->fetch_lines();
                 if (ksefGetInvoiceCurrency($invoice) !== ksefGetInvoiceCurrency($originalInvoice)) {
-                    $this->error = "Cross-currency correction not supported: original is "
-                        . ksefGetInvoiceCurrency($originalInvoice) . ", correction is "
-                        . ksefGetInvoiceCurrency($invoice) . ". A correction must use the original invoice currency.";
+                    $this->error = ksefMsg('KSEF_ErrCrossCurrencyCorrection', ksefGetInvoiceCurrency($originalInvoice), ksefGetInvoiceCurrency($invoice));
                     return false;
                 }
                 $originalXmlData = $this->fetchOriginalXmlData($originalInvoice->id);
@@ -122,6 +145,46 @@ class FA3Builder
                     $originalXmlData = $this->reconstructOriginalXmlData($originalInvoice);
                 }
             }
+            $this->absorbedNotes = array();
+            foreach ($originalInvoice && $invoice->type == Facture::TYPE_REPLACEMENT ? array_map('intval', (array) (ksefCorrectionState($invoice)['absorb'] ?? array())) : array() as $noteId) {
+                $note = new Facture($this->db);
+                if ($note->fetch($noteId) <= 0) {
+                    $this->error = "Credit note not found: " . $noteId;
+                    return false;
+                }
+                $originalInvoice->lines = array_merge($originalInvoice->lines, $note->lines);
+                foreach (array('total_ht', 'total_tva', 'total_ttc', 'multicurrency_total_ht', 'multicurrency_total_tva', 'multicurrency_total_ttc') as $col) {
+                    $originalInvoice->$col = (float) $originalInvoice->$col + (float) $note->$col;
+                }
+                $this->absorbedNotes[] = $note;
+            }
+
+            foreach (array_filter(array($invoice, $originalInvoice)) as $obj) {
+                $obj->lines = array_values(array_filter((array) $obj->lines, function ($l) {
+                    return (int) ($l->product_type ?? 0) !== 9;
+                }));
+            }
+            $badRates = $this->reconstructing ? array() : ksefNonPolishRates($invoice->lines);
+            if ($badRates) {
+                throw new Exception(ksefMsg('KSEF_VatRateNotPolish', implode(', ', $badRates)));
+            }
+            $this->settlement = $this->takeSettlementLines($invoice);
+            $this->origSettlement = $originalInvoice ? $this->takeSettlementLines($originalInvoice) : array();
+
+            $this->grossMethod = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_FA3_GROSS_SOURCE', 'disabled'), $originalInvoice ? $originalInvoice : $invoice);
+            if ($this->grossMethod && getDolGlobalInt('MAIN_ROUNDOFTOTAL_NOT_TOTALOFROUND')) {
+                global $langs;
+                $langs->load('ksef@ksef');
+                throw new Exception($langs->transnoentitiesnoconv('KSEF_GrossMethodRoundingMode'));
+            }
+            // art. 106e(10)
+            $this->lineVatOn = ksefLineVatWanted(array((array) $invoice->lines, $originalInvoice ? (array) $originalInvoice->lines : array()), array(
+                'key' => function ($line) {
+                    return $this->rateKey($line);
+                },
+                'pln' => ksefGetInvoiceCurrency($invoice) === 'PLN',
+                'gross' => $this->grossMethod,
+            ));
 
             $xml = new DOMDocument('1.0', 'UTF-8');
             $xml->formatOutput = true;
@@ -137,8 +200,11 @@ class FA3Builder
 
             $this->buildNaglowek($xml, $faktura, $invoice, $options);
             $this->buildPodmiot1($xml, $faktura, $mysoc, $customer);
-            $this->buildPodmiot2($xml, $faktura, $customer);
+            $this->buildPodmiot2($xml, $faktura, $customer, $invoice);
             $this->buildPodmiot3($xml, $faktura, $invoice);
+            if (!empty($originalXmlData['sent_rows'])) {
+                $this->legacyZeroKeys = $this->legacyZeroKeys($invoice, $originalInvoice, $originalXmlData['sent_rows']);
+            }
             $this->buildFa($xml, $faktura, $invoice, $originalInvoice, $originalXmlData);
             $this->buildStopka($xml, $faktura, $invoice);
 
@@ -149,17 +215,16 @@ class FA3Builder
             return $xmlString;
 
         } catch (Exception $e) {
-            $this->error = "FA(3) generation error: " . $e->getMessage();
+            $this->error = $e->getMessage();
             $this->errors[] = $this->error;
-            dol_syslog("FA3Builder::buildFromInvoice ERROR: " . $this->error, LOG_ERR);
+            dol_syslog("FA3Builder::buildFromInvoice ERROR: FA(3) generation error: " . $this->error, LOG_ERR);
             return false;
         }
     }
 
     /**
-     * @brief Gets creation date from last built XML
-     * @return int|null Unix timestamp of FA3 creation date
-     * @called_by KSEF::submitInvoice(), KSEF::submitInvoiceOffline()
+     * @brief Last creation date
+     * @return int|null
      */
     public function getLastCreationDate()
     {
@@ -167,8 +232,8 @@ class FA3Builder
     }
 
     /**
-     * @brief Gets hash of last built XML
-     * @return string|null Base64-encoded SHA-256 hash
+     * @brief Last XML hash
+     * @return string|null Base64 SHA-256
      */
     public function getLastXmlHash()
     {
@@ -176,7 +241,7 @@ class FA3Builder
     }
 
     /**
-     * @brief Get invoice type from last XML (VAT, KOR, ZAL)
+     * @brief Last invoice type
      * @return string|null
      */
     public function getLastInvoiceType()
@@ -185,25 +250,22 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds header section of FA(3)
+     * @brief Build Naglowek
      * @param DOMDocument $xml
-     * @param DOMElement $parent Parent element
-     * @param Facture $invoice Invoice object
-     * @param array $options Build options
-     * @called_by buildFromInvoice()
+     * @param DOMElement $parent
+     * @param Facture $invoice
+     * @param array $options
      */
     private function buildNaglowek($xml, $parent, $invoice, $options = array())
     {
         $naglowek = $xml->createElement('Naglowek');
         $parent->appendChild($naglowek);
 
-        // Form code
         $kodFormularza = $xml->createElement('KodFormularza', 'FA');
         $kodFormularza->setAttribute('kodSystemowy', 'FA (3)');
         $kodFormularza->setAttribute('wersjaSchemy', KSEF_FA3_SCHEMA_VERSION);
         $naglowek->appendChild($kodFormularza);
 
-        // Form variant
         $naglowek->appendChild($xml->createElement('WariantFormularza', '3'));
 
         if (!empty($options['original_creation_date'])) {
@@ -217,7 +279,6 @@ class FA3Builder
         }
         $naglowek->appendChild($xml->createElement('DataWytworzeniaFa', $dateCreation));
 
-        // System identification
         $systemInfo = 'Dolibarr ERP ' . DOL_VERSION;
         if (!empty($options['offline_mode'])) {
             $systemInfo .= ' (offline)';
@@ -226,27 +287,22 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds seller (Podmiot1) section
-     * @param $xml DOMDocument
-     * @param $parent Parent element
-     * @param $mysoc Company object
-     * @param $customer Customer object
-     * @called_by buildFromInvoice()
-     * @calls ksefCleanNIP(), xmlSafe()
+     * @brief Build seller Podmiot1
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
+     * @param Societe $mysoc
+     * @param Societe $customer
      */
     private function buildPodmiot1($xml, $parent, $mysoc, $customer)
     {
         global $conf;
 
-        // Seller
         $podmiot1 = $xml->createElement('Podmiot1');
         $parent->appendChild($podmiot1);
 
-        // Check if buyer is not PL
         $buyerCountry = ksefInferCountryCode($customer);
         $isForeignBuyer = ($buyerCountry != 'PL');
 
-        // PrefiksPodatnika - VAT prefix if buyer is foreign AND seller has valid EU VAT ID in tva_intra
         if ($isForeignBuyer && !empty($mysoc->tva_intra)) {
             $vatIntra = strtoupper(trim($mysoc->tva_intra));
             if (preg_match('/^([A-Z]{2})/', $vatIntra, $matches)) {
@@ -255,7 +311,6 @@ class FA3Builder
             }
         }
 
-        // NrEORI
         $sellerEori = getDolGlobalString('KSEF_COMPANY_EORI', '');
         if (empty($sellerEori)) {
             $sellerEori = trim(ksefGetIdentifierField($mysoc, 'EORI'));
@@ -264,36 +319,25 @@ class FA3Builder
             $podmiot1->appendChild($xml->createElement('NrEORI', $this->xmlSafe($sellerEori)));
         }
 
-        // Identification
         $daneIdent = $xml->createElement('DaneIdentyfikacyjne');
         $podmiot1->appendChild($daneIdent);
 
-        $nip = '';
-        if (!empty($conf->global->KSEF_COMPANY_NIP)) {
-            $nip = ksefCleanNIP($conf->global->KSEF_COMPANY_NIP);
-        }
+        $nip = ksefSellerNip();
         if (empty($nip)) {
-            $nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
-        }
-        if (empty($nip)) {
-            throw new Exception("Seller NIP is required - configure KSEF");
+            throw new Exception(ksefMsg('KSEF_ErrSellerNipMissing'));
         }
 
         $this->sellerName = $this->xmlSafe($mysoc->name);
         $daneIdent->appendChild($xml->createElement('NIP', $nip));
         $daneIdent->appendChild($xml->createElement('Nazwa', $this->sellerName));
 
-        // Address
         $adres = $xml->createElement('Adres');
         $podmiot1->appendChild($adres);
 
         $adres->appendChild($xml->createElement('KodKraju', $mysoc->country_code ?: 'PL'));
 
-        // AdresL1: Street address
-        $address = !empty($mysoc->address) ? $this->xmlSafe($mysoc->address) : 'ul. Testowa 1';
-        $adres->appendChild($xml->createElement('AdresL1', $address));
+        $adres->appendChild($xml->createElement('AdresL1', !empty($mysoc->address) ? $this->xmlSafe($mysoc->address) : ''));
 
-        // AdresL2: Postal code + city
         $adresL2Parts = array();
         if (!empty($mysoc->zip)) {
             $adresL2Parts[] = $this->xmlSafe($mysoc->zip);
@@ -305,37 +349,65 @@ class FA3Builder
             $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
         }
 
-        // DaneKontaktowe
-        if (!empty($mysoc->email) || !empty($mysoc->phone)) {
-            $daneKontakt = $xml->createElement('DaneKontaktowe');
-            $podmiot1->appendChild($daneKontakt);
-
-            if (!empty($mysoc->email)) {
-                $daneKontakt->appendChild($xml->createElement('Email', $this->xmlSafe($mysoc->email)));
-            }
-            if (!empty($mysoc->phone)) {
-                $daneKontakt->appendChild($xml->createElement('Telefon', $this->xmlSafe($mysoc->phone)));
-            }
-        }
+        $this->appendDaneKontaktowe($xml, $podmiot1, $mysoc->email ?? '', $mysoc->phone ?? '');
     }
 
     /**
-     * @brief Builds buyer (Podmiot2) section
-     * @param $xml DOMDocument
-     * @param $parent Parent element
-     * @param $customer Customer object
-     * @called_by buildFromInvoice()
-     * @calls ksefCleanNIP(), xmlSafe(), getEntityFlags(), isEUCountry()
+     * @brief Append DaneKontaktowe
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
+     * @param string $email May be several
+     * @param string $phone
      */
-    private function buildPodmiot2($xml, $parent, $customer)
+    private function appendDaneKontaktowe($xml, $parent, $email, $phone)
     {
-        global $conf;
+        $mail = '';
+        foreach (preg_split('/[\s,;]+/', trim((string) $email)) as $candidate) {
+            if ($candidate !== '' && isValidEmail($candidate)) {
+                $mail = $candidate;
+                break;
+            }
+        }
+        $tel = ksefPhoneForXml($phone);
+        if (ksefPhoneTooLong($phone)) {
+            dol_syslog(__METHOD__ . " phone '" . $phone . "' longer than 16 characters (TNumerTelefonu): left out of DaneKontaktowe", LOG_WARNING);
+        }
+        if ($mail === '' && $tel === '') {
+            return;
+        }
+        $dane = $xml->createElement('DaneKontaktowe');
+        if ($mail !== '') {
+            $dane->appendChild($xml->createElement('Email', $this->xmlSafe($mail)));
+        }
+        if ($tel !== '') {
+            $dane->appendChild($xml->createElement('Telefon', $this->xmlSafe($tel)));
+        }
+        $parent->appendChild($dane);
+    }
 
-        // Buyer
+    /**
+     * @brief Include party contact
+     * @param Societe $party
+     * @return bool
+     */
+    private function includeContactOf($party)
+    {
+        return getDolGlobalString('KSEF_FA3_INCLUDE_CONTACT', '1') !== '0'
+            && empty($party->array_options['options_ksef_hide_contact']);
+    }
+
+    /**
+     * @brief Build buyer Podmiot2
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
+     * @param Societe $customer
+     * @param Facture|null $invoice
+     */
+    private function buildPodmiot2($xml, $parent, $customer, $invoice = null)
+    {
         $podmiot2 = $xml->createElement('Podmiot2');
         $parent->appendChild($podmiot2);
 
-        // NrEORI
         $nrEori = $this->getBuyerNrEORI($customer);
         if (!empty($nrEori) && empty($customer->array_options['options_ksef_hide_eori'])) {
             $podmiot2->appendChild($xml->createElement('NrEORI', $this->xmlSafe($nrEori)));
@@ -354,8 +426,8 @@ class FA3Builder
         if ($isPolish && !empty($nip)) {
             $daneIdent->appendChild($xml->createElement('NIP', $nip));
         } elseif ($isEU && !empty($customer->tva_intra)) {
-            $vatNumber = ksefStripVATPrefix($customer->tva_intra);
-            $daneIdent->appendChild($xml->createElement('KodUE', $countryCode));
+            $vatNumber = ksefNrVatUE($customer->tva_intra);
+            $daneIdent->appendChild($xml->createElement('KodUE', ksefKodUE($countryCode)));
             if (!empty($vatNumber)) {
                 $daneIdent->appendChild($xml->createElement('NrVatUE', $vatNumber));
             }
@@ -369,49 +441,25 @@ class FA3Builder
         $this->buyerName = $this->xmlSafe($customer->name);
         $daneIdent->appendChild($xml->createElement('Nazwa', $this->buyerName));
 
-        // Address
         $adres = $xml->createElement('Adres');
         $podmiot2->appendChild($adres);
 
         $adres->appendChild($xml->createElement('KodKraju', $countryCode));
 
-        // AdresL1: Street address
-        $address = !empty($customer->address) ? $this->xmlSafe($customer->address) : 'Brak danych';
-        $adres->appendChild($xml->createElement('AdresL1', $address));
-
-        // AdresL2: Postal code + city
-        $adresL2Parts = array();
-        if (!empty($customer->zip)) {
-            $adresL2Parts[] = $this->xmlSafe($customer->zip);
-        }
-        if (!empty($customer->town)) {
-            $adresL2Parts[] = $this->xmlSafe($customer->town);
-        }
-        if (!empty($adresL2Parts)) {
-            $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
+        $lines = ksefBuyerAddressLines($customer);
+        $adres->appendChild($xml->createElement('AdresL1', $this->xmlSafe($lines['l1'])));
+        if ($lines['l2'] !== '') {
+            $adres->appendChild($xml->createElement('AdresL2', ksefXmlEscape($lines['l2'])));
         }
 
-        // DaneKontaktowe
-        $includeContact = getDolGlobalString('KSEF_FA3_INCLUDE_CONTACT', '1') !== '0'
-            && empty($customer->array_options['options_ksef_hide_contact']);
-        if ($includeContact && (!empty($customer->email) || !empty($customer->phone))) {
-            $daneKontakt = $xml->createElement('DaneKontaktowe');
-            $podmiot2->appendChild($daneKontakt);
-
-            if (!empty($customer->email)) {
-                $daneKontakt->appendChild($xml->createElement('Email', $this->xmlSafe($customer->email)));
-            }
-            if (!empty($customer->phone)) {
-                $daneKontakt->appendChild($xml->createElement('Telefon', $this->xmlSafe($customer->phone)));
-            }
+        if ($this->includeContactOf($customer)) {
+            $this->appendDaneKontaktowe($xml, $podmiot2, $customer->email ?? '', $customer->phone ?? '');
         }
 
-        // NrKlienta: Customer code from Dolibarr
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_NRKLIENTA) && !empty($customer->code_client)) {
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_NRKLIENTA') && !empty($customer->code_client)) {
             $podmiot2->appendChild($xml->createElement('NrKlienta', $this->xmlSafe($customer->code_client)));
         }
 
-        // IDNabywcy
         $idNabywcy = $this->getIdNabywcy($customer);
         if (!empty($idNabywcy)) {
             $podmiot2->appendChild($xml->createElement('IDNabywcy', $this->xmlSafe($idNabywcy)));
@@ -420,17 +468,16 @@ class FA3Builder
         $this->currentCustomerCountry = $countryCode;
         $this->currentCustomerIsEU = $isEU;
 
-        $flags = $this->getEntityFlags($customer);
-        $podmiot2->appendChild($xml->createElement('JST', $flags['jst'])); // Local Gov Unit flag
-        $podmiot2->appendChild($xml->createElement('GV', $flags['gv']));   // VAT Group flag
+        $flags = $this->getEntityFlags($customer, $invoice);
+        $podmiot2->appendChild($xml->createElement('JST', $flags['jst']));
+        $podmiot2->appendChild($xml->createElement('GV', $flags['gv']));
     }
 
     /**
-     * @brief Builds Podmiot3
+     * @brief Build Podmiot3 sections
      * @param DOMDocument $xml
-     * @param DOMElement  $parent  Faktura root element
-     * @param Facture     $invoice current invoice
-     * @called_by buildFromInvoice()
+     * @param DOMElement $parent
+     * @param Facture $invoice
      */
     private function buildPodmiot3($xml, $parent, $invoice)
     {
@@ -438,9 +485,7 @@ class FA3Builder
             return;
         }
         if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-            if (method_exists($invoice, 'fetch_optionals')) {
-                $invoice->fetch_optionals();
-            }
+            $invoice->fetch_optionals();
         }
 
         $list = $this->getPodmiot3List($invoice);
@@ -451,63 +496,38 @@ class FA3Builder
         $emitted = 0;
         foreach ($list as $e) {
             $this->buildOnePodmiot3($xml, $parent, $e['id'], $e['role'], $e['udzial']);
-            if (++$emitted >= 20) break; // soft cap (matches the editor)
+            if (++$emitted >= 20) break;
         }
     }
 
     /**
-     * @brief Decode stored Podmiot3 list of invoice.
-     * @return array List of id int, role string, udzial string
-     * @called_by buildPodmiot3(), buildPlatnosc()
+     * @brief Podmiot3 entries
+     * @param Facture $invoice
+     * @return array
      */
     private function getPodmiot3List($invoice)
     {
         if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-            if (method_exists($invoice, 'fetch_optionals')) {
-                $invoice->fetch_optionals();
-            }
+            $invoice->fetch_optionals();
         }
-        $raw = $invoice->array_options['options_ksef_podmiot3'] ?? '';
-        $list = array();
-        $decoded = (is_string($raw) && $raw !== '') ? json_decode($raw, true) : null;
-        if (is_array($decoded)) {
-            foreach ($decoded as $e) {
-                $id = (int) ($e['id'] ?? 0);
-                if ($id > 0) {
-                    $list[] = array(
-                        'id'     => $id,
-                        'role'   => (string) ($e['role'] ?? ''),
-                        'udzial' => trim((string) ($e['udzial'] ?? '')),
-                    );
-                }
-            }
-        } elseif ((int) $raw > 0) {
-            $list[] = array(
-                'id'     => (int) $raw,
-                'role'   => trim((string) ($invoice->array_options['options_ksef_podmiot3_role'] ?? '')),
-                'udzial' => '',
-            );
-        }
-        return $list;
+        return ksefPodmiot3Entries($invoice);
     }
 
     /**
-     * @brief Build a single Podmiot3 node
-     * @param $societeId Societe rowid
-     * @param string $role Role code 1-11
-     * @param string $udzial Percentage share (role 4 udzial)
-     * @called_by buildPodmiot3()
+     * @brief Build one Podmiot3
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
+     * @param int $societeId
+     * @param string $role Role code
+     * @param string $udzial Percent share
      */
     private function buildOnePodmiot3($xml, $parent, $societeId, $role, $udzial = '')
     {
-        require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
-        $party = new Societe($this->db);
-        if ($party->fetch($societeId) <= 0) {
+        $party = ksefVisibleSociete($this->db, $societeId);
+        if (!$party) {
             return;
         }
-        if (method_exists($party, 'fetch_optionals')) {
-            $party->fetch_optionals();
-        }
+        $party->fetch_optionals();
         if ($role === '') {
             $role = getDolGlobalString('KSEF_PODMIOT3_ROLE', '6');
         }
@@ -537,8 +557,8 @@ class FA3Builder
         } elseif ($isPolish && !empty($nip)) {
             $daneIdent->appendChild($xml->createElement('NIP', $nip));
         } elseif ($isEU && !empty($party->tva_intra)) {
-            $vatNumber = ksefStripVATPrefix($party->tva_intra);
-            $daneIdent->appendChild($xml->createElement('KodUE', $countryCode));
+            $vatNumber = ksefNrVatUE($party->tva_intra);
+            $daneIdent->appendChild($xml->createElement('KodUE', ksefKodUE($countryCode)));
             if (!empty($vatNumber)) {
                 $daneIdent->appendChild($xml->createElement('NrVatUE', $vatNumber));
             }
@@ -552,31 +572,25 @@ class FA3Builder
             $daneIdent->appendChild($xml->createElement('Nazwa', $this->xmlSafe($party->name)));
         }
 
-        // Adres
         $adres = $xml->createElement('Adres');
         $podmiot3->appendChild($adres);
         $adres->appendChild($xml->createElement('KodKraju', $countryCode));
-        $address = !empty($party->address) ? $this->xmlSafe($party->address) : 'Brak danych';
-        $adres->appendChild($xml->createElement('AdresL1', $address));
-        $adresL2Parts = array();
-        if (!empty($party->zip)) {
-            $adresL2Parts[] = $this->xmlSafe($party->zip);
-        }
-        if (!empty($party->town)) {
-            $adresL2Parts[] = $this->xmlSafe($party->town);
-        }
-        if (!empty($adresL2Parts)) {
-            $adres->appendChild($xml->createElement('AdresL2', implode(' ', $adresL2Parts)));
+        $lines = ksefBuyerAddressLines($party);
+        $adres->appendChild($xml->createElement('AdresL1', $this->xmlSafe($lines['l1'])));
+        if ($lines['l2'] !== '') {
+            $adres->appendChild($xml->createElement('AdresL2', ksefXmlEscape($lines['l2'])));
         }
 
-        // Role
+        // XSD sequence
+        if ($this->includeContactOf($party)) {
+            $this->appendDaneKontaktowe($xml, $podmiot3, $party->email ?? '', $party->phone ?? '');
+        }
+
         $podmiot3->appendChild($xml->createElement('Rola', $this->xmlSafe($role)));
 
-        // Udzial
         if ($role === '4' && $udzial !== '') {
             $udzialVal = (float) str_replace(',', '.', $udzial);
             if ($udzialVal > 0 && $udzialVal <= 100) {
-                // xsd:decimal: dot separator, max 2 fraction digits, no forced trailing zeros
                 $udzialStr = rtrim(rtrim(number_format($udzialVal, 2, '.', ''), '0'), '.');
                 $podmiot3->appendChild($xml->createElement('Udzial', $udzialStr));
             }
@@ -584,24 +598,23 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds invoice data (Fa) section
-     * @param $xml DOMDocument
-     * @param $parent Parent element
-     * @param $invoice Invoice object
-     * @param $originalInvoice Original invoice for corrections
-     * @param $originalXmlData Parsed original XML data (for KOR comparison)
-     * @called_by buildFromInvoice()
-     * @calls calculateVatSummary(), getInvoiceType(), buildDaneFaKorygowanej(), buildAdnotacje(), buildFaWiersz(), buildPlatnosc()
+     * @brief Build Fa section
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
+     * @param Facture $invoice
+     * @param Facture|null $originalInvoice
+     * @param array|null $originalXmlData Parsed source XML
      */
     private function buildFa($xml, $parent, $invoice, $originalInvoice = null, $originalXmlData = null)
     {
-        global $conf, $mysoc;
+        global $mysoc;
 
         $fa = $xml->createElement('Fa');
         $parent->appendChild($fa);
 
         $invoiceType = $this->getInvoiceType($invoice);
         $this->lastInvoiceType = $invoiceType;
+        $isKorType = in_array($invoiceType, array('KOR', 'KOR_ZAL', 'KOR_ROZ'), true);
 
         dol_include_once('/ksef/lib/ksef.lib.php');
 
@@ -616,26 +629,40 @@ class FA3Builder
 
             $dolibarrRate = $invoice->multicurrency_tx ?? 0;
             if ($dolibarrRate <= 0) {
-                throw new Exception("Brak kursu NBP dla faktury w walucie obcej ($invoiceCurrency). Pobierz kurs przed wysłaniem do KSeF.");
+                throw new Exception(ksefMsg('KSEF_ErrNBPRateMissing', $invoiceCurrency));
             }
 
-            // Invert Dolibarr rate to get KSeF rate
-            $kursWaluty = 1 / $dolibarrRate;
+            $kursOpt = ($invoiceType === 'KOR_ZAL' && !empty($this->depositCtx['root_id'])) ? array('root_id' => (int) $this->depositCtx['root_id']) : array();
+            $kursWaluty = $this->kursOf($invoice, $kursOpt);
         }
         $this->currentInvoiceCurrency = $invoiceCurrency;
         $this->currentKursWaluty = $kursWaluty;
+        $this->beforeKursWaluty = null;
+        $origKurs = ($kursWaluty > 0 && $originalInvoice) ? $this->kursOf($originalInvoice) : null;
+        if ($kursWaluty > 0 && $invoiceType !== 'KOR_ZAL' && $invoice->type == Facture::TYPE_REPLACEMENT && $origKurs
+            && number_format($origKurs, 6, '.', '') !== number_format($kursWaluty, 6, '.', '')) {
+            $this->beforeKursWaluty = $origKurs;
+        }
+        // art. 31b(1)
+        $this->lineKursResolve = null;
+        if ($kursWaluty > 0 && !in_array($invoiceType, array('ZAL', 'KOR_ZAL'), true)) {
+            $lineMap = ksefLineKursMap($this->db, $invoice);
+            if ($lineMap['active']) {
+                $this->lineKursResolve = $lineMap['resolve'];
+                $this->beforeKursWaluty = null;
+            }
+        }
         $useMulticurrency = ($invoiceCurrency != 'PLN');
         $fa->appendChild($xml->createElement('KodWaluty', $invoiceCurrency));
 
-        // P_1: Invoice Date
-        $fa->appendChild($xml->createElement('P_1', dol_print_date($invoice->date, '%Y-%m-%d')));
+        // no TZ shift
+        $fa->appendChild($xml->createElement('P_1', dol_print_date($invoice->date, '%Y-%m-%d', 'tzserver')));
 
-        // P_1M: Place of issue
-        $placeOfIssueMode = $conf->global->KSEF_FA3_PLACE_OF_ISSUE_MODE ?? 'disabled';
+        $placeOfIssueMode = getDolGlobalString('KSEF_FA3_PLACE_OF_ISSUE_MODE', 'disabled');
         if ($placeOfIssueMode != 'disabled') {
             $placeOfIssue = '';
-            if ($placeOfIssueMode == 'custom' && !empty($conf->global->KSEF_FA3_PLACE_OF_ISSUE_CUSTOM)) {
-                $placeOfIssue = $conf->global->KSEF_FA3_PLACE_OF_ISSUE_CUSTOM;
+            if ($placeOfIssueMode == 'custom' && getDolGlobalString('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM')) {
+                $placeOfIssue = getDolGlobalString('KSEF_FA3_PLACE_OF_ISSUE_CUSTOM');
             } elseif ($placeOfIssueMode == 'company' && !empty($mysoc->town)) {
                 $placeOfIssue = $mysoc->town;
             }
@@ -644,125 +671,295 @@ class FA3Builder
             }
         }
 
-        // P_2: Invoice Number
         $fa->appendChild($xml->createElement('P_2', $this->xmlSafe($invoice->ref)));
-        // P_6: Sale Date
-        $saleDate = $invoice->date;
-        if (!empty($invoice->array_options['options_ksef_sale_date'])) {
-            $saleDate = $invoice->array_options['options_ksef_sale_date'];
+        if (getDolGlobalInt('KSEF_FA3_INCLUDE_WZ')) {
+            foreach ($this->getLinkedShipmentRefs($invoice) as $wz) {
+                $fa->appendChild($xml->createElement('WZ', $this->xmlSafe($wz)));
+            }
         }
-        $fa->appendChild($xml->createElement('P_6', dol_print_date($saleDate, '%Y-%m-%d')));
+        $this->lineDates = array();
+        $this->sourceLineDates = null;
+        $korZalRoot = ($this->depositCtx['type'] ?? '') === 'KOR_ZAL' ? (int) ($this->depositCtx['root_id'] ?? 0) : 0;
+        $this->payParts = ((int) $invoice->type === Facture::TYPE_DEPOSIT && $korZalRoot <= 0) ? ksefDepositPaymentParts($this->db, $invoice) : array();
+        $this->korPlan = null;
+        if ($korZalRoot > 0) {
+            $korRoot = new Facture($this->db);
+            $this->payParts = $korRoot->fetch($korZalRoot) > 0 ? ksefDepositKorParts($this->db, $korRoot) : array();
+            $this->korPlan = ksefDepositKorPlan($this->db, $invoice);
+            if ($this->korPlan !== null) {
+                $this->payParts = $this->korPlan['parts'];
+            }
+        }
+        if (count($this->payParts) > 31) {
+            throw new Exception(ksefMsg('KSEF_DepositPartsMax', $korZalRoot > 0 ? $korRoot->ref : $invoice->ref, count($this->payParts)));
+        }
+        $this->noRowKurs = false;
+        if ($this->payParts && $invoiceCurrency != 'PLN') {
+            $partRates = array();
+            foreach ($this->payParts as $pp) {
+                if ((float) $pp['kurs'] <= 0) {
+                    throw new Exception(ksefMsg('KSEF_ErrNBPRateMissing', $invoiceCurrency));
+                }
+                $partRates[number_format((float) $pp['kurs'], 6, '.', '')] = true;
+            }
+            if (count($partRates) === 1) {
+                $kursWaluty = (float) key($partRates);
+                $this->currentKursWaluty = $kursWaluty;
+            } else {
+                $this->noRowKurs = true;
+            }
+        }
+        if ($this->payParts) {
+            // P_6 per ZaliczkaCzesciowa
+        } elseif ((int) $invoice->type === Facture::TYPE_DEPOSIT || $korZalRoot > 0) {
+            $paidOn = $korZalRoot > 0 ? ksefDepositSentPaymentDate($this->db, $korZalRoot, (int) $invoice->id) : ksefDepositPaymentDate($this->db, $invoice);
+            if ($paidOn > 0 && ksefMomentDay($paidOn) !== dol_print_date($invoice->date, '%Y-%m-%d', 'tzserver')) {
+                $fa->appendChild($xml->createElement('P_6', ksefMomentDay($paidOn)));
+            }
+        } else {
+            $xmlLines = $this->linesForXml($invoice);
+            // art. 106j(2)(3)(a)
+            $supply = ($isKorType && !empty($invoice->fk_facture_source)) ? $this->correctionSupply($invoice, $xmlLines) : ksefInvoiceSupplyMode($invoice, $xmlLines);
+            if ($supply['mode'] === 'p6a') {
+                foreach ($supply['lines'] as $i => $d) {
+                    $this->lineDates[spl_object_id($xmlLines[$i])] = $d;
+                }
+                if (isset($supply['by_id'])) {
+                    $this->sourceLineDates = array('by_id' => $supply['by_id'], 'fallback' => $supply['fallback']);
+                }
+            }
+            if ($supply['mode'] === 'okres') {
+                $okres = $xml->createElement('OkresFa');
+                $okres->appendChild($xml->createElement('P_6_Od', $supply['from']));
+                $okres->appendChild($xml->createElement('P_6_Do', $supply['to']));
+                $fa->appendChild($okres);
+            } elseif ($supply['mode'] === 'p6') {
+                $fa->appendChild($xml->createElement('P_6', $supply['p6']));
+            }
+        }
 
-        // Net/Tax Amounts (P_13_* / P_14_*) - in invoice currency!!!!
         $vatSummary = $this->calculateVatSummary($invoice, $useMulticurrency);
 
-        // KOR TYPE_REPLACEMENT: P_13_x/P_14_x must contain delta
-        if ($invoiceType == 'KOR' && $invoice->type == Facture::TYPE_REPLACEMENT && $originalInvoice) {
+        $origVatSummary = array();
+        if ($isKorType && $invoice->type == Facture::TYPE_REPLACEMENT && $originalInvoice) {
             $origVatSummary = $this->calculateVatSummary($originalInvoice, $useMulticurrency);
             foreach ($origVatSummary as $rate => $amounts) {
                 if (isset($vatSummary[$rate])) {
                     $vatSummary[$rate]['net'] -= $amounts['net'];
                     $vatSummary[$rate]['vat'] -= $amounts['vat'];
+                    $vatSummary[$rate]['gross'] -= $amounts['gross'];
                 } else {
-                    $vatSummary[$rate] = array('net' => -$amounts['net'], 'vat' => -$amounts['vat']);
+                    $vatSummary[$rate] = array('net' => -$amounts['net'], 'vat' => -$amounts['vat'], 'gross' => -$amounts['gross']);
                 }
             }
         }
 
-        // P_13_x/P_14_x: by rate
-        $isMulticurrency = ($invoiceCurrency != 'PLN' && $kursWaluty > 0);
+        $korRozPaid = ($invoiceType === 'KOR_ROZ' && $invoice->type == Facture::TYPE_REPLACEMENT) ? $this->korRozPaymentShift($invoice, $useMulticurrency) : array('rates' => array(), 'ttc' => 0.0);
+        $vatSummary = $this->lessDeposits($vatSummary, $korRozPaid['rates']);
+        if ($this->grossMethod && $korRozPaid['rates'] && $originalInvoice) {
+            $after = $this->grossVatSummary($this->lessDeposits($this->calculateVatSummary($invoice, $useMulticurrency), $korRozPaid['new']));
+            $before = $this->grossVatSummary($this->lessDeposits($this->calculateVatSummary($originalInvoice, $useMulticurrency), $korRozPaid['old']));
+            $vatSummary = $after;
+            foreach ($before as $key => $amt) {
+                if (!isset($vatSummary[$key])) {
+                    $vatSummary[$key] = array('net' => 0, 'vat' => 0, 'gross' => 0);
+                }
+                foreach (array('net', 'vat', 'gross') as $col) {
+                    $vatSummary[$key][$col] -= $amt[$col];
+                }
+            }
+        }
 
-        // 23%/22% - P_13_1, P_14_1, P_14_1W
+        // ROZ: MF 2.7
+        $isMulticurrency = ($invoiceCurrency != 'PLN' && $kursWaluty > 0);
+        if ($invoiceType == 'ROZ' && is_array($this->depositCtx)) {
+            if ($this->depositCtx['mode'] === 'payment') {
+                $vatSummary = $this->lessDeposits($vatSummary, $this->depositRates($this->depositCtx['deposits'], $useMulticurrency));
+                if ($this->grossMethod) {
+                    $vatSummary = $this->grossVatSummary($vatSummary);
+                }
+            }
+        }
+        // art. 106e(11)
+        $before = $origVatSummary;
+        if ($korRozPaid['rates']) {
+            $before = $this->lessDeposits($before, $korRozPaid['old']);
+            if ($this->grossMethod) {
+                $before = $this->grossVatSummary($before);
+            }
+        }
+        $replacementW = $isMulticurrency && $isKorType && $invoice->type == Facture::TYPE_REPLACEMENT && $originalInvoice;
+        $statedBefore = $replacementW ? ksefStatedBeforeVatW($this->db, $invoice) : null;
+        $beforeKurs = $this->beforeKursWaluty !== null ? $this->beforeKursWaluty : $kursWaluty;
+        // match ksefDerivePlnFromForeign()
+        $fx = $isMulticurrency ? ksefFxRulesOf($this->db, (int) $invoice->id) : array('vat' => 'convert_vat', 'kor' => 'after_before');
+        $grossLike = $this->grossMethod || in_array($invoiceType, array('ZAL', 'KOR_ZAL'), true);
+        $korChange = $replacementW && $fx['kor'] === 'change' && $this->beforeKursWaluty === null && empty($korRozPaid['rates']);
+        $partsAfter = $partsBefore = null;
+        if ($isMulticurrency && ($this->lineKursResolve !== null || ($this->payParts && in_array($invoiceType, array('ZAL', 'KOR_ZAL'), true)))) {
+            $partsOpt = array('kurs' => $kursWaluty, 'gross' => $this->grossMethod, 'key' => function ($line) {
+                return $this->rateKey($line);
+            });
+            if ($this->lineKursResolve !== null) {
+                $partsOpt['line_kurs'] = $this->lineKursResolve;
+            } else {
+                $partsOpt['pay_parts'] = $this->korPlan !== null ? $this->korPlan['own'] : $this->payParts;
+            }
+            $partsAfter = ksefForeignRateSummary((array) $invoice->lines, $partsOpt)['keys'];
+            if ($this->korPlan !== null && $this->korPlan['before']) {
+                $partsOpt['pay_parts'] = $this->korPlan['before'];
+            }
+            $partsBefore = ($replacementW && $originalInvoice) ? ksefForeignRateSummary((array) $originalInvoice->lines, $partsOpt)['keys'] : array();
+            if ($this->lineKursResolve !== null) {
+                $paidDeposits = array();
+                if ($invoiceType === 'ROZ' && is_array($this->depositCtx) && $this->depositCtx['mode'] === 'payment') {
+                    $paidDeposits = $this->depositRates($this->depositCtx['deposits'], true);
+                }
+                $partsAfter = $this->partsLessDeposits($partsAfter, $korRozPaid['rates'] ? $korRozPaid['new'] : $paidDeposits, $kursWaluty);
+                if ($korRozPaid['rates'] && $partsBefore) {
+                    $partsBefore = $this->partsLessDeposits($partsBefore, $korRozPaid['old'], $kursWaluty);
+                }
+            }
+        }
+        $bucketW = function ($keys, $vat) use ($kursWaluty, $beforeKurs, $before, $replacementW, $statedBefore, $vatSummary, $fx, $grossLike, $korChange, $partsAfter, $partsBefore) {
+            $k = round((float) $kursWaluty, 6);
+            if ($partsAfter !== null) {
+                $convP = function ($amounts) use ($keys, $k, $fx, $grossLike) {
+                    return ksefFxConvertW($amounts, $keys, $k, $fx['vat'], $grossLike, (string) ($fx['multi'] ?? 'once'))['vat_w'];
+                };
+                if (!$replacementW) {
+                    $w = $convP($partsAfter);
+                } elseif ($korChange) {
+                    $delta = array();
+                    foreach ($keys as $key) {
+                        foreach (array('net', 'vat', 'gross') as $col) {
+                            $delta[$key][$col] = round((float) ($partsAfter[$key][$col] ?? 0) - (float) ($partsBefore[$key][$col] ?? 0), 2);
+                        }
+                        $pa = (array) ($partsAfter[$key]['parts'] ?? array());
+                        $pb = (array) ($partsBefore[$key]['parts'] ?? array());
+                        foreach (array_unique(array_merge(array_keys($pa), array_keys($pb))) as $pk) {
+                            foreach (array('net', 'vat', 'gross') as $col) {
+                                $delta[$key]['parts'][(string) $pk][$col] = round((float) ($pa[$pk][$col] ?? 0) - (float) ($pb[$pk][$col] ?? 0), 2);
+                            }
+                        }
+                    }
+                    $w = $convP($delta);
+                } else {
+                    $wb = $statedBefore !== null ? (float) ($statedBefore[ksefForeignRateBucket($keys[0])] ?? 0) : $convP($partsBefore);
+                    $w = round($convP($partsAfter) - $wb, 2);
+                }
+                return number_format(abs($w) < 0.005 ? 0 : $w, 2, '.', '');
+            }
+            $conv = function ($amounts, $kk) use ($keys, $fx, $grossLike) {
+                return ksefFxConvertW($amounts, $keys, $kk, $fx['vat'], $grossLike)['vat_w'];
+            };
+            if (!$replacementW || $korChange) {
+                $w = $fx['vat'] === 'convert_base' || $korChange ? $conv($vatSummary, $k) : round(round((float) $vat, 2) * $k, 2);
+                return number_format(abs($w) < 0.005 ? 0 : $w, 2, '.', '');
+            }
+            $after = array();
+            foreach ($keys as $key) {
+                foreach (array('net', 'vat', 'gross') as $col) {
+                    $after[$key][$col] = (float) ($vatSummary[$key][$col] ?? 0) + (float) ($before[$key][$col] ?? 0);
+                }
+            }
+            $wb = $statedBefore !== null ? (float) ($statedBefore[ksefForeignRateBucket($keys[0])] ?? 0) : $conv($before, round((float) $beforeKurs, 6));
+            $w = round($conv($after, $k) - $wb, 2);
+            return number_format(abs($w) < 0.005 ? 0 : $w, 2, '.', '');
+        };
+
         if (isset($vatSummary['23']) || isset($vatSummary['22'])) {
             $net = ($vatSummary['23']['net'] ?? 0) + ($vatSummary['22']['net'] ?? 0);
             $vat = ($vatSummary['23']['vat'] ?? 0) + ($vatSummary['22']['vat'] ?? 0);
             $fa->appendChild($xml->createElement('P_13_1', number_format($net, 2, '.', '')));
             $fa->appendChild($xml->createElement('P_14_1', number_format($vat, 2, '.', '')));
             if ($isMulticurrency) {
-                $fa->appendChild($xml->createElement('P_14_1W', number_format($vat * $kursWaluty, 2, '.', '')));
+                $fa->appendChild($xml->createElement('P_14_1W', $bucketW(array('23', '22'), $vat)));
             }
         }
 
-        // 8%/7% - P_13_2, P_14_2, P_14_2W
         if (isset($vatSummary['8']) || isset($vatSummary['7'])) {
             $net = ($vatSummary['8']['net'] ?? 0) + ($vatSummary['7']['net'] ?? 0);
             $vat = ($vatSummary['8']['vat'] ?? 0) + ($vatSummary['7']['vat'] ?? 0);
             $fa->appendChild($xml->createElement('P_13_2', number_format($net, 2, '.', '')));
             $fa->appendChild($xml->createElement('P_14_2', number_format($vat, 2, '.', '')));
             if ($isMulticurrency) {
-                $fa->appendChild($xml->createElement('P_14_2W', number_format($vat * $kursWaluty, 2, '.', '')));
+                $fa->appendChild($xml->createElement('P_14_2W', $bucketW(array('8', '7'), $vat)));
             }
         }
 
-        // 5% - P_13_3, P_14_3, P_14_3W
         if (isset($vatSummary['5'])) {
             $fa->appendChild($xml->createElement('P_13_3', number_format($vatSummary['5']['net'], 2, '.', '')));
             $fa->appendChild($xml->createElement('P_14_3', number_format($vatSummary['5']['vat'], 2, '.', '')));
             if ($isMulticurrency) {
-                $fa->appendChild($xml->createElement('P_14_3W', number_format($vatSummary['5']['vat'] * $kursWaluty, 2, '.', '')));
+                $fa->appendChild($xml->createElement('P_14_3W', $bucketW(array('5'), $vatSummary['5']['vat'])));
             }
         }
 
-        // 4% - P_13_4, P_14_4, P_14_4W
-        if (isset($vatSummary['4'])) {
-            $fa->appendChild($xml->createElement('P_13_4', number_format($vatSummary['4']['net'], 2, '.', '')));
-            $fa->appendChild($xml->createElement('P_14_4', number_format($vatSummary['4']['vat'], 2, '.', '')));
+        // 3%: taxi
+        if (isset($vatSummary['4']) || isset($vatSummary['3'])) {
+            $net = ($vatSummary['4']['net'] ?? 0) + ($vatSummary['3']['net'] ?? 0);
+            $vat = ($vatSummary['4']['vat'] ?? 0) + ($vatSummary['3']['vat'] ?? 0);
+            $fa->appendChild($xml->createElement('P_13_4', number_format($net, 2, '.', '')));
+            $fa->appendChild($xml->createElement('P_14_4', number_format($vat, 2, '.', '')));
             if ($isMulticurrency) {
-                $fa->appendChild($xml->createElement('P_14_4W', number_format($vatSummary['4']['vat'] * $kursWaluty, 2, '.', '')));
+                $fa->appendChild($xml->createElement('P_14_4W', $bucketW(array('4', '3'), $vat)));
             }
         }
 
-        // 3% (special procedure) - P_13_5, P_14_5
-        if (isset($vatSummary['3'])) {
-            $fa->appendChild($xml->createElement('P_13_5', number_format($vatSummary['3']['net'], 2, '.', '')));
-            if (!empty($vatSummary['3']['vat'])) {
-                $fa->appendChild($xml->createElement('P_14_5', number_format($vatSummary['3']['vat'], 2, '.', '')));
-            }
-        }
-
-        // 0% domestic (KR) - P_13_6_1
         if (isset($vatSummary['0 KR'])) {
             $fa->appendChild($xml->createElement('P_13_6_1', number_format($vatSummary['0 KR']['net'], 2, '.', '')));
         }
-        // 0% intra-EU (WDT) - P_13_6_2
         if (isset($vatSummary['0 WDT'])) {
             $fa->appendChild($xml->createElement('P_13_6_2', number_format($vatSummary['0 WDT']['net'], 2, '.', '')));
         }
-        // 0% export - P_13_6_3
         if (isset($vatSummary['0 EX'])) {
             $fa->appendChild($xml->createElement('P_13_6_3', number_format($vatSummary['0 EX']['net'], 2, '.', '')));
         }
-        // Exempt (zw) - P_13_7
         if (isset($vatSummary['zw'])) {
             $fa->appendChild($xml->createElement('P_13_7', number_format($vatSummary['zw']['net'], 2, '.', '')));
         }
-        // Not subject I (np I) - P_13_8
         if (isset($vatSummary['np I'])) {
             $fa->appendChild($xml->createElement('P_13_8', number_format($vatSummary['np I']['net'], 2, '.', '')));
         }
-        // Not subject II (np II, art. 100) - P_13_9
         if (isset($vatSummary['np II'])) {
             $fa->appendChild($xml->createElement('P_13_9', number_format($vatSummary['np II']['net'], 2, '.', '')));
         }
-        // Reverse charge (oo) - P_13_10
         if (isset($vatSummary['oo'])) {
             $fa->appendChild($xml->createElement('P_13_10', number_format($vatSummary['oo']['net'], 2, '.', '')));
         }
+        // marza: gross value
+        if (isset($vatSummary['marza'])) {
+            $fa->appendChild($xml->createElement('P_13_11', number_format($vatSummary['marza']['gross'], 2, '.', '')));
+        }
 
-        // P_15: Total (KOR: delta)
-        $totalAmount = $useMulticurrency ? $invoice->multicurrency_total_ttc : $invoice->total_ttc;
-        if ($invoiceType == 'KOR' && $invoice->type == Facture::TYPE_REPLACEMENT && $originalInvoice) {
-            $origTotal = $useMulticurrency ? $originalInvoice->multicurrency_total_ttc : $originalInvoice->total_ttc;
+        $totalAmount = ($useMulticurrency ? $invoice->multicurrency_total_ttc : $invoice->total_ttc) - $this->settlementSum($this->settlement);
+        if ($isKorType && $invoice->type == Facture::TYPE_REPLACEMENT && $originalInvoice) {
+            $origTotal = ($useMulticurrency ? $originalInvoice->multicurrency_total_ttc : $originalInvoice->total_ttc) - $this->settlementSum($this->origSettlement);
             $totalAmount -= $origTotal;
         }
+        if ($invoiceType == 'ROZ' && is_array($this->depositCtx) && $this->depositCtx['mode'] === 'payment') {
+            foreach ($this->depositCtx['deposits'] as $dep) {
+                $totalAmount -= $useMulticurrency ? $dep['mc_ttc'] : $dep['ttc'];
+            }
+        }
+        $totalAmount -= $korRozPaid['ttc'];
+        if (abs($totalAmount) < 0.005) {
+            $totalAmount = 0;
+        }
         $fa->appendChild($xml->createElement('P_15', number_format($totalAmount, 2, '.', '')));
+        $p15 = round((float) $totalAmount, 2);
+        $rateZ = $kursWaluty;
+        if ($isMulticurrency && in_array($invoiceType, array('ZAL', 'KOR_ZAL'), true) && !$this->noRowKurs) {
+            $fa->appendChild($xml->createElement('KursWalutyZ', number_format($rateZ, 6, '.', '')));
+        }
 
-        $this->buildAdnotacje($xml, $fa, $invoice, $vatSummary, $originalInvoice);
+        $this->buildAdnotacje($xml, $fa, $invoice, $vatSummary, $originalInvoice, $originalXmlData);
 
-        // Invoice Type
         $fa->appendChild($xml->createElement('RodzajFaktury', $invoiceType));
 
-        if ($invoiceType == 'KOR') {
+        $p15Before = null;
+        if ($isKorType) {
             $corrReason = $invoice->array_options['options_ksef_correction_reason'] ?? '';
             $corrType = $invoice->array_options['options_ksef_correction_type'] ?? '';
             if (!empty($corrReason)) {
@@ -774,11 +971,58 @@ class FA3Builder
             if ($originalInvoice) {
                 $this->buildDaneFaKorygowanej($xml, $fa, $originalInvoice);
             }
+            foreach ($this->absorbedNotes as $note) {
+                $this->buildDaneFaKorygowanej($xml, $fa, $note);
+            }
 
-            // Podmiot1K / Podmiot2K: emit original data if changed
             if ($originalXmlData) {
                 $this->buildPodmiot1K($xml, $fa, $originalXmlData);
                 $this->buildPodmiot2K($xml, $fa, $originalXmlData);
+            }
+            if (in_array($invoiceType, array('KOR_ZAL', 'KOR_ROZ'), true) && $originalInvoice) {
+                $p15Before = $this->buildP15ZK($xml, $fa, $invoice, $originalInvoice, $invoiceType, ($isMulticurrency && !$this->noRowKurs) ? $rateZ : null, $useMulticurrency);
+            }
+        }
+        if ($invoiceType === 'KOR_ZAL' && $this->korPlan !== null) {
+            foreach ($this->korPlan['parts'] as $pp) {
+                $zc = $xml->createElement('ZaliczkaCzesciowa');
+                $zc->appendChild($xml->createElement('P_6Z', $pp['day']));
+                $zc->appendChild($xml->createElement('P_15Z', number_format(abs((float) $pp['amount']) < 0.005 ? 0 : (float) $pp['amount'], 2, '.', '')));
+                if ($isMulticurrency && (float) $pp['kurs'] > 0) {
+                    $zc->appendChild($xml->createElement('KursWalutyZW', number_format((float) $pp['kurs'], 6, '.', '')));
+                }
+                $fa->appendChild($zc);
+            }
+        } elseif ($invoiceType === 'KOR_ZAL' && $this->payParts) {
+            $weightTotal = 0.0;
+            foreach ($this->payParts as $pp) {
+                $weightTotal += (float) $pp['amount'];
+            }
+            $korBefore = $p15Before !== null ? (float) $p15Before : round($weightTotal, 2);
+            $allocBefore = ksefDepositKorAlloc($this->payParts, $korBefore);
+            $allocAfter = ksefDepositKorAlloc($this->payParts, round($korBefore + $p15, 2));
+            foreach (array_values($this->payParts) as $i => $pp) {
+                $zc = $xml->createElement('ZaliczkaCzesciowa');
+                $zc->appendChild($xml->createElement('P_6Z', $pp['day']));
+                $change = round($allocAfter[$i] - $allocBefore[$i], 2);
+                $zc->appendChild($xml->createElement('P_15Z', number_format(abs($change) < 0.005 ? 0 : $change, 2, '.', '')));
+                if ($isMulticurrency && (float) $pp['kurs'] > 0) {
+                    $zc->appendChild($xml->createElement('KursWalutyZW', number_format((float) $pp['kurs'], 6, '.', '')));
+                }
+                $fa->appendChild($zc);
+            }
+        }
+
+        // XSD sequence
+        if ($invoiceType === 'ZAL') {
+            foreach ($this->payParts as $pp) {
+                $zc = $xml->createElement('ZaliczkaCzesciowa');
+                $zc->appendChild($xml->createElement('P_6Z', $pp['day']));
+                $zc->appendChild($xml->createElement('P_15Z', number_format((float) $pp['amount'], 2, '.', '')));
+                if ($isMulticurrency && (float) $pp['kurs'] > 0) {
+                    $zc->appendChild($xml->createElement('KursWalutyZW', number_format((float) $pp['kurs'], 6, '.', '')));
+                }
+                $fa->appendChild($zc);
             }
         }
 
@@ -786,57 +1030,742 @@ class FA3Builder
             $fa->appendChild($xml->createElement('FP', '1'));
         }
 
-        // TP
         if ($this->isRelatedPartyTransaction($invoice)) {
             $fa->appendChild($xml->createElement('TP', '1'));
         }
 
-        // Additional Description (DodatkowyOpis)
         $this->buildDodatkowyOpis($xml, $fa, $invoice);
 
-        // Invoice Lines
-        $originalForLines = ($invoiceType == 'KOR') ? $originalInvoice : null;
+        // art. 106f(3)/(4)
+        $this->buildFakturaZaliczkowa($xml, $fa, $invoiceType);
+
+        $originalForLines = $isKorType ? $originalInvoice : null;
         $this->buildFaWiersz($xml, $fa, $invoice, $originalForLines);
 
-        // Payment Info
+        // XSD sequence
+        $this->buildRozliczenie($xml, $fa, $p15, $isKorType && $invoice->type == Facture::TYPE_REPLACEMENT);
+
         $this->buildPlatnosc($xml, $fa, $invoice);
 
-        // Transaction conditions
         $this->buildWarunkiTransakcji($xml, $fa, $invoice);
+
+        // art. 106f(1)(4)
+        $this->buildZamowienie($xml, $fa, $invoice, $invoiceType);
     }
 
     /**
-     * @brief Calculates VAT summary by rate
-     * @param $invoice Invoice object
-     * @return array VAT summary array
-     * @called_by buildFa()
+     * @brief Append P_15ZK
+     * @param DOMDocument $xml
+     * @param DOMElement $fa
+     * @param Facture $invoice
+     * @param Facture $originalInvoice
+     * @param string $invoiceType KOR_ZAL|KOR_ROZ
+     * @param float|null $rateZ Deposit rate
+     * @param bool $mc Invoice currency amounts
+     * @return float|null Null when omitted
+     */
+    private function buildP15ZK($xml, $fa, $invoice, $originalInvoice, $invoiceType, $rateZ, $mc = false)
+    {
+        $before = ksefCorrectionStatedBefore($this->db, $invoice);
+        if ($before === null && $invoiceType === 'KOR_ZAL' && !empty($this->depositCtx['root_id'])) {
+            $v = ksefDepositCurrentValue($this->db, (int) $this->depositCtx['root_id'], (int) $invoice->id);
+            $before = $v ? (float) ($v['foreign'] ? $v['mttc'] : $v['ttc']) : null;
+        }
+        if ($before === null && $invoiceType === 'KOR_ROZ') {
+            $before = ($mc ? (float) $originalInvoice->multicurrency_total_ttc : (float) $originalInvoice->total_ttc) - $this->settlementSum($this->origSettlement);
+            foreach (ksefConsumedDeposits($this->db, (int) $originalInvoice->id) as $d) {
+                if ($d['mode'] === 'payment') {
+                    $before -= (float) ($mc ? $d['mc_ttc'] : $d['ttc']);
+                }
+            }
+            $before = (float) price2num($before, 'MT');
+        }
+        if ($before === null) {
+            dol_syslog(__METHOD__ . ' ' . $invoice->ref . ': no sent XML of ' . $originalInvoice->ref . ', P_15ZK left out', LOG_INFO);
+            return null;
+        }
+        $fa->appendChild($xml->createElement('P_15ZK', number_format(abs($before) < 0.005 ? 0 : $before, 2, '.', '')));
+        if ($rateZ === null) {
+            return (float) $before;
+        }
+        $rate = $rateZ;
+        if ($invoiceType === 'KOR_ROZ' && (float) $originalInvoice->multicurrency_tx > 0) {
+            $rate = $this->kursOf($originalInvoice);
+        }
+        $fa->appendChild($xml->createElement('KursWalutyZK', number_format($rate, 6, '.', '')));
+        return (float) $before;
+    }
+
+    /**
+     * @brief Build FakturaZaliczkowa rows
+     * @param DOMDocument $xml
+     * @param DOMElement $fa
+     * @param string $invoiceType
+     */
+    private function buildFakturaZaliczkowa($xml, $fa, $invoiceType)
+    {
+        if (!is_array($this->depositCtx)) {
+            return;
+        }
+        $list = array();
+        if ($invoiceType == 'ROZ') {
+            $list = $this->depositCtx['deposits'];
+        } elseif ($invoiceType == 'ZAL' && !empty($this->depositCtx['last'])) {
+            $list = $this->depositCtx['earlier'];
+        }
+        foreach (array_slice($list, 0, 100) as $dep) {
+            $c = $dep['citation'];
+            $el = $xml->createElement('FakturaZaliczkowa');
+            if (!$c['outside'] && $c['ksef_number'] !== '') {
+                $el->appendChild($xml->createElement('NrKSeFFaZaliczkowej', $c['ksef_number']));
+            } else {
+                $el->appendChild($xml->createElement('NrKSeFZN', '1'));
+                $el->appendChild($xml->createElement('NrFaZaliczkowej', $this->xmlSafe($dep['ref'] ?? $c['ref'])));
+            }
+            $fa->appendChild($el);
+        }
+    }
+
+    /**
+     * @brief Build Zamowienie
+     * @param DOMDocument $xml
+     * @param DOMElement $fa
+     * @param Facture $invoice
+     * @param string $invoiceType
+     */
+    private function buildZamowienie($xml, $fa, $invoice, $invoiceType)
+    {
+        if (!in_array($invoiceType, array('ZAL', 'KOR_ZAL'), true) || !is_array($this->depositCtx) || empty($this->depositCtx['order'])) {
+            return;
+        }
+        $order = $this->depositCtx['order'];
+        $useMulti = $this->currentInvoiceCurrency !== 'PLN';
+        $lines = array_values(ksefOrderRowLines($order));
+        $z = $xml->createElement('Zamowienie');
+        $z->appendChild($xml->createElement('WartoscZamowienia', number_format(ksefOrderValue($order, $this->currentInvoiceCurrency), 2, '.', '')));
+        // MF Przyklad 23
+        $afterNums = array();
+        $byNr = array();
+        if ($invoiceType == 'KOR_ZAL') {
+            $sent = !empty($this->depositCtx['root_id']) ? ksefDepositSentOrder($this->db, (int) $this->depositCtx['root_id'], (int) $invoice->id) : null;
+            if ($sent && $sent['rows']) {
+                $afterNums = $this->pairOrderRows($sent, $lines);
+                foreach ($sent['rows'] as $i => $fields) {
+                    $nr = (int) $sent['nums'][$i];
+                    $w = $xml->createElement('ZamowienieWiersz');
+                    $w->appendChild($xml->createElement('NrWierszaZam', $nr));
+                    foreach ($fields as $f) {
+                        $w->appendChild($xml->createElement($f[0], $this->xmlSafe($f[1])));
+                    }
+                    $w->appendChild($xml->createElement('StanPrzedZ', '1'));
+                    $byNr[$nr][] = $w;
+                }
+            } else {
+                $n = 1;
+                foreach ($lines as $line) {
+                    $byNr[$n][] = $this->orderRow($xml, $line, $n, $useMulti, true);
+                    $n++;
+                }
+            }
+        }
+        $n = 1;
+        foreach ($lines as $i => $line) {
+            $nr = isset($afterNums[$i]) ? (int) $afterNums[$i] : $n;
+            $byNr[$nr][] = $this->orderRow($xml, $line, $nr, $useMulti, false);
+            $n++;
+        }
+        if (!$byNr) {
+            dol_syslog("FA3Builder::buildZamowienie invoice " . (int) $invoice->id . ": the linked order has no lines with a quantity or value, Zamowienie left out", LOG_WARNING);
+            return;
+        }
+        ksort($byNr);
+        foreach ($byNr as $rows) {
+            foreach ($rows as $w) {
+                $z->appendChild($w);
+            }
+        }
+        $fa->appendChild($z);
+    }
+
+    /**
+     * @brief Pair order rows
+     * @param array $sent Sent order
+     * @param array $lines
+     * @return array Line key => NrWierszaZam
+     */
+    private function pairOrderRows($sent, $lines)
+    {
+        $sentKeys = array();
+        foreach ($sent['rows'] as $i => $fields) {
+            $k = array('', '');
+            foreach ($fields as $f) {
+                if ($f[0] === 'P_7Z') {
+                    $k[0] = trim((string) $f[1]);
+                } elseif ($f[0] === 'IndeksZ') {
+                    $k[1] = trim((string) $f[1]);
+                }
+            }
+            $sentKeys[$i] = $k;
+        }
+        $free = $sentKeys;
+        $out = array();
+        $unmatched = array();
+        foreach ($lines as $li => $line) {
+            $k = $this->orderRowKey($line);
+            foreach ($free as $i => $sk) {
+                if ($sk[0] === $k[0] && ($sk[1] === '' || $k[1] === '' || $sk[1] === $k[1])) {
+                    $out[$li] = (int) $sent['nums'][$i];
+                    unset($free[$i]);
+                    continue 2;
+                }
+            }
+            $unmatched[] = $li;
+        }
+        $next = (int) $sent['max_nr'];
+        foreach ($unmatched as $li) {
+            if ($free) {
+                reset($free);
+                $i = key($free);
+                $out[$li] = (int) $sent['nums'][$i];
+                unset($free[$i]);
+            } else {
+                $out[$li] = ++$next;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Order line key
+     * @param object $line
+     * @return array P_7Z, IndeksZ
+     */
+    private function orderRowKey($line)
+    {
+        $label = $this->orderRowLabel($line);
+        $indeks = '';
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_INDEKS') && !empty($line->product_ref)) {
+            $indeks = trim(substr((string) $line->product_ref, 0, 50));
+        }
+        return array($label !== '' ? trim(dol_trunc($label, 512, 'right', 'UTF-8', 1)) : '', $indeks);
+    }
+
+    /**
+     * @brief Order line label
+     * @param object $line
+     * @return string
+     */
+    private function orderRowLabel($line)
+    {
+        $label = trim(dol_string_nohtmltag((string) ($line->desc ?: ($line->product_label ?? $line->label ?? ''))));
+        if ($label === '' && !empty($line->product_label)) {
+            $label = (string) $line->product_label;
+        }
+        return $label;
+    }
+
+    /**
+     * @brief Build ZamowienieWiersz
+     * @param DOMDocument $xml
+     * @param object $line
+     * @param int $n NrWierszaZam
+     * @param bool $useMulti Non-PLN currency
+     * @param bool $before StanPrzedZ row
+     * @return DOMElement
+     */
+    private function orderRow($xml, $line, $n, $useMulti, $before)
+    {
+        $w = $xml->createElement('ZamowienieWiersz');
+        $w->appendChild($xml->createElement('NrWierszaZam', $n));
+        $label = $this->orderRowLabel($line);
+        if ($label !== '') {
+            $w->appendChild($xml->createElement('P_7Z', $this->xmlSafe(dol_trunc($label, 512, 'right', 'UTF-8', 1))));
+        }
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_INDEKS') && !empty($line->product_ref)) {
+            $w->appendChild($xml->createElement('IndeksZ', $this->xmlSafe(substr((string) $line->product_ref, 0, 50))));
+        }
+        if (getDolGlobalInt('KSEF_FA3_INCLUDE_UNIT')) {
+            $unit = ksefUnitText($this->db, (int) ($line->fk_unit ?? 0));
+            if ($unit !== '') {
+                $w->appendChild($xml->createElement('P_8AZ', $this->xmlSafe(mb_substr($unit, 0, 256, 'UTF-8'))));
+            }
+        }
+        $w->appendChild($xml->createElement('P_8BZ', ksefFormatDecimal((float) $line->qty, 6)));
+        $pu = $useMulti ? (float) $line->multicurrency_subprice : (float) $line->subprice;
+        $w->appendChild($xml->createElement('P_9AZ', ksefFormatDecimal($pu, 8)));
+        $w->appendChild($xml->createElement('P_11NettoZ', number_format($useMulti ? (float) $line->multicurrency_total_ht : (float) $line->total_ht, 2, '.', '')));
+        $w->appendChild($xml->createElement('P_11VatZ', number_format($useMulti ? (float) $line->multicurrency_total_tva : (float) $line->total_tva, 2, '.', '')));
+        $rate = ksefForeignRateKey($line, (string) $this->currentCustomerCountry, !empty($this->currentCustomerIsEU));
+        if ($rate !== 'marza') {
+            $w->appendChild($xml->createElement('P_12Z', $rate));
+        }
+        if ($before) {
+            $w->appendChild($xml->createElement('StanPrzedZ', '1'));
+        }
+        return $w;
+    }
+
+    /**
+     * @brief VAT by rate
+     * @param Facture $invoice
+     * @param bool $useMulticurrency
+     * @return array
      */
     private function calculateVatSummary($invoice, $useMulticurrency = false)
     {
+        $s = ksefForeignRateSummary((array) $invoice->lines, array(
+            'key' => function ($line) {
+                return $this->rateKey($line);
+            },
+            'gross' => $this->grossMethod,
+            'pln' => !$useMulticurrency,
+        ));
         $summary = array();
-        foreach ($invoice->lines as $line) {
-            $ksefRate = $this->mapVatRateToKSeF($line->tva_tx, $line);
-            if (!isset($summary[$ksefRate])) $summary[$ksefRate] = array('net' => 0, 'vat' => 0);
+        foreach ($s['keys'] as $key => $a) {
+            $summary[$key] = array('net' => $a['net'], 'vat' => $a['vat'], 'gross' => $a['gross']);
+        }
+        return $summary;
+    }
 
-            if ($useMulticurrency) {
-                $summary[$ksefRate]['net'] += $line->multicurrency_total_ht;
-                $summary[$ksefRate]['vat'] += $line->multicurrency_total_tva;
+    /**
+     * @brief Invoice rate K
+     * @param Facture $invoice
+     * @param array $opt Kurs options
+     * @return float|null Null without rate
+     */
+    private function kursOf($invoice, $opt = array())
+    {
+        $tx = (float) ($invoice->multicurrency_tx ?? 0);
+        if ($tx <= 0) {
+            return null;
+        }
+        $k = ksefInvoiceKurs($invoice, array('db' => $this->db) + $opt);
+        return $k > 0 ? $k : round(1 / $tx, 6);
+    }
+
+    /**
+     * @brief Row KursWaluty
+     * @param object $line
+     * @param float|null $override
+     * @return float|null
+     */
+    private function rowKurs($line, $override = null)
+    {
+        if ($this->noRowKurs) {
+            return null;
+        }
+        if ($this->payParts && $this->currentKursWaluty > 0) {
+            return $this->currentKursWaluty;
+        }
+        if ($this->lineKursResolve !== null) {
+            $k = (float) call_user_func($this->lineKursResolve, $line);
+            if ($k > 0) {
+                return $k;
+            }
+        }
+        return $override !== null ? $override : $this->currentKursWaluty;
+    }
+
+    /**
+     * @brief Gross-method VAT summary
+     * @param array $summary
+     * @return array
+     */
+    private function grossVatSummary($summary)
+    {
+        foreach ($summary as $key => $a) {
+            $gross = round((float) ($a['gross'] ?? 0), 2);
+            if (preg_match('/^\d+$/', (string) $key)) {
+                $r = (float) $key;
+                $vat = round($gross * $r / (100 + $r), 2);
+                $summary[$key]['vat'] = $vat;
+                $summary[$key]['net'] = $gross - $vat;
             } else {
-                $summary[$ksefRate]['net'] += $line->total_ht;
-                $summary[$ksefRate]['vat'] += $line->total_tva;
+                $summary[$key]['vat'] = 0;
+                $summary[$key]['net'] = $gross;
             }
         }
         return $summary;
     }
 
     /**
-     * @brief Determines invoice type (VAT, KOR, ZAL)
-     * @param $invoice Invoice object
-     * @return string Invoice type code
-     * @called_by buildFa()
+     * @brief Line rate key
+     * @param object $line
+     * @return string
+     */
+    private function rateKey($line)
+    {
+        if (!empty($line->id) && isset($this->legacyZeroKeys[(int) $line->id])) {
+            return $this->legacyZeroKeys[(int) $line->id];
+        }
+        return ksefForeignRateKey($line, (string) $this->currentCustomerCountry, !empty($this->currentCustomerIsEU));
+    }
+
+    /**
+     * @brief KOR_ROZ deposit shift
+     * @param Facture $invoice
+     * @param bool $mc Invoice currency amounts
+     * @return array
+     */
+    private function korRozPaymentShift($invoice, $mc)
+    {
+        $out = array('rates' => array(), 'ttc' => 0.0, 'new' => array(), 'old' => array());
+        $state = ksefCorrectionState($invoice);
+        if (empty($state['dep_paid'])) {
+            return $out;
+        }
+        $consumed = array();
+        foreach (ksefConsumedDeposits($this->db, (int) $invoice->id) as $d) {
+            if ($d['mode'] === 'payment') {
+                $consumed[] = $d;
+                $out['ttc'] += (float) ($mc ? $d['mc_ttc'] : $d['ttc']);
+            }
+        }
+        foreach ($state['dep_paid'] as $d) {
+            $out['ttc'] -= (float) ($mc ? $d['mc_ttc'] : $d['ttc']);
+        }
+        $out['new'] = $this->depositRates($consumed, $mc);
+        $out['old'] = $this->depositRates($state['dep_paid'], $mc);
+        foreach (array('new' => 1, 'old' => -1) as $side => $sign) {
+            foreach ($out[$side] as $key => $amt) {
+                $out['rates'][$key]['net'] = (float) ($out['rates'][$key]['net'] ?? 0) + $sign * $amt['net'];
+                $out['rates'][$key]['vat'] = (float) ($out['rates'][$key]['vat'] ?? 0) + $sign * $amt['vat'];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Deposit rates
+     * @param array $deposits
+     * @param bool $mc Invoice currency amounts
+     * @return array
+     */
+    private function depositRates($deposits, $mc)
+    {
+        $out = array();
+        foreach ((array) $deposits as $d) {
+            foreach ((array) $d['rates'] as $rate => $amt) {
+                $key = $this->rateKey((object) array('tva_tx' => $rate, 'vat_src_code' => (string) ($amt['code'] ?? '')));
+                $out[$key]['net'] = (float) ($out[$key]['net'] ?? 0) + (float) ($mc ? $amt['mc_ht'] : $amt['ht']);
+                $out[$key]['vat'] = (float) ($out[$key]['vat'] ?? 0) + (float) ($mc ? $amt['mc_tva'] : $amt['tva']);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Summary less deposits
+     * @param array $summary
+     * @param array $deposits
+     * @return array
+     */
+    private function lessDeposits($summary, $deposits)
+    {
+        foreach ($deposits as $key => $amt) {
+            if (!isset($summary[$key])) {
+                $summary[$key] = array('net' => 0, 'vat' => 0, 'gross' => 0);
+            }
+            $summary[$key]['net'] -= $amt['net'];
+            $summary[$key]['vat'] -= $amt['vat'];
+            $summary[$key]['gross'] = ($summary[$key]['gross'] ?? 0) - $amt['net'] - $amt['vat'];
+        }
+        return $summary;
+    }
+
+    /**
+     * @brief Parts less deposits
+     * @param array $keys
+     * @param array $deposits
+     * @param float $kurs Invoice rate
+     * @return array
+     */
+    private function partsLessDeposits($keys, $deposits, $kurs)
+    {
+        $pk = number_format(round((float) $kurs, 6), 6, '.', '');
+        foreach ((array) $deposits as $key => $amt) {
+            $d = array('net' => (float) $amt['net'], 'vat' => (float) $amt['vat'], 'gross' => (float) $amt['net'] + (float) $amt['vat']);
+            if (!isset($keys[$key])) {
+                $keys[$key] = array('rate' => preg_match('/^\d+$/', (string) $key) ? (float) $key : null, 'net' => 0.0, 'vat' => 0.0, 'gross' => 0.0);
+            }
+            foreach (array('net', 'vat', 'gross') as $c) {
+                $keys[$key][$c] = round((float) $keys[$key][$c] - $d[$c], 2);
+                if (!empty($keys[$key]['parts'])) {
+                    $keys[$key]['parts'][$pk][$c] = round((float) ($keys[$key]['parts'][$pk][$c] ?? 0) - $d[$c], 2);
+                }
+            }
+        }
+        return $keys;
+    }
+
+    /**
+     * @brief Settlement total
+     * @param array $list
+     * @return float
+     */
+    private function settlementSum($list)
+    {
+        $sum = 0.0;
+        foreach ($list as $s) {
+            $sum += (float) $s['ttc'];
+        }
+        return $sum;
+    }
+
+    /**
+     * @brief Build Rozliczenie
+     * @param DOMDocument $xml
+     * @param DOMElement $fa
+     * @param float $p15
+     * @param bool $isReplacement
+     */
+    private function buildRozliczenie($xml, $fa, $p15, $isReplacement)
+    {
+        $pl = ksefPolishLangs();
+        $rows = array();
+        if ($isReplacement) {
+            $delta = round(-$this->settlementSum($this->settlement) + $this->settlementSum($this->origSettlement), 2);
+            if (abs($delta) >= 0.005) {
+                $s = $this->settlement ? $this->settlement[0] : $this->origSettlement[0];
+                $rows[] = array($delta, $s);
+            }
+        } else {
+            foreach ($this->settlement as $s) {
+                $rows[] = array(round(-(float) $s['ttc'], 2), $s);
+            }
+        }
+        if (!$rows) {
+            return;
+        }
+        if (count($rows) > 100) {
+            $tail = array_slice($rows, 99);
+            $sumTail = 0.0;
+            foreach ($tail as $r) {
+                $sumTail += $r[0];
+            }
+            $rows = array_slice($rows, 0, 99);
+            $rows[] = array($sumTail, $tail[0][1]);
+            dol_syslog(__METHOD__ . ' more than 100 settlement lines: the rest summed into one Odliczenia', LOG_WARNING);
+        }
+        $roz = $xml->createElement('Rozliczenie');
+        $sum = 0.0;
+        foreach ($rows as $r) {
+            list($amount, $s) = $r;
+            $sum += $amount;
+            $key = ($s['kind'] === 'excess') ? 'KSEF_SettlementReasonExcess' : 'KSEF_SettlementReasonCreditNote';
+            $od = $xml->createElement('Odliczenia');
+            $od->appendChild($xml->createElement('Kwota', number_format($amount, 2, '.', '')));
+            $od->appendChild($xml->createElement('Powod', $this->xmlSafe(trim($pl->transnoentitiesnoconv($key, $s['ref'])))));
+            $roz->appendChild($od);
+        }
+        $roz->appendChild($xml->createElement('SumaOdliczen', number_format($sum, 2, '.', '')));
+        $rest = round($p15 - $sum, 2);
+        if ($rest >= 0) {
+            $roz->appendChild($xml->createElement('DoZaplaty', number_format($rest, 2, '.', '')));
+        } else {
+            $roz->appendChild($xml->createElement('DoRozliczenia', number_format(-$rest, 2, '.', '')));
+        }
+        $fa->appendChild($roz);
+    }
+
+    /**
+     * @brief FaWiersz lines
+     * @param Facture $invoice
+     * @return array
+     */
+    private function linesForXml($invoice)
+    {
+        $type = is_array($this->depositCtx) ? $this->depositCtx['type'] : '';
+        if ($type !== 'ROZ' && $type !== 'KOR_ROZ') {
+            return array_values((array) $invoice->lines);
+        }
+        $db = $this->db;
+        return array_values(array_filter((array) $invoice->lines, function ($l) use ($db) {
+            return !ksefIsDepositLine($db, $l);
+        }));
+    }
+
+    /**
+     * @brief Korekta supply dates
+     * @param Facture $invoice
+     * @param array $xmlLines
+     * @return array
+     */
+    private function correctionSupply($invoice, $xmlLines)
+    {
+        $out = array('mode' => 'p6', 'p6' => dol_print_date(ksefGetSaleDate($invoice), '%Y-%m-%d', 'tzserver'), 'from' => '', 'to' => '', 'lines' => array());
+        $members = array();
+        $cur = (int) $invoice->fk_facture_source;
+        $type = 0;
+        for ($i = 0; $cur > 0 && $i < 20 && !in_array($cur, $members, true); $i++) {
+            $members[] = $cur;
+            $res = $this->db->query("SELECT type, fk_facture_source FROM " . MAIN_DB_PREFIX . "facture WHERE rowid = " . $cur);
+            $o = $res ? $this->db->fetch_object($res) : null;
+            $type = $o ? (int) $o->type : 0;
+            $cur = ($o && $type === Facture::TYPE_REPLACEMENT) ? (int) $o->fk_facture_source : 0;
+        }
+        if (!$members) {
+            return $out;
+        }
+        $supply = null;
+        $srcId = 0;
+        foreach ($members as $id) {
+            $supply = $this->sentSupply(ksefLatestSentXml($this->db, array($id)));
+            if ($supply !== null) {
+                $srcId = $id;
+                break;
+            }
+        }
+        $src = new Facture($this->db);
+        if ($supply === null) {
+            $srcId = in_array($type, array(Facture::TYPE_REPLACEMENT, Facture::TYPE_CREDIT_NOTE), true) ? (int) $members[0] : (int) end($members);
+            if ($src->fetch($srcId) <= 0) {
+                return $out;
+            }
+            $src->fetch_optionals();
+            $src->fetch_lines();
+            $srcLines = $this->linesForXml($src);
+            $supply = ksefInvoiceSupplyMode($src, $srcLines);
+            $rows = array();
+            foreach ($srcLines as $k => $l) {
+                $rows[] = $supply['lines'][$k] ?? '';
+            }
+        } else {
+            $rows = $supply['rows'];
+        }
+        $out = array('mode' => $supply['mode'], 'p6' => $supply['p6'], 'from' => $supply['from'], 'to' => $supply['to'], 'lines' => array());
+        if ($out['mode'] !== 'p6a') {
+            return $out;
+        }
+        if (empty($src->id)) {
+            $src->fetch($srcId);
+            $src->fetch_lines();
+        }
+        $srcLines = $this->linesForXml($src);
+        $byLine = array();
+        $lineRows = $rows;
+        if (count($srcLines) !== count($rows)) {
+            $own = ksefSupplyDates($srcLines, $out['p6']);
+            $lineRows = array();
+            foreach ($srcLines as $k => $l) {
+                $lineRows[$k] = $own['lines'][$k] ?? '';
+            }
+        }
+        foreach (array_values($srcLines) as $k => $l) {
+            if (($lineRows[$k] ?? '') !== '') {
+                $byLine[(int) $l->id] = $lineRows[$k];
+            }
+        }
+        $known = array_values(array_filter($rows));
+        $out['by_id'] = $byLine;
+        $out['fallback'] = count(array_unique($known)) === 1 ? $known[0] : ($known ? max($known) : $out['p6']);
+        foreach ($xmlLines as $k => $l) {
+            $out['lines'][$k] = $this->supplyDateOf((int) ($l->fk_prev_id ?? 0), $byLine, $out['fallback']);
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Line supply date
+     * @param int $lineId
+     * @param array $byLine
+     * @param string $fallback
+     * @return string
+     */
+    private function supplyDateOf($lineId, $byLine, $fallback)
+    {
+        $prev = (int) $lineId;
+        for ($hop = 0; $prev > 0 && !isset($byLine[$prev]) && $hop < 5; $hop++) {
+            $res = $this->db->query("SELECT fk_prev_id FROM " . MAIN_DB_PREFIX . "facturedet WHERE rowid = " . $prev);
+            $o = $res ? $this->db->fetch_object($res) : null;
+            $prev = $o ? (int) $o->fk_prev_id : 0;
+        }
+        return ($prev > 0 && isset($byLine[$prev])) ? $byLine[$prev] : $fallback;
+    }
+
+    /**
+     * @brief Row P_6A date
+     * @param object $line
+     * @return string|null
+     */
+    private function lineDate($line)
+    {
+        if (isset($this->lineDates[spl_object_id($line)])) {
+            return $this->lineDates[spl_object_id($line)];
+        }
+        if ($this->sourceLineDates === null) {
+            return null;
+        }
+        return $this->supplyDateOf((int) ($line->id ?? ($line->rowid ?? 0)), $this->sourceLineDates['by_id'], $this->sourceLineDates['fallback']);
+    }
+
+    /**
+     * @brief Sent supply dates
+     * @param string $xml
+     * @return array|null Null without XML
+     */
+    private function sentSupply($xml)
+    {
+        $doc = new DOMDocument();
+        if (!is_string($xml) || $xml === '' || !@$doc->loadXML($xml)) {
+            return null;
+        }
+        $xp = new DOMXPath($doc);
+        $xp->registerNamespace('fa', KSEF_FA3_NAMESPACE);
+        $val = function ($q, $ctx = null) use ($xp) {
+            $n = $ctx ? $xp->query($q, $ctx) : $xp->query($q);
+            return ($n && $n->length && preg_match('/^\s*(\d{4}-\d{2}-\d{2})\s*$/', $n->item(0)->textContent, $m)) ? $m[1] : '';
+        };
+        $out = array('mode' => 'p6', 'p6' => $val('//fa:Fa/fa:P_6'), 'from' => $val('//fa:Fa/fa:OkresFa/fa:P_6_Od'), 'to' => $val('//fa:Fa/fa:OkresFa/fa:P_6_Do'), 'rows' => array());
+        if ($out['from'] !== '' && $out['to'] !== '') {
+            $out['mode'] = 'okres';
+            return $out;
+        }
+        $any = false;
+        foreach ($xp->query('//fa:Fa/fa:FaWiersz[not(fa:StanPrzed)]') as $w) {
+            $d = $val('fa:P_6A', $w);
+            $any = $any || $d !== '';
+            $out['rows'][] = $d;
+        }
+        if ($any && $out['p6'] === '') {
+            $out['mode'] = 'p6a';
+            return $out;
+        }
+        if ($out['p6'] === '') {
+            $out['p6'] = $val('//fa:Fa/fa:P_1');
+        }
+        $out['rows'] = array();
+        return $out['p6'] !== '' ? $out : null;
+    }
+
+    /**
+     * @brief Extrafield date
+     * @param Facture $invoice
+     * @param string $name Extrafield code
+     * @return string Y-m-d or empty
+     */
+    private function extrafieldDay($invoice, $name)
+    {
+        $v = $invoice->array_options['options_' . $name] ?? '';
+        if ($v === '' || $v === null) {
+            return '';
+        }
+        if (is_numeric($v)) {
+            return ((int) $v > 0) ? dol_print_date((int) $v, '%Y-%m-%d', 'tzserver') : '';
+        }
+        return preg_match('/^(\d{4}-\d{2}-\d{2})/', (string) $v, $m) ? $m[1] : '';
+    }
+
+    /**
+     * @brief FA(3) invoice type
+     * @param Facture $invoice
+     * @return string
      */
     private function getInvoiceType($invoice)
     {
+        if (is_array($this->depositCtx) && !empty($this->depositCtx['type'])) {
+            return $this->depositCtx['type'];
+        }
         switch ($invoice->type) {
             case Facture::TYPE_CREDIT_NOTE:
                 return 'KOR';
@@ -852,46 +1781,75 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds corrective invoice reference section
-     * @param $xml DOMDocument
-     * @param $parent Parent element
-     * @param $originalInvoice Original invoice object
-     * @called_by buildFa()
-     * @calls getInvoiceKsefNumber()
+     * @brief Take settlement lines
+     * @param Facture $invoice
+     * @return array
+     */
+    private function takeSettlementLines($invoice)
+    {
+        $out = array();
+        if (empty($invoice->lines) || (int) $invoice->type === Facture::TYPE_DEPOSIT || (int) $invoice->type === Facture::TYPE_CREDIT_NOTE
+            || ($this->depositCtx['type'] ?? '') === 'KOR_ZAL') {
+            return $out;
+        }
+        $useMulti = ksefGetInvoiceCurrency($invoice) !== 'PLN';
+        $keep = array();
+        foreach ($invoice->lines as $l) {
+            $s = ksefSettlementLine($this->db, $l);
+            if ($s === null) {
+                $keep[] = $l;
+                continue;
+            }
+            $s['ttc'] = (float) ($useMulti ? $l->multicurrency_total_ttc : $l->total_ttc);
+            $out[] = $s;
+        }
+        if ($out) {
+            $invoice->lines = $keep;
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Build DaneFaKorygowanej
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
+     * @param Facture $originalInvoice
+     * @throws Exception
      */
     private function buildDaneFaKorygowanej($xml, $parent, $originalInvoice)
     {
-        // Only reference metadata (no amounts)
         $daneFaKor = $xml->createElement('DaneFaKorygowanej');
         $parent->appendChild($daneFaKor);
 
-        // Date of original invoice
-        $daneFaKor->appendChild($xml->createElement('DataWystFaKorygowanej', dol_print_date($originalInvoice->date, '%Y-%m-%d')));
-        // Number of original invoice
+        $daneFaKor->appendChild($xml->createElement('DataWystFaKorygowanej', dol_print_date($originalInvoice->date, '%Y-%m-%d', 'tzserver')));
         $daneFaKor->appendChild($xml->createElement('NrFaKorygowanej', $this->xmlSafe($originalInvoice->ref)));
 
-        // KSeF reference check
         $originalKsefNumber = $this->getInvoiceKsefNumber($originalInvoice->id);
 
         if ($originalKsefNumber) {
             $daneFaKor->appendChild($xml->createElement('NrKSeF', '1'));
             $daneFaKor->appendChild($xml->createElement('NrKSeFFaKorygowanej', $originalKsefNumber));
+        } elseif ($await = ksefSourceAwaitingRow($this->db, (int) $originalInvoice->id)) {
+            // art. 106nda(12)
+            throw new Exception(ksefCorrectionAwaitingRefusal(array('source_id' => (int) $originalInvoice->id, 'source_ref' => (string) $originalInvoice->ref,
+                'awaiting_kind' => $await['kind']), false));
         } else {
             $daneFaKor->appendChild($xml->createElement('NrKSeFN', '1'));
         }
     }
 
     /**
-     * @brief Fetch Podmiot1/Podmiot2 from original FA3 XML
+     * @brief Source XML data
      * @param int $originalInvoiceId
-     * @return array|null podmiot1/podmiot2 data, or null
-     * @called_by buildFromInvoice()
+     * @return array|null
      */
     private function fetchOriginalXmlData($originalInvoiceId)
     {
         dol_include_once('/ksef/class/ksef_submission.class.php');
+        dol_include_once('/ksef/lib/ksef.lib.php');
+        $rowId = ksefSentXmlRowId($this->db, $originalInvoiceId);
         $submission = new KsefSubmission($this->db);
-        if ($submission->fetchByInvoice($originalInvoiceId) <= 0 || empty($submission->fa3_xml)) {
+        if ($rowId <= 0 || $submission->fetch($rowId) <= 0 || empty($submission->fa3_xml)) {
             return null;
         }
 
@@ -900,11 +1858,112 @@ class FA3Builder
             return null;
         }
 
-        return $this->extractPodmiotData($origXml);
+        $data = $this->extractPodmiotData($origXml);
+        $data['sent_rows'] = $this->sentRows($origXml);
+        $xpath = new DOMXPath($origXml);
+        $xpath->registerNamespace('fa', KSEF_FA3_NAMESPACE);
+        $data['p18'] = $this->xpathValue($xpath, '//fa:Fa/fa:Adnotacje/fa:P_18');
+        return $data;
     }
 
     /**
-     * @brief Reconstruct the correction before-state when no FA(3) XML was archived (H3a)
+     * @brief Sent FaWiersz rows
+     * @param DOMDocument $origXml
+     * @return array
+     */
+    private function sentRows($origXml)
+    {
+        $xpath = new DOMXPath($origXml);
+        $xpath->registerNamespace('fa', KSEF_FA3_NAMESPACE);
+        $rows = array();
+        foreach ($xpath->query('//fa:Fa/fa:FaWiersz[not(fa:StanPrzed)]') as $node) {
+            $rows[] = array(
+                'nr' => $this->xpathValue($xpath, 'fa:NrWierszaFa', $node),
+                'p7' => $this->xpathValue($xpath, 'fa:P_7', $node),
+                'p12' => $this->xpathValue($xpath, 'fa:P_12', $node),
+            );
+        }
+        return $rows;
+    }
+
+    /**
+     * @brief Legacy 0% keys
+     * @param Facture $invoice
+     * @param Facture $originalInvoice
+     * @param array $sentRows
+     * @return array Line id => P_12
+     */
+    private function legacyZeroKeys($invoice, $originalInvoice, $sentRows)
+    {
+        $keys = array();
+        $origLines = ($originalInvoice && !empty($originalInvoice->lines)) ? array_values($originalInvoice->lines) : array();
+        foreach ($origLines as $i => $line) {
+            $old = $this->oldZeroKey($line);
+            if ($old === '') {
+                continue;
+            }
+            $p7 = $this->lineP7Text($line);
+            $match = null;
+            foreach ($sentRows as $row) {
+                if ((string) $row['nr'] === (string) ($i + 1) && $row['p7'] === $p7) {
+                    $match = $row;
+                    break;
+                }
+            }
+            if ($match === null) {
+                $same = array_values(array_filter($sentRows, function ($row) use ($p7) {
+                    return $row['p7'] === $p7;
+                }));
+                $match = count($same) === 1 ? $same[0] : null;
+            }
+            if ($match !== null && $match['p12'] === $old) {
+                $keys[(int) $line->id] = $old;
+            }
+        }
+        if (empty($keys)) {
+            return $keys;
+        }
+        foreach ($this->matchCorrectionLines($origLines, array_values((array) $invoice->lines)) as $pair) {
+            if ($pair['orig'] && $pair['corr'] && isset($keys[(int) $pair['orig']->id])) {
+                $old = $this->oldZeroKey($pair['corr']);
+                if ($old !== '') {
+                    $keys[(int) $pair['corr']->id] = $old;
+                }
+            }
+        }
+        return $keys;
+    }
+
+    /**
+     * @brief Legacy 0% key
+     * @param object $line
+     * @return string Empty if unchanged
+     */
+    private function oldZeroKey($line)
+    {
+        if (empty($line->id) || (int) round((float) $line->tva_tx) !== 0 || ksefMarginSubtype($line) !== '') {
+            return '';
+        }
+        $code = $line->vat_src_code ?? '';
+        $country = (string) $this->currentCustomerCountry;
+        $isEu = !empty($this->currentCustomerIsEU);
+        $old = ksefZeroRateKey($code, $country, $isEu, false);
+        return $old !== ksefZeroRateKey($code, $country, $isEu, (int) ($line->product_type ?? 0) === 1) ? $old : '';
+    }
+
+    /**
+     * @brief Line P_7 text
+     * @param object $line
+     * @return string
+     */
+    public function lineP7Text($line)
+    {
+        $doc = new DOMDocument();
+        return $doc->createElement('P_7', $this->xmlSafe(mb_substr(self::coreLineMarkers($this->lineDescription($line)), 0, 512, 'UTF-8')))->textContent;
+    }
+
+    /**
+     * @brief Rebuild source data
      * @param Facture $originalInvoice
      * @return array|null
      */
@@ -917,7 +1976,9 @@ class FA3Builder
             $this->currentCustomer, $this->currentCustomerCountry, $this->currentCustomerIsEU,
             $this->currentInvoiceCurrency, $this->currentKursWaluty,
             $this->lastInvoiceType, $this->lastCreationDate, $this->lastXmlHash,
-            $this->error, $this->errors,
+            $this->error, $this->errors, $this->depositCtx,
+            $this->grossMethod, $this->lineDates, $this->sourceLineDates, $this->settlement, $this->origSettlement,
+            $this->lineKursResolve, $this->payParts, $this->noRowKurs, $this->korPlan,
         );
         $this->reconstructing = true;
         $xmlString = $this->buildFromInvoice($originalInvoice->id);
@@ -925,7 +1986,9 @@ class FA3Builder
         list($this->currentCustomer, $this->currentCustomerCountry, $this->currentCustomerIsEU,
             $this->currentInvoiceCurrency, $this->currentKursWaluty,
             $this->lastInvoiceType, $this->lastCreationDate, $this->lastXmlHash,
-            $this->error, $this->errors) = $saved;
+            $this->error, $this->errors, $this->depositCtx,
+            $this->grossMethod, $this->lineDates, $this->sourceLineDates, $this->settlement, $this->origSettlement,
+            $this->lineKursResolve, $this->payParts, $this->noRowKurs, $this->korPlan) = $saved;
 
         if (!is_string($xmlString) || $xmlString === '') {
             dol_syslog("FA3Builder::reconstructOriginalXmlData - could not rebuild original "
@@ -940,10 +2003,9 @@ class FA3Builder
     }
 
     /**
-     * @brief Extract Podmiot1/Podmiot2 before-state fields from an FA(3) DOMDocument
-     * @param DOMDocument $origXml Parsed FA(3) document
-     * @return array podmiot1/podmiot2 field maps
-     * @remarks Shared by fetchOriginalXmlData (stored XML) and reconstructOriginalXmlData (rebuilt XML).
+     * @brief Extract Podmiot data
+     * @param DOMDocument $origXml
+     * @return array
      */
     private function extractPodmiotData($origXml)
     {
@@ -952,7 +2014,6 @@ class FA3Builder
 
         $data = array('podmiot1' => array(), 'podmiot2' => array());
 
-        // Parse Podmiot1
         $data['podmiot1']['prefiks_podatnika'] = $this->xpathValue($xpath, '//fa:Podmiot1/fa:PrefiksPodatnika');
         $data['podmiot1']['nip'] = $this->xpathValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:NIP');
         $data['podmiot1']['nazwa'] = $this->xpathValue($xpath, '//fa:Podmiot1/fa:DaneIdentyfikacyjne/fa:Nazwa');
@@ -962,7 +2023,6 @@ class FA3Builder
         $data['podmiot1']['adres_l1'] = $this->xpathValue($xpath, '//fa:Podmiot1/fa:Adres/fa:AdresL1');
         $data['podmiot1']['adres_l2'] = $this->xpathValue($xpath, '//fa:Podmiot1/fa:Adres/fa:AdresL2');
 
-        // Parse Podmiot2
         $data['podmiot2']['nip'] = $this->xpathValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:NIP');
         $data['podmiot2']['kod_ue'] = $this->xpathValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:KodUE');
         $data['podmiot2']['nr_vat_ue'] = $this->xpathValue($xpath, '//fa:Podmiot2/fa:DaneIdentyfikacyjne/fa:NrVatUE');
@@ -977,27 +2037,31 @@ class FA3Builder
         $data['podmiot2']['adres_l1'] = $this->xpathValue($xpath, '//fa:Podmiot2/fa:Adres/fa:AdresL1');
         $data['podmiot2']['adres_l2'] = $this->xpathValue($xpath, '//fa:Podmiot2/fa:Adres/fa:AdresL2');
 
+        // compare escaped form
+        foreach ($data as $k => $p) {
+            $data[$k] = array_map('ksefXmlEscape', $p);
+        }
         return $data;
     }
 
     /**
-     * @brief Get single XPath text value
+     * @brief First XPath text
      * @param DOMXPath $xpath
      * @param string $expression
+     * @param DOMNode|null $context
      * @return string
      */
-    private function xpathValue($xpath, $expression)
+    private function xpathValue($xpath, $expression, $context = null)
     {
-        $nodes = $xpath->query($expression);
+        $nodes = $context !== null ? $xpath->query($expression, $context) : $xpath->query($expression);
         return ($nodes && $nodes->length > 0) ? $nodes->item(0)->textContent : '';
     }
 
     /**
-     * @brief Emit Podmiot1K if seller data changed
-     * @param $xml DOMDocument
-     * @param $parent Fa element
+     * @brief Build Podmiot1K
+     * @param DOMDocument $xml
+     * @param DOMElement $parent
      * @param array $originalXmlData
-     * @called_by buildFa()
      */
     private function buildPodmiot1K($xml, $parent, $originalXmlData)
     {
@@ -1005,7 +2069,6 @@ class FA3Builder
 
         $orig = $originalXmlData['podmiot1'];
 
-        // Current seller values
         $currentPrefiks = '';
         $buyerCountry = ksefInferCountryCode($this->currentCustomer);
         if ($buyerCountry != 'PL' && !empty($mysoc->tva_intra)) {
@@ -1015,28 +2078,22 @@ class FA3Builder
             }
         }
 
-        $nip = '';
-        if (!empty($conf->global->KSEF_COMPANY_NIP)) {
-            $nip = ksefCleanNIP($conf->global->KSEF_COMPANY_NIP);
-        }
-        if (empty($nip)) {
-            $nip = ksefCleanNIP(ksefGetIdentifierField($mysoc, 'NIP'));
-        }
+        $nip = ksefSellerNip();
         $currentNazwa = $this->xmlSafe($mysoc->name);
 
         $currentNrEori = getDolGlobalString('KSEF_COMPANY_EORI', '');
         if (empty($currentNrEori)) {
             $currentNrEori = trim(ksefGetIdentifierField($mysoc, 'EORI'));
         }
+        $currentNrEori = ksefXmlEscape($currentNrEori);
 
         $currentKodKraju = $mysoc->country_code ?: 'PL';
-        $currentAdresL1 = !empty($mysoc->address) ? $this->xmlSafe($mysoc->address) : 'ul. Testowa 1';
+        $currentAdresL1 = !empty($mysoc->address) ? $this->xmlSafe($mysoc->address) : '';
         $adresL2Parts = array();
         if (!empty($mysoc->zip)) $adresL2Parts[] = $this->xmlSafe($mysoc->zip);
         if (!empty($mysoc->town)) $adresL2Parts[] = $this->xmlSafe($mysoc->town);
         $currentAdresL2 = implode(' ', $adresL2Parts);
 
-        // Compare
         if (($orig['prefiks_podatnika'] ?? '') === $currentPrefiks
             && $orig['nip'] === $nip
             && $orig['nazwa'] === $currentNazwa
@@ -1045,10 +2102,9 @@ class FA3Builder
             && $orig['kod_kraju'] === $currentKodKraju
             && $orig['adres_l1'] === $currentAdresL1
             && $orig['adres_l2'] === $currentAdresL2) {
-            return; // No change
+            return;
         }
 
-        // Emit Podmiot1K
         $podmiot1k = $xml->createElement('Podmiot1K');
         $parent->appendChild($podmiot1k);
 
@@ -1081,43 +2137,37 @@ class FA3Builder
      * @brief Emit Podmiot2K if buyer data changed
      * @param $xml DOMDocument
      * @param $parent Fa element
-     * @param array $originalXmlData Parsed original XML data
-     * @called_by buildFa()
+     * @param array $originalXmlData Parsed original
      */
     private function buildPodmiot2K($xml, $parent, $originalXmlData)
     {
         $orig = $originalXmlData['podmiot2'];
         $customer = $this->currentCustomer;
 
-        // Current buyer identification
         $countryCode = ksefInferCountryCode($customer);
         $isPolish = ($countryCode === 'PL');
         $isEU = $this->isEUCountry($countryCode);
         $nipRaw = ksefGetIdentifierField($customer, 'NIP');
         $nip = ksefCleanNIP($nipRaw);
 
-        // Current identification
         $currentNip = ($isPolish && !empty($nip)) ? $nip : '';
-        $currentKodUE = ($isEU && !$isPolish && !empty($customer->tva_intra)) ? $countryCode : '';
+        $currentKodUE = ($isEU && !$isPolish && !empty($customer->tva_intra)) ? ksefKodUE($countryCode) : '';
         $currentNrVatUE = '';
         if (!empty($currentKodUE)) {
-            $currentNrVatUE = ksefStripVATPrefix($customer->tva_intra);
+            $currentNrVatUE = ksefNrVatUE($customer->tva_intra);
         }
         $currentKodKrajuId = (!$isPolish && empty($currentKodUE) && !empty($nipRaw)) ? $countryCode : '';
-        $currentNrId = !empty($currentKodKrajuId) ? ksefStripVATPrefix($nipRaw) : '';
+        $currentNrId = !empty($currentKodKrajuId) ? $this->xmlSafe(ksefStripVATPrefix($nipRaw)) : '';
         $currentBrakId = (empty($currentNip) && empty($currentKodUE) && empty($currentKodKrajuId)) ? '1' : '';
 
         $currentNazwa = $this->xmlSafe($customer->name);
-        $currentIdNabywcy = $this->getIdNabywcy($customer);
-        $currentNrEori = empty($customer->array_options['options_ksef_hide_eori']) ? $this->getBuyerNrEORI($customer) : '';
+        $currentIdNabywcy = ksefXmlEscape($this->getIdNabywcy($customer));
+        $currentNrEori = empty($customer->array_options['options_ksef_hide_eori']) ? ksefXmlEscape($this->getBuyerNrEORI($customer)) : '';
         $currentKodKraju = $countryCode;
-        $currentAdresL1 = !empty($customer->address) ? $this->xmlSafe($customer->address) : 'Brak danych';
-        $adresL2Parts = array();
-        if (!empty($customer->zip)) $adresL2Parts[] = $this->xmlSafe($customer->zip);
-        if (!empty($customer->town)) $adresL2Parts[] = $this->xmlSafe($customer->town);
-        $currentAdresL2 = implode(' ', $adresL2Parts);
+        $lines = ksefBuyerAddressLines($customer);
+        $currentAdresL1 = $this->xmlSafe($lines['l1']);
+        $currentAdresL2 = ksefXmlEscape($lines['l2']);
 
-        // Compare identification
         $identSame = ($orig['nip'] === $currentNip
             && $orig['kod_ue'] === $currentKodUE
             && $orig['nr_vat_ue'] === $currentNrVatUE
@@ -1128,14 +2178,13 @@ class FA3Builder
             && ($orig['id_nabywcy'] ?? '') === $currentIdNabywcy
             && ($orig['nr_eori'] ?? '') === $currentNrEori);
 
-        // Compare address
         $addrSame = (($orig['gln'] ?? '') === ''
             && $orig['kod_kraju'] === $currentKodKraju
             && $orig['adres_l1'] === $currentAdresL1
             && $orig['adres_l2'] === $currentAdresL2);
 
         if ($identSame && $addrSame) {
-            return; // No change
+            return;
         }
 
         $origHasIdent = !empty($orig['nip']) || !empty($orig['kod_ue']) || !empty($orig['kod_kraju_id']) || !empty($orig['nr_id']);
@@ -1144,7 +2193,6 @@ class FA3Builder
             return;
         }
 
-        // Emit Podmiot2K
         $podmiot2k = $xml->createElement('Podmiot2K');
         $parent->appendChild($podmiot2k);
 
@@ -1190,7 +2238,7 @@ class FA3Builder
     /**
      * @brief Get IDNabywcy for customer
      * @param $customer Thirdparty
-     * @return string IDNabywcy or empty
+     * @return string
      */
     private function getIdNabywcy($customer)
     {
@@ -1213,7 +2261,7 @@ class FA3Builder
     /**
      * @brief Get NrEORI for buyer
      * @param $customer Thirdparty
-     * @return string NrEORI or empty
+     * @return string
      */
     private function getBuyerNrEORI($customer)
     {
@@ -1224,7 +2272,7 @@ class FA3Builder
      * @brief Get product extrafield value
      * @param $line Invoice line
      * @param string $fieldName Extrafield code
-     * @return string Value or empty
+     * @return string
      */
     private function getProductExtraFieldValue($line, $fieldName)
     {
@@ -1235,7 +2283,7 @@ class FA3Builder
             require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
             $prod = new Product($this->db);
             if ($prod->fetch($line->fk_product) > 0) {
-                if (method_exists($prod, 'fetch_optionals')) $prod->fetch_optionals();
+                $prod->fetch_optionals();
                 $this->productCache[$line->fk_product] = $prod;
             } else {
                 $this->productCache[$line->fk_product] = false;
@@ -1251,7 +2299,7 @@ class FA3Builder
     /**
      * @brief Get GTU marker for line
      * @param $line Invoice line
-     * @return string GTU_01..GTU_13 or empty
+     * @return string GTU_xx or empty
      */
     private function getLineGTU($line)
     {
@@ -1272,7 +2320,7 @@ class FA3Builder
     /**
      * @brief Get Procedura marker for line
      * @param $line Invoice line
-     * @return string Procedura or empty
+     * @return string
      */
     private function getLineProcedura($line)
     {
@@ -1293,11 +2341,10 @@ class FA3Builder
 
     /**
      * @brief Resolve Adnotacje flag
-     * @param string $source  'disabled' 'always_on' 'extrafield:name' thirdparty_extrafield:name;
-     * @param object $invoice  current invoice (for extrafield: mode)
-     * @param object|null $fallbackInvoice  for correction inheritance
+     * @param string $source Flag source setting
+     * @param object $invoice
+     * @param object|null $fallbackInvoice Correction source
      * @return bool
-     * @called_by buildFa(), buildAdnotacje(), isRelatedPartyTransaction()
      */
     private function resolveBooleanFlagSource($source, $invoice, $fallbackInvoice = null)
     {
@@ -1325,7 +2372,42 @@ class FA3Builder
     }
 
     /**
-     * @brief Check if invoice is TP
+     * @brief Has NP II
+     * @param array $lines Invoice lines
+     * @return bool
+     */
+    private function hasNpIILine($lines)
+    {
+        foreach ((array) $lines as $line) {
+            if ($this->rateKey($line) === 'np II') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @brief Adds NP II
+     * @param Facture $invoice Correction
+     * @param Facture|null $originalInvoice Source
+     * @return bool
+     */
+    private function addsNpIILine($invoice, $originalInvoice)
+    {
+        $origLines = ($originalInvoice && !empty($originalInvoice->lines)) ? array_values($originalInvoice->lines) : array();
+        foreach ($this->matchCorrectionLines($origLines, array_values((array) $invoice->lines)) as $pair) {
+            if (!$pair['corr'] || $this->rateKey($pair['corr']) !== 'np II') {
+                continue;
+            }
+            if (!$pair['orig'] || $this->rateKey($pair['orig']) !== 'np II') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @brief Check TP flag
      * @param $invoice
      * @return bool
      */
@@ -1336,15 +2418,15 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds annotations/flags section
+     * @brief Build Adnotacje
      * @param $xml DOMDocument
      * @param $parent Parent element
      * @param $invoice Invoice object
-     * @param $vatSummary VAT summary by rate
-     * @param object|null $originalInvoice  source invoice for a correction (P_18A inheritance); null otherwise
-     * @called_by buildFa()
+     * @param $vatSummary VAT by rate
+     * @param object|null $originalInvoice Correction source
+     * @param array|null $originalXmlData Sent source data
      */
-    private function buildAdnotacje($xml, $parent, $invoice, $vatSummary = array(), $originalInvoice = null)
+    private function buildAdnotacje($xml, $parent, $invoice, $vatSummary = array(), $originalInvoice = null, $originalXmlData = null)
     {
         global $conf;
 
@@ -1354,60 +2436,28 @@ class FA3Builder
         $p16On = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P16_SOURCE', 'disabled'), $invoice);
         $p17On = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P17_SOURCE', 'disabled'), $invoice) || $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P17_TP_SOURCE', 'disabled'), $invoice);
         $p18On = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P18_SOURCE', 'disabled'), $invoice) || $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_P18_TP_SOURCE', 'disabled'), $invoice);
+        $sentP18 = isset($originalXmlData['p18']) ? (string) $originalXmlData['p18'] : '';
+        if ($sentP18 === '1' || $sentP18 === '2') {
+            // art. 28b: P_18
+            $p18On = $sentP18 === '1' || $this->addsNpIILine($invoice, $originalInvoice);
+        } elseif ($this->hasNpIILine($invoice->lines)) {
+            $p18On = true;
+        }
         $mppOn = $this->resolveBooleanFlagSource(getDolGlobalString('KSEF_FA3_MPP_SOURCE', 'disabled'), $invoice, $originalInvoice);
 
-        $adnotacje->appendChild($xml->createElement('P_16',  $p16On ? '1' : '2')); // Cash accounting
-        $adnotacje->appendChild($xml->createElement('P_17',  $p17On ? '1' : '2')); // Self-bill
-        $adnotacje->appendChild($xml->createElement('P_18',  $p18On ? '1' : '2')); // Reverse charge
-        $adnotacje->appendChild($xml->createElement('P_18A', $mppOn ? '1' : '2')); // Split payment
+        $adnotacje->appendChild($xml->createElement('P_16',  $p16On ? '1' : '2'));
+        $adnotacje->appendChild($xml->createElement('P_17',  $p17On ? '1' : '2'));
+        $adnotacje->appendChild($xml->createElement('P_18',  $p18On ? '1' : '2'));
+        $adnotacje->appendChild($xml->createElement('P_18A', $mppOn ? '1' : '2'));
 
         $zwolnienie = $xml->createElement('Zwolnienie');
         $adnotacje->appendChild($zwolnienie);
 
-        // Check invoice lines for zw rate
-        $hasExempt = false;
-        foreach ($invoice->lines as $line) {
-            if ($this->mapVatRateToKSeF($line->tva_tx, $line) === 'zw') {
-                $hasExempt = true;
-                break;
-            }
+        $basisLines = (array) $invoice->lines;
+        if ($originalInvoice && $invoice->type == Facture::TYPE_REPLACEMENT) {
+            $basisLines = array_merge($basisLines, (array) $originalInvoice->lines);
         }
-        $globalPodstawa = getDolGlobalString('KSEF_ZWOLNIENIE_PODSTAWA', '');
-        $zwolnienieType = getDolGlobalString('KSEF_ZWOLNIENIE_TYPE', 'disabled');
-        $productField = getDolGlobalString('KSEF_ZWOLNIENIE_PRODUCT_FIELD', '');
-
-        $podstawa = '';
-        if ($hasExempt && $zwolnienieType !== 'disabled') {
-            // Per-product exemption bases
-            $bases = array();
-            if (!empty($productField) && !empty($invoice->lines)) {
-                require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
-                $productCache = array();
-                foreach ($invoice->lines as $line) {
-                    $ksefRate = $this->mapVatRateToKSeF($line->tva_tx, $line);
-                    if ($ksefRate !== 'zw' || empty($line->fk_product)) continue;
-
-                    if (!isset($productCache[$line->fk_product])) {
-                        $prod = new Product($this->db);
-                        if ($prod->fetch($line->fk_product) > 0) {
-                            if (method_exists($prod, 'fetch_optionals')) $prod->fetch_optionals();
-                            $productCache[$line->fk_product] = $prod;
-                        }
-                    }
-                    if (isset($productCache[$line->fk_product])) {
-                        $val = $productCache[$line->fk_product]->array_options['options_' . $productField] ?? '';
-                        $val = trim(strip_tags((string) $val));
-                        if (!empty($val)) $bases[$val] = true;
-                    }
-                }
-            }
-
-            if (!empty($bases)) {
-                $podstawa = implode(', ', array_keys($bases));
-            } elseif (!empty($globalPodstawa)) {
-                $podstawa = $globalPodstawa;
-            }
-        }
+        list($hasExempt, $podstawa, $zwolnienieType) = $this->exemptionBasis((object) array('lines' => $basisLines));
 
         if ($hasExempt && !empty($podstawa)) {
             $zwolnienie->appendChild($xml->createElement('P_19', '1'));
@@ -1418,35 +2468,71 @@ class FA3Builder
 
         $noweSrodki = $xml->createElement('NoweSrodkiTransportu');
         $adnotacje->appendChild($noweSrodki);
-        $noweSrodki->appendChild($xml->createElement('P_22N', '1')); // Not new transport means
+        $noweSrodki->appendChild($xml->createElement('P_22N', '1'));
 
-        $adnotacje->appendChild($xml->createElement('P_23', '2')); // Not simplified chain transaction
+        $adnotacje->appendChild($xml->createElement('P_23', '2'));
 
+        // XSD: one subtype
+        $subtypes = array();
+        $allLines = array_merge((array) $invoice->lines, ($originalInvoice && !empty($originalInvoice->lines)) ? (array) $originalInvoice->lines : array());
+        foreach ($allLines as $line) {
+            $sub = ksefMarginSubtype($line);
+            if ($sub !== '') {
+                $subtypes[$sub] = true;
+            }
+        }
+        if (count($subtypes) > 1) {
+            global $langs;
+            $langs->load('ksef@ksef');
+            throw new Exception($langs->transnoentitiesnoconv('KSEF_MarginMixedSubtypes', implode(', ', array_keys($subtypes))));
+        }
         $pmarzy = $xml->createElement('PMarzy');
         $adnotacje->appendChild($pmarzy);
-        $pmarzy->appendChild($xml->createElement('P_PMarzyN', '1')); // Not margin scheme
+        if ($subtypes) {
+            $pmarzy->appendChild($xml->createElement('P_PMarzy', '1'));
+            $pmarzy->appendChild($xml->createElement('P_PMarzy_' . key($subtypes), '1'));
+        } else {
+            $pmarzy->appendChild($xml->createElement('P_PMarzyN', '1'));
+        }
     }
 
     /**
-     * @brief Strips HTML from note text
-     * @param string $html HTML text
-     * @return string Plain text
-     * @called_by parseDodatkowyOpisPreview()
+     * @brief Translate DEPOSIT marker
+     * @param string $description Line text
+     * @return string
+     */
+    public static function coreLineMarkers($description)
+    {
+        if (strpos((string) $description, '(DEPOSIT)') === 0) {
+            return 'Zaliczka' . substr((string) $description, strlen('(DEPOSIT)'));
+        }
+        return (string) $description;
+    }
+
+    /**
+     * @brief Strip note HTML
+     * @param string $html HTML or text
+     * @return string
      */
     private static function stripNoteHtml($html)
     {
-        $text = str_replace("\r\n", "\n", $html);
-        $text = preg_replace('/<br\s*\/?>/i', "\n", $text);
-        $text = preg_replace('/<\/(p|div)>/i', "\n", $text);
-        $text = strip_tags($text);
-        $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+        $text = str_replace(array("\r\n", "\r"), "\n", (string) $html);
+        $isHtml = function_exists('dol_textishtml') ? dol_textishtml($text) : (bool) preg_match('/<\/?[a-z][a-z0-9]*(\s[^<>]*)?\/?>|&[a-z0-9#]{1,8};/i', $text);
+        if ($isHtml) {
+            $text = preg_replace('/<br\s*\/?>/i', "\n", $text);
+            $text = preg_replace('/<\/(p|div|li|tr|h[1-6])>/i', "\n", $text);
+            $text = preg_replace('/<!--.*?-->/s', '', $text);
+            $text = preg_replace('/<(script|style)\b[^<>]*>.*?<\/\1\s*>/is', '', $text);
+            $text = preg_replace('/<\/?[a-z][a-z0-9:-]*(\s[^<>]*)?\/?>|<![a-z][^<>]*>/i', '', $text);
+            $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+        }
         $text = preg_replace('/[ \t]+\n/', "\n", $text);
         $text = preg_replace('/\n{2,}/', "\n", $text);
         return trim(self::sanitizeForXml($text));
     }
 
     /**
-     * @brief Strips ASCII control characters
+     * @brief Strip control chars
      * @param string $str
      * @return string
      */
@@ -1456,12 +2542,11 @@ class FA3Builder
     }
 
     /**
-     * @brief Parses DodatkowyOpis entries
-     * @param object $invoice Invoice object
-     * @param object $conf Dolibarr config
-     * @param object $db Database handler
-     * @return array Array of ['key' => string, 'value' => string] entries
-     * @called_by buildDodatkowyOpis(), actions_ksef formObjectOptions preview
+     * @brief Parse DodatkowyOpis entries
+     * @param object $invoice
+     * @param object $conf
+     * @param object $db
+     * @return array key/value entries
      */
     public static function parseDodatkowyOpisPreview($invoice, $conf, $db)
     {
@@ -1471,19 +2556,15 @@ class FA3Builder
 
         $entries = array();
 
-        // Load invoice extrafields once
         if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-            if (method_exists($invoice, 'fetch_optionals')) {
-                $invoice->fetch_optionals();
-            }
+            $invoice->fetch_optionals();
         }
 
-        // Per-invoice override
         $invoiceOverride = isset($invoice->array_options['options_ksef_dodatkowy_opis_mode'])
             ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
             : '';
 
-        $globalNoteMode = isset($conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE) ? $conf->global->KSEF_DODATKOWY_OPIS_NOTE_MODE : 'simple';
+        $globalNoteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
         $noteTarget = getDolGlobalString('KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury');
 
         if (!empty($invoiceOverride)) {
@@ -1502,7 +2583,6 @@ class FA3Builder
             return $entries;
         }
 
-        // note_public as DodatkowyOpis
         if ($effectiveNoteMode !== 'disabled' && $noteTarget === 'dodatkowy_opis' && !empty($invoice->note_public)) {
             $text = self::stripNoteHtml($invoice->note_public);
 
@@ -1540,8 +2620,7 @@ class FA3Builder
             }
         }
 
-        // Process extrafields
-        $extrafieldsConf = isset($conf->global->KSEF_DODATKOWY_OPIS_EXTRAFIELDS) ? $conf->global->KSEF_DODATKOWY_OPIS_EXTRAFIELDS : '';
+        $extrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS');
         if (!empty($extrafieldsConf)) {
             $fieldEntries = array_filter(array_map('trim', explode(',', $extrafieldsConf)));
 
@@ -1578,7 +2657,6 @@ class FA3Builder
             }
         }
 
-        // Line extrafields
         $detExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_DET_EXTRAFIELDS', '');
         if (!empty($detExtrafieldsConf) && !empty($invoice->lines)) {
             $detFieldNames = array_filter(array_map('trim', explode(',', $detExtrafieldsConf)));
@@ -1595,9 +2673,7 @@ class FA3Builder
                 foreach ($invoice->lines as $line) {
                     $lineNum++;
                     if (!isset($line->array_options) || empty($line->array_options)) {
-                        if (method_exists($line, 'fetch_optionals')) {
-                            $line->fetch_optionals();
-                        }
+                        $line->fetch_optionals();
                     }
                     foreach ($detFieldNames as $name) {
                         if (empty($name)) continue;
@@ -1624,7 +2700,6 @@ class FA3Builder
             }
         }
 
-        // Product extrafields
         $prodExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PRODUCT_EXTRAFIELDS', '');
         if (!empty($prodExtrafieldsConf) && !empty($invoice->lines)) {
             $prodFieldNames = array_filter(array_map('trim', explode(',', $prodExtrafieldsConf)));
@@ -1647,7 +2722,7 @@ class FA3Builder
                     if (!isset($productCache[$line->fk_product])) {
                         $prod = new Product($db);
                         if ($prod->fetch($line->fk_product) > 0) {
-                            if (method_exists($prod, 'fetch_optionals')) $prod->fetch_optionals();
+                            $prod->fetch_optionals();
                             $productCache[$line->fk_product] = $prod;
                         }
                     }
@@ -1680,7 +2755,6 @@ class FA3Builder
             }
         }
 
-        // Societe extrafields
         $socExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', '');
         if (!empty($socExtrafieldsConf) && !empty($invoice->socid)) {
             $socFieldEntries = array_filter(array_map('trim', explode(',', $socExtrafieldsConf)));
@@ -1696,7 +2770,7 @@ class FA3Builder
                 require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
                 $soc = new Societe($db);
                 if ($soc->fetch($invoice->socid) > 0) {
-                    if (method_exists($soc, 'fetch_optionals')) $soc->fetch_optionals();
+                    $soc->fetch_optionals();
 
                     foreach ($socFieldEntries as $entry) {
                         if (empty($entry)) continue;
@@ -1726,7 +2800,6 @@ class FA3Builder
             }
         }
 
-        // Project extrafields
         $projExtrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', '');
         if (!empty($projExtrafieldsConf) && !empty($invoice->fk_project)) {
             $projFieldEntries = array_filter(array_map('trim', explode(',', $projExtrafieldsConf)));
@@ -1742,7 +2815,7 @@ class FA3Builder
                 require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
                 $proj = new Project($db);
                 if ($proj->fetch($invoice->fk_project) > 0) {
-                    if (method_exists($proj, 'fetch_optionals')) $proj->fetch_optionals();
+                    $proj->fetch_optionals();
 
                     foreach ($projFieldEntries as $entry) {
                         if (empty($entry)) continue;
@@ -1776,13 +2849,11 @@ class FA3Builder
     }
 
     /**
-     * Collect extrafield valuess.
-     * Returns a single text block of "Label: Value" lines.
-     *
-     * @param object $invoice Invoice object
-     * @param object $conf Global conf
-     * @param object $db Database handler
-     * @return string Combined text for StopkaFaktury
+     * @brief Collect stopka extrafields
+     * @param object $invoice
+     * @param object $conf
+     * @param object $db
+     * @return string
      */
     public static function collectStopkaExtrafields($invoice, $conf, $db, $customer = null)
     {
@@ -1796,10 +2867,9 @@ class FA3Builder
         $ef = new ExtraFields($db);
 
         if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-            if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+            $invoice->fetch_optionals();
         }
 
-        // Invoice extrafields for stopka
         $extrafieldsConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_EXTRAFIELDS', '');
         if (!empty($extrafieldsConf)) {
             $ef->fetch_name_optionals_label('facture');
@@ -1823,7 +2893,6 @@ class FA3Builder
             }
         }
 
-        // Societe extrafields for stopka
         $socConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_SOCIETE_EXTRAFIELDS', '');
         if (!empty($socConf) && !empty($invoice->socid)) {
             $ef->fetch_name_optionals_label('societe');
@@ -1843,7 +2912,7 @@ class FA3Builder
                     if ($soc->fetch($invoice->socid) <= 0) $soc = null;
                 }
                 if ($soc) {
-                    if (method_exists($soc, 'fetch_optionals')) $soc->fetch_optionals();
+                    $soc->fetch_optionals();
                     foreach ($socEntries as $entry) {
                         $parts = explode(':', $entry, 2);
                         $name = $parts[0];
@@ -1865,7 +2934,6 @@ class FA3Builder
             }
         }
 
-        // Project extrafields for stopka
         $projConf = getDolGlobalString('KSEF_DODATKOWY_OPIS_PROJECT_EXTRAFIELDS', '');
         if (!empty($projConf) && !empty($invoice->fk_project)) {
             $ef->fetch_name_optionals_label('projet');
@@ -1879,7 +2947,7 @@ class FA3Builder
                 require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
                 $proj = new Project($db);
                 if ($proj->fetch($invoice->fk_project) > 0) {
-                    if (method_exists($proj, 'fetch_optionals')) $proj->fetch_optionals();
+                    $proj->fetch_optionals();
                     foreach ($projEntries as $entry) {
                         $parts = explode(':', $entry, 2);
                         $name = $parts[0];
@@ -1905,21 +2973,21 @@ class FA3Builder
     }
 
     /**
-     * @brief Formats an extrafield value for display in DodatkowyOpis
-     * @param mixed $rawValue Raw extrafield value
+     * @brief Format extrafield value
+     * @param mixed $rawValue
      * @param string $type Extrafield type
-     * @param ExtraFields $ef ExtraFields instance
-     * @param string $elementType Element type ('facture' or 'facturedet')
+     * @param ExtraFields $ef
+     * @param string $elementType facture or facturedet
      * @param string $name Field name
-     * @param Translate $langs Language object
-     * @return string Formatted display value
+     * @param Translate $langs
+     * @return string
      */
     private static function formatExtraFieldValue($rawValue, $type, $ef, $elementType, $name, $langs)
     {
         if ($type === 'date') {
-            return dol_print_date($rawValue, 'day');
+            return dol_print_date($rawValue, 'day', 'tzserver');
         } elseif ($type === 'datetime') {
-            return dol_print_date($rawValue, 'dayhour');
+            return dol_print_date($rawValue, 'dayhour', 'tzserver');
         } elseif ($type === 'select') {
             $param = isset($ef->attributes[$elementType]['param'][$name]) ? $ef->attributes[$elementType]['param'][$name] : array();
             if (isset($param['options'][$rawValue])) {
@@ -1938,16 +3006,14 @@ class FA3Builder
     }
 
     /**
-     * @brief Returns the per-invoice DodatkowyOpis override value
-     * @param object $invoice Invoice object
+     * @brief Invoice DodatkowyOpis override
+     * @param object $invoice
      * @return string
      */
     public static function getDodatkowyOpisOverride($invoice)
     {
         if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-            if (method_exists($invoice, 'fetch_optionals')) {
-                $invoice->fetch_optionals();
-            }
+            $invoice->fetch_optionals();
         }
         return isset($invoice->array_options['options_ksef_dodatkowy_opis_mode'])
             ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
@@ -1955,9 +3021,9 @@ class FA3Builder
     }
 
     /**
-     * @brief Parses a combined note mode value into mode and target components
-     * @param string $combined Combined value (e.g. 'simple_stopka', 'keyvalue_dodatkowy', 'disabled')
-     * @return array|null Array with 'mode' and 'target' keys, or null if not recognized
+     * @brief Parse note mode
+     * @param string $combined e.g. simple_stopka
+     * @return array|null mode, target; null unknown
      */
     public static function parseCombinedNoteMode($combined)
     {
@@ -1971,12 +3037,10 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds DodatkowyOpis XML elements from invoice data
+     * @brief Build DodatkowyOpis
      * @param $xml DOMDocument
-     * @param $parent Parent element (Fa)
+     * @param $parent Fa element
      * @param $invoice Invoice object
-     * @called_by buildFa()
-     * @calls parseDodatkowyOpisPreview(), xmlSafe()
      */
     private function buildDodatkowyOpis($xml, $parent, $invoice)
     {
@@ -1986,7 +3050,7 @@ class FA3Builder
 
         foreach ($entries as $entry) {
             $dodatkowy = $xml->createElement('DodatkowyOpis');
-            // NrWiersza before Klucz (schema order)
+            // XSD: NrWiersza first
             if (!empty($entry['nr_wiersza'])) {
                 $dodatkowy->appendChild($xml->createElement('NrWiersza', (int) $entry['nr_wiersza']));
             }
@@ -1997,15 +3061,31 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds invoice line items section
+     * @brief Build line items
      * @param $xml DOMDocument
      * @param $parent Parent element
      * @param $invoice Invoice object
      * @param $originalInvoice Original for KOR
-     * @called_by buildFa()
      */
     private function buildFaWiersz($xml, $parent, $invoice, $originalInvoice = null)
     {
+        // MF 2.7
+        $type = is_array($this->depositCtx) ? $this->depositCtx['type'] : '';
+        if ($type === 'ROZ' || $type === 'KOR_ROZ') {
+            $db = $this->db;
+            $keep = function ($obj) use ($db) {
+                if (!$obj || empty($obj->lines)) {
+                    return $obj;
+                }
+                $copy = clone $obj;
+                $copy->lines = array_values(array_filter($obj->lines, function ($l) use ($db) {
+                    return !ksefIsDepositLine($db, $l);
+                }));
+                return $copy;
+            };
+            $invoice = $keep($invoice);
+            $originalInvoice = $keep($originalInvoice);
+        }
         $isKor = ($invoice->type == Facture::TYPE_CREDIT_NOTE
                || $invoice->type == Facture::TYPE_REPLACEMENT);
 
@@ -2021,8 +3101,8 @@ class FA3Builder
             return;
         }
 
-        // TYPE_REPLACEMENT
-        if ($method === 'stanprzed') {
+        // no StanPrzed
+        if ($method === 'stanprzed' && !$this->correctsAfterCreditNote($invoice)) {
             $this->buildFaWierszStanPrzed($xml, $parent, $invoice, $originalInvoice);
         } else {
             $this->buildFaWierszDifferentialReplacement($xml, $parent, $invoice, $originalInvoice);
@@ -2030,8 +3110,36 @@ class FA3Builder
     }
 
     /**
-     * @brief Standard line emission
-     * @called_by buildFaWiersz()
+     * @brief Open credit note
+     * @param Facture $invoice Replacement
+     * @return bool
+     */
+    private function correctsAfterCreditNote($invoice)
+    {
+        $P = MAIN_DB_PREFIX;
+        $members = array();
+        $cur = (int) $invoice->fk_facture_source;
+        for ($i = 0; $cur > 0 && $i < 20 && !in_array($cur, $members, true); $i++) {
+            $members[] = $cur;
+            $res = $this->db->query("SELECT type, fk_facture_source FROM " . $P . "facture WHERE rowid = " . $cur);
+            $o = $res ? $this->db->fetch_object($res) : null;
+            $cur = ($o && (int) $o->type === Facture::TYPE_REPLACEMENT) ? (int) $o->fk_facture_source : 0;
+        }
+        if (!$members) {
+            return false;
+        }
+        $absorbed = ksefShortfallCovers($this->db, $members)['absorb'];
+        foreach ($this->absorbedNotes as $note) {
+            $absorbed[] = (int) $note->id;
+        }
+        $res = $this->db->query("SELECT rowid FROM " . $P . "facture WHERE fk_facture_source IN (" . implode(',', $members) . ") AND type = " . Facture::TYPE_CREDIT_NOTE
+            . " AND fk_statut IN (" . Facture::STATUS_VALIDATED . ", " . Facture::STATUS_CLOSED . ")"
+            . ($absorbed ? " AND rowid NOT IN (" . implode(',', array_map('intval', $absorbed)) . ")" : '') . " LIMIT 1");
+        return $res && $this->db->num_rows($res) > 0;
+    }
+
+    /**
+     * @brief Emit standard lines
      */
     private function buildFaWierszStandard($xml, $parent, $invoice)
     {
@@ -2043,8 +3151,7 @@ class FA3Builder
     }
 
     /**
-     * @brief Credit note lines - delta with sign fix
-     * @called_by buildFaWiersz()
+     * @brief Credit note lines
      */
     private function buildFaWierszDifferentialCreditNote($xml, $parent, $invoice)
     {
@@ -2056,12 +3163,10 @@ class FA3Builder
     }
 
     /**
-     * @brief Match replacement lines to originals via fk_prev_id in matched pairs/unmatched originals/new lines
-     * @called_by buildFaWierszStanPrzed(), buildFaWierszDifferentialReplacement()
+     * @brief Pair correction lines
      */
     private function matchCorrectionLines($origLines, $corrLines)
     {
-        // Build lookup
         $origById = array();
         foreach ($origLines as $origLine) {
             if (!empty($origLine->id)) {
@@ -2073,7 +3178,6 @@ class FA3Builder
         $matchedOrigIds = array();
         $matchedCorrIndices = array();
 
-        // Match correction lines via fk_prev_id
         foreach ($corrLines as $ci => $corrLine) {
             $prevId = $corrLine->fk_prev_id ?? 0;
             if ($prevId > 0 && isset($origById[$prevId])) {
@@ -2094,14 +3198,12 @@ class FA3Builder
             return $pairs;
         }
 
-        // Unmatched originals (-)
         foreach ($origLines as $origLine) {
             if (!empty($origLine->id) && !isset($matchedOrigIds[$origLine->id])) {
                 $pairs[] = array('orig' => $origLine, 'corr' => null);
             }
         }
 
-        // Unmatched corrections (+)
         foreach ($corrLines as $ci => $corrLine) {
             if (!isset($matchedCorrIndices[$ci])) {
                 $pairs[] = array('orig' => null, 'corr' => $corrLine);
@@ -2112,8 +3214,7 @@ class FA3Builder
     }
 
     /**
-     * @brief StanPrzed method
-     * @called_by buildFaWiersz()
+     * @brief Emit StanPrzed lines
      */
     private function buildFaWierszStanPrzed($xml, $parent, $invoice, $originalInvoice)
     {
@@ -2121,11 +3222,7 @@ class FA3Builder
         $origLines = ($originalInvoice && !empty($originalInvoice->lines)) ? $originalInvoice->lines : array();
         $lineNum = 1;
 
-        // Original exchange rate
-        $origKursWaluty = null;
-        if ($originalInvoice && !empty($originalInvoice->multicurrency_tx) && $originalInvoice->multicurrency_tx > 0) {
-            $origKursWaluty = 1 / $originalInvoice->multicurrency_tx;
-        }
+        $origKursWaluty = $originalInvoice ? $this->kursOf($originalInvoice) : null;
 
         $pairs = $this->matchCorrectionLines($origLines, $corrLines);
 
@@ -2134,19 +3231,16 @@ class FA3Builder
             $corrLine = $pair['corr'];
 
             if ($origLine && $corrLine) {
-                if ($this->linesAreDifferent($origLine, $corrLine)) {
-                    // Changed: before (StanPrzed=1) + after, same NrWierszaFa
+                // rate changes PLN
+                if ($this->beforeKursWaluty !== null || $this->linesAreDifferent($origLine, $corrLine)) {
                     $this->buildSingleFaWiersz($xml, $parent, $origLine, $lineNum, true, false, $origKursWaluty);
                     $this->buildSingleFaWiersz($xml, $parent, $corrLine, $lineNum, false);
                     $lineNum++;
                 }
-                // Unchanged
             } elseif ($origLine) {
-                // Removed line
                 $this->buildSingleFaWiersz($xml, $parent, $origLine, $lineNum, true, false, $origKursWaluty);
                 $lineNum++;
             } else {
-                // Added line
                 $this->buildSingleFaWiersz($xml, $parent, $corrLine, $lineNum, false);
                 $lineNum++;
             }
@@ -2154,16 +3248,14 @@ class FA3Builder
     }
 
     /**
-     * @brief Replacement differential
-     * @called_by buildFaWiersz()
+     * @brief Emit differential lines
      */
     private function buildFaWierszDifferentialReplacement($xml, $parent, $invoice, $originalInvoice)
     {
         $corrLines = $invoice->lines;
         $origLines = ($originalInvoice && !empty($originalInvoice->lines)) ? $originalInvoice->lines : array();
         $useMulti = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN');
-        $origKursWaluty = ($useMulti && $originalInvoice && !empty($originalInvoice->multicurrency_tx) && $originalInvoice->multicurrency_tx > 0)
-            ? 1 / $originalInvoice->multicurrency_tx : null;
+        $origKursWaluty = ($useMulti && $originalInvoice) ? $this->kursOf($originalInvoice) : null;
         $lineNum = 1;
 
         $pairs = $this->matchCorrectionLines($origLines, $corrLines);
@@ -2173,251 +3265,307 @@ class FA3Builder
             $corrLine = $pair['corr'];
 
             if ($origLine && $corrLine) {
-                $origRate = $this->mapVatRateToKSeF($origLine->tva_tx, $origLine);
-                $corrRate = $this->mapVatRateToKSeF($corrLine->tva_tx, $corrLine);
-                $origTotal = $useMulti ? $origLine->multicurrency_total_ht : $origLine->total_ht;
-                $corrTotal = $useMulti ? $corrLine->multicurrency_total_ht : $corrLine->total_ht;
+                $origRate = $this->rateKey($origLine);
+                $corrRate = $this->rateKey($corrLine);
+                $origTotal = $this->lineAmount($origLine, $useMulti);
+                $corrTotal = $this->lineAmount($corrLine, $useMulti);
                 $deltaQty = $corrLine->qty - $origLine->qty;
                 $deltaTotal = $corrTotal - $origTotal;
+                $deltaVat = $this->lineVat($corrLine, $useMulti) - $this->lineVat($origLine, $useMulti);
+                $qtyChanged = ksefFormatDecimal($corrLine->qty, 6) !== ksefFormatDecimal($origLine->qty, 6);
 
-                if ($origRate !== $corrRate) {
-                    $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti, null, $origKursWaluty);
-                    $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $corrLine->qty, $corrTotal, $corrRate, $useMulti);
+                if ($origRate !== $corrRate || $this->beforeKursWaluty !== null) {
+                    $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti, null, $origKursWaluty, -$this->lineVat($origLine, $useMulti));
+                    $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $corrLine->qty, $corrTotal, $corrRate, $useMulti, null, null, $this->lineVat($corrLine, $useMulti));
                     $lineNum++;
-                } elseif (abs($deltaTotal) >= 0.005 || abs($deltaQty) >= 0.005) {
-                    $emitQty = (abs($deltaQty) < 0.005) ? $corrLine->qty : $deltaQty;
-                    $corrPrice = $useMulti ? $corrLine->multicurrency_subprice : $corrLine->subprice;
-                    $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $emitQty, $deltaTotal, $corrRate, $useMulti, $corrPrice);
+                } elseif (abs($deltaTotal) >= 0.005 || $qtyChanged) {
+                    $emitQty = $qtyChanged ? $deltaQty : $corrLine->qty;
+                    $corrPrice = $this->lineUnitPrice($corrLine, $useMulti, $corrRate);
+                    $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $emitQty, $deltaTotal, $corrRate, $useMulti, $corrPrice, null, $deltaVat);
                     $lineNum++;
                 } elseif ($this->linesAreDifferent($origLine, $corrLine)) {
-                    $corrPrice = $useMulti ? $corrLine->multicurrency_subprice : $corrLine->subprice;
-                    $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, 0, 0, $corrRate, $useMulti, $corrPrice);
+                    $corrPrice = $this->lineUnitPrice($corrLine, $useMulti, $corrRate);
+                    $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, 0, 0, $corrRate, $useMulti, $corrPrice, null, 0);
                     $lineNum++;
                 }
             } elseif ($origLine) {
-                $origRate = $this->mapVatRateToKSeF($origLine->tva_tx, $origLine);
-                $origTotal = $useMulti ? $origLine->multicurrency_total_ht : $origLine->total_ht;
-                $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti, null, $origKursWaluty);
+                $origRate = $this->rateKey($origLine);
+                $origTotal = $this->lineAmount($origLine, $useMulti);
+                $this->buildDifferentialRow($xml, $parent, $origLine, $lineNum, -$origLine->qty, -$origTotal, $origRate, $useMulti, null, $origKursWaluty, -$this->lineVat($origLine, $useMulti));
                 $lineNum++;
             } else {
-                $corrRate = $this->mapVatRateToKSeF($corrLine->tva_tx, $corrLine);
-                $corrTotal = $useMulti ? $corrLine->multicurrency_total_ht : $corrLine->total_ht;
-                $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $corrLine->qty, $corrTotal, $corrRate, $useMulti);
+                $corrRate = $this->rateKey($corrLine);
+                $corrTotal = $this->lineAmount($corrLine, $useMulti);
+                $this->buildDifferentialRow($xml, $parent, $corrLine, $lineNum, $corrLine->qty, $corrTotal, $corrRate, $useMulti, null, null, $this->lineVat($corrLine, $useMulti));
                 $lineNum++;
             }
         }
     }
 
     /**
-     * @brief Emit differential FaWiersz row
+     * @brief Gross form line
+     * @param string $rateKey
+     * @return bool
+     */
+    private function isGrossForm($rateKey)
+    {
+        return $this->grossMethod || $rateKey === 'marza';
+    }
+
+    /**
+     * @brief Net or gross
+     * @param object $line
+     * @param bool $useMulti Non-PLN currency
+     * @return float
+     */
+    private function lineAmount($line, $useMulti)
+    {
+        if ($this->grossMethod) {
+            return (float) ($useMulti ? $line->multicurrency_total_ttc : $line->total_ttc);
+        }
+        return (float) ($useMulti ? $line->multicurrency_total_ht : $line->total_ht);
+    }
+
+    /**
+     * @brief Line VAT amount
+     * @param object $line
+     * @param bool $useMulti Non-PLN currency
+     * @return float
+     */
+    private function lineVat($line, $useMulti)
+    {
+        return (float) ($useMulti ? $line->multicurrency_total_tva : $line->total_tva);
+    }
+
+    /**
+     * @brief Line unit price
+     * @param object $line
+     * @param bool $useMulti Non-PLN currency
+     * @param string $rateKey
+     * @return float
+     */
+    private function lineUnitPrice($line, $useMulti, $rateKey)
+    {
+        $sub = (float) ($useMulti ? $line->multicurrency_subprice : $line->subprice);
+        if (!$this->isGrossForm($rateKey)) {
+            return $sub;
+        }
+        $qty = (float) $line->qty;
+        $remise = (float) ($line->remise_percent ?? 0);
+        if ($qty == 0 || $remise >= 100) {
+            return $sub * (1 + (float) $line->tva_tx / 100);
+        }
+        $p = (float) ($useMulti ? $line->multicurrency_total_ttc : $line->total_ttc) / $qty / (1 - $remise / 100);
+        $sp = isset($line->situation_percent) ? (float) $line->situation_percent : 100;
+        if ($sp > 0 && $sp != 100) {
+            $p = $p * 100 / $sp;
+        }
+        return $p;
+    }
+
+    /**
+     * @brief Emit P_8A unit
+     * @param DOMDocument $xml
+     * @param DOMElement $faWiersz
+     * @param object $line
+     */
+    private function appendUnit($xml, $faWiersz, $line)
+    {
+        if (!getDolGlobalInt('KSEF_FA3_INCLUDE_UNIT')) {
+            return;
+        }
+        $unit = ksefUnitText($this->db, (int) ($line->fk_unit ?? 0));
+        if ($unit !== '') {
+            $faWiersz->appendChild($xml->createElement('P_8A', $this->xmlSafe(mb_substr($unit, 0, 256, 'UTF-8'))));
+        }
+    }
+
+    /**
+     * @brief Line P_7 text
+     * @param object $line
+     * @return string
+     */
+    private function lineDescription($line)
+    {
+        $descText = !empty($line->desc) ? self::stripNoteHtml($line->desc) : '';
+        $label = !empty($line->product_label) ? trim($line->product_label) : '';
+        if (!empty($label) && !empty($descText)) {
+            return (stripos($descText, $label) !== 0) ? $label . "\n" . $descText : $descText;
+        }
+        if (!empty($descText)) {
+            return $descText;
+        }
+        return !empty($label) ? $label : '';
+    }
+
+    /**
+     * @brief Emit differential row
      * @param $xml DOMDocument
      * @param $parent Parent element
-     * @param $line Invoice line (P_7/Indeks/GTIN/P_8A source)
-     * @param $lineNum NrWierszaFa number
-     * @param $qty Quantity (delta or negated)
-     * @param $total Net total (delta or negated)
-     * @param $vatRate KSeF VAT rate string
-     * @param $useMulti Use multicurrency fields
-     * @param $unitPrice Override (null = derive from line)
-     * @param $kursWalutyOverride Exchange rate override
-     * @called_by buildFaWierszDifferentialReplacement()
+     * @param $line Source line
+     * @param $lineNum NrWierszaFa
+     * @param $qty Quantity delta
+     * @param $total Value delta
+     * @param $vatRate Rate key
+     * @param $useMulti Non-PLN currency
+     * @param $unitPrice Override or null
+     * @param $kursWalutyOverride Rate override
+     * @param $vat P_11Vat or null
      */
-    private function buildDifferentialRow($xml, $parent, $line, $lineNum, $qty, $total, $vatRate, $useMulti, $unitPrice = null, $kursWalutyOverride = null)
+    private function buildDifferentialRow($xml, $parent, $line, $lineNum, $qty, $total, $vatRate, $useMulti, $unitPrice = null, $kursWalutyOverride = null, $vat = null)
     {
-        global $conf;
-
+        $gross = $this->isGrossForm($vatRate);
         $faWiersz = $xml->createElement('FaWiersz');
         $parent->appendChild($faWiersz);
 
         $faWiersz->appendChild($xml->createElement('NrWierszaFa', $lineNum));
 
-        // UU_ID
         if (getDolGlobalInt('KSEF_FA3_INCLUDE_UU_ID') && !empty($line->array_options['options_ksef_uu_id'])) {
             $faWiersz->appendChild($xml->createElement('UU_ID', $this->xmlSafe($line->array_options['options_ksef_uu_id'])));
         }
 
-        // P_7: Product Name
-        $descText = !empty($line->desc) ? self::stripNoteHtml($line->desc) : '';
-        $label = !empty($line->product_label) ? trim($line->product_label) : '';
-        if (!empty($label) && !empty($descText)) {
-            if (stripos($descText, $label) !== 0) {
-                $description = $label . "\n" . $descText;
-            } else {
-                $description = $descText;
-            }
-        } elseif (!empty($descText)) {
-            $description = $descText;
-        } elseif (!empty($label)) {
-            $description = $label;
-        } else {
-            $description = '';
+        $p6a = $this->lineDate($line);
+        if ($p6a !== null) {
+            $faWiersz->appendChild($xml->createElement('P_6A', $p6a));
         }
-        $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(mb_substr($description, 0, 512, 'UTF-8'))));
 
-        // Indeks
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS) && !empty($line->product_ref)) {
+        $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(mb_substr(self::coreLineMarkers($this->lineDescription($line)), 0, 512, 'UTF-8'))));
+
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_INDEKS') && !empty($line->product_ref)) {
             $faWiersz->appendChild($xml->createElement('Indeks', $this->xmlSafe(substr($line->product_ref, 0, 50))));
         }
 
-        // GTIN
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_GTIN) && !empty($line->product_barcode)) {
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_GTIN') && !empty($line->product_barcode)) {
             $faWiersz->appendChild($xml->createElement('GTIN', $this->xmlSafe($line->product_barcode)));
         }
 
-        // P_8A: Unit of measure
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_UNIT) && !empty($line->product_unit)) {
-            $faWiersz->appendChild($xml->createElement('P_8A', $this->xmlSafe($line->product_unit)));
-        }
+        $this->appendUnit($xml, $faWiersz, $line);
 
-        // P_8B: Quantity
-        $faWiersz->appendChild($xml->createElement('P_8B', number_format($qty, 2, '.', '')));
+        $faWiersz->appendChild($xml->createElement('P_8B', ksefFormatDecimal($qty, 6)));
 
-        // P_9A: Unit Net Price
         if ($unitPrice === null) {
-            $unitPrice = $useMulti ? $line->multicurrency_subprice : $line->subprice;
+            $unitPrice = $this->lineUnitPrice($line, $useMulti, $vatRate);
         }
-        $faWiersz->appendChild($xml->createElement('P_9A', number_format(abs($unitPrice), 2, '.', '')));
+        $faWiersz->appendChild($xml->createElement($gross ? 'P_9B' : 'P_9A', ksefFormatDecimal(abs($unitPrice), 8)));
 
-        // P_10: ... TBD?
+        $faWiersz->appendChild($xml->createElement($gross ? 'P_11A' : 'P_11', number_format($total, 2, '.', '')));
 
-        // P_11: Net Line Total
-        $faWiersz->appendChild($xml->createElement('P_11', number_format($total, 2, '.', '')));
+        if ($vat !== null && !$gross && $this->lineVatOn && preg_match('/^\d+$/', (string) $vatRate)) {
+            $faWiersz->appendChild($xml->createElement('P_11Vat', number_format($vat, 2, '.', '')));
+        }
 
-        // P_12: VAT Rate
-        $faWiersz->appendChild($xml->createElement('P_12', $vatRate));
+        if ($vatRate !== 'marza') {
+            $faWiersz->appendChild($xml->createElement('P_12', $vatRate));
+        }
 
-        // GTU
         $gtu = $this->getLineGTU($line);
         if (!empty($gtu)) {
             $faWiersz->appendChild($xml->createElement('GTU', $gtu));
         }
 
-        // Procedura
         $procedura = $this->getLineProcedura($line);
         if (!empty($procedura)) {
             $faWiersz->appendChild($xml->createElement('Procedura', $procedura));
         }
 
-        // KursWaluty
-        $rowKurs = ($kursWalutyOverride !== null) ? $kursWalutyOverride : $this->currentKursWaluty;
+        $rowKurs = $this->rowKurs($line, $kursWalutyOverride);
         if (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN' && !empty($rowKurs)) {
             $faWiersz->appendChild($xml->createElement('KursWaluty', number_format($rowKurs, 6, '.', '')));
         }
     }
 
     /**
-     * @brief Emit single FaWiersz element
+     * @brief Emit FaWiersz row
      * @param $xml DOMDocument
      * @param $parent Parent element
      * @param $line Invoice line
-     * @param $lineNum NrWierszaFa number
-     * @param $stanPrzed Before-correction marker
+     * @param $lineNum NrWierszaFa
+     * @param $stanPrzed StanPrzed marker
      * @param $isCreditNote Flips P_8B/P_9A signs
-     * @param $kursWalutyOverride Exchange rate override for StanPrzed
+     * @param $kursWalutyOverride Rate override
      * @return void
-     * @called_by buildFaWiersz()
-     * @calls xmlSafe(), mapVatRateToKSeF()
      */
     private function buildSingleFaWiersz($xml, $parent, $line, $lineNum, $stanPrzed = false, $isCreditNote = false, $kursWalutyOverride = null)
     {
-        global $conf;
+        $useMulti = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN');
+        $rateKey = $this->rateKey($line);
+        $gross = $this->isGrossForm($rateKey);
 
         $faWiersz = $xml->createElement('FaWiersz');
         $parent->appendChild($faWiersz);
 
         $faWiersz->appendChild($xml->createElement('NrWierszaFa', $lineNum));
 
-        // UU_ID (after NrWierszaFa, before P_6A)
+        // XSD sequence
         if (getDolGlobalInt('KSEF_FA3_INCLUDE_UU_ID') && !empty($line->array_options['options_ksef_uu_id'])) {
             $faWiersz->appendChild($xml->createElement('UU_ID', $this->xmlSafe($line->array_options['options_ksef_uu_id'])));
         }
 
-        // P_7: Product Name
-        $descText = !empty($line->desc) ? self::stripNoteHtml($line->desc) : '';
-        $label = !empty($line->product_label) ? trim($line->product_label) : '';
-        if (!empty($label) && !empty($descText)) {
-            if (stripos($descText, $label) !== 0) {
-                $description = $label . "\n" . $descText;
-            } else {
-                $description = $descText;
-            }
-        } elseif (!empty($descText)) {
-            $description = $descText;
-        } elseif (!empty($label)) {
-            $description = $label;
-        } else {
-            $description = '';
+        $p6a = $this->lineDate($line);
+        if ($p6a !== null) {
+            $faWiersz->appendChild($xml->createElement('P_6A', $p6a));
         }
-        $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(mb_substr($description, 0, 512, 'UTF-8'))));
 
-        // Indeks: Product reference
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS) && !empty($line->product_ref)) {
+        $faWiersz->appendChild($xml->createElement('P_7', $this->xmlSafe(mb_substr(self::coreLineMarkers($this->lineDescription($line)), 0, 512, 'UTF-8'))));
+
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_INDEKS') && !empty($line->product_ref)) {
             $faWiersz->appendChild($xml->createElement('Indeks', $this->xmlSafe(substr($line->product_ref, 0, 50))));
         }
 
-        // GTIN: Product barcode
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_GTIN) && !empty($line->product_barcode)) {
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_GTIN') && !empty($line->product_barcode)) {
             $faWiersz->appendChild($xml->createElement('GTIN', $this->xmlSafe($line->product_barcode)));
         }
 
-        // P_8A: Unit of measure
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_UNIT) && !empty($line->product_unit)) {
-            $faWiersz->appendChild($xml->createElement('P_8A', $this->xmlSafe($line->product_unit)));
-        }
+        $this->appendUnit($xml, $faWiersz, $line);
 
-        // P_8B: Quantity
-        // Credit notes: qty=+abs, subprice=-abs. Method A: P_8B=-qty, P_9A=+price.
+        // KSeF: -qty/+price
         $qty = $isCreditNote ? -abs($line->qty) : $line->qty;
-        $faWiersz->appendChild($xml->createElement('P_8B', number_format($qty, 2, '.', '')));
+        $faWiersz->appendChild($xml->createElement('P_8B', ksefFormatDecimal($qty, 6)));
 
-        // P_9A: Unit Net Price
-        $unitPrice = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
-            ? $line->multicurrency_subprice
-            : $line->subprice;
+        $unitPrice = $this->lineUnitPrice($line, $useMulti, $rateKey);
         if ($isCreditNote) {
             $unitPrice = abs($unitPrice);
         }
-        $faWiersz->appendChild($xml->createElement('P_9A', number_format($unitPrice, 2, '.', '')));
+        $unitText = ksefFormatDecimal($unitPrice, 8);
+        $faWiersz->appendChild($xml->createElement($gross ? 'P_9B' : 'P_9A', $unitText));
 
-        // P_10: Discount
+        $lineTotal = $gross
+            ? (float) ($useMulti ? $line->multicurrency_total_ttc : $line->total_ttc)
+            : (float) ($useMulti ? $line->multicurrency_total_ht : $line->total_ht);
+
+        // P_8BxP_9-P_10=P_11
         if (!$isCreditNote && !empty($line->remise_percent) && $line->remise_percent > 0) {
-            $discountAmount = $unitPrice * $line->qty - ((!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
-                ? $line->multicurrency_total_ht
-                : $line->total_ht);
+            $discountAmount = round((float) $unitText * (float) $line->qty - $lineTotal, 8);
             if ($discountAmount > 0) {
-                $faWiersz->appendChild($xml->createElement('P_10', number_format($discountAmount, 2, '.', '')));
+                $faWiersz->appendChild($xml->createElement('P_10', ksefFormatDecimal($discountAmount, 8)));
             }
         }
 
-        // P_11: Net Line Total
-        $lineTotal = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN')
-            ? $line->multicurrency_total_ht
-            : $line->total_ht;
-        $faWiersz->appendChild($xml->createElement('P_11', number_format($lineTotal, 2, '.', '')));
+        $faWiersz->appendChild($xml->createElement($gross ? 'P_11A' : 'P_11', number_format($lineTotal, 2, '.', '')));
 
-        // P_12: VAT Rate
-        $vatRate = $this->mapVatRateToKSeF($line->tva_tx, $line);
-        $faWiersz->appendChild($xml->createElement('P_12', $vatRate));
+        if (!$gross && $this->lineVatOn && preg_match('/^\d+$/', (string) $rateKey)) {
+            $faWiersz->appendChild($xml->createElement('P_11Vat', number_format($this->lineVat($line, $useMulti), 2, '.', '')));
+        }
 
-        // GTU
+        if ($rateKey !== 'marza') {
+            $faWiersz->appendChild($xml->createElement('P_12', $rateKey));
+        }
+
         $gtu = $this->getLineGTU($line);
         if (!empty($gtu)) {
             $faWiersz->appendChild($xml->createElement('GTU', $gtu));
         }
 
-        // Procedura
         $procedura = $this->getLineProcedura($line);
         if (!empty($procedura)) {
             $faWiersz->appendChild($xml->createElement('Procedura', $procedura));
         }
 
-        // KursWaluty
-        $kursWaluty = ($kursWalutyOverride !== null) ? $kursWalutyOverride : $this->currentKursWaluty;
+        $kursWaluty = $this->rowKurs($line, $kursWalutyOverride);
         if (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN' && !empty($kursWaluty)) {
             $faWiersz->appendChild($xml->createElement('KursWaluty', number_format($kursWaluty, 6, '.', '')));
         }
 
-        // StanPrzed
         if ($stanPrzed) {
             $faWiersz->appendChild($xml->createElement('StanPrzed', '1'));
         }
@@ -2425,104 +3573,86 @@ class FA3Builder
     }
 
     /**
-     * @brief Compare lines for KOR differences
+     * @brief KOR lines differ
      * @param $origLine Original line
      * @param $corrLine Correction line
      * @return bool
-     * @called_by buildFaWiersz()
      */
     private function linesAreDifferent($origLine, $corrLine)
     {
-        global $conf;
-
         $useMulti = (!empty($this->currentInvoiceCurrency) && $this->currentInvoiceCurrency != 'PLN');
 
-        // P_7
         $origDesc = !empty($origLine->desc) ? self::stripNoteHtml($origLine->desc) : '';
         $corrDesc = !empty($corrLine->desc) ? self::stripNoteHtml($corrLine->desc) : '';
         $origLabel = !empty($origLine->product_label) ? trim($origLine->product_label) : '';
         $corrLabel = !empty($corrLine->product_label) ? trim($corrLine->product_label) : '';
         if ($origDesc !== $corrDesc || $origLabel !== $corrLabel) return true;
 
-        // Indeks
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_INDEKS)) {
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_INDEKS')) {
             $origRef = !empty($origLine->product_ref) ? substr($origLine->product_ref, 0, 50) : '';
             $corrRef = !empty($corrLine->product_ref) ? substr($corrLine->product_ref, 0, 50) : '';
             if ($origRef !== $corrRef) return true;
         }
 
-        // GTIN
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_GTIN)) {
+        if (getDolGlobalString('KSEF_FA3_INCLUDE_GTIN')) {
             $origGtin = !empty($origLine->product_barcode) ? $origLine->product_barcode : '';
             $corrGtin = !empty($corrLine->product_barcode) ? $corrLine->product_barcode : '';
             if ($origGtin !== $corrGtin) return true;
         }
 
-        // P_8A
-        if (!empty($conf->global->KSEF_FA3_INCLUDE_UNIT)) {
-            $origUnit = !empty($origLine->product_unit) ? $origLine->product_unit : '';
-            $corrUnit = !empty($corrLine->product_unit) ? $corrLine->product_unit : '';
-            if ($origUnit !== $corrUnit) return true;
+        if (getDolGlobalInt('KSEF_FA3_INCLUDE_UNIT')) {
+            if ((int) ($origLine->fk_unit ?? 0) !== (int) ($corrLine->fk_unit ?? 0)) return true;
         }
 
-        // P_8B
-        if (number_format($origLine->qty, 2, '.', '') !== number_format($corrLine->qty, 2, '.', '')) return true;
+        if (ksefFormatDecimal($origLine->qty, 6) !== ksefFormatDecimal($corrLine->qty, 6)) return true;
 
-        // P_9A
-        $origPrice = $useMulti ? $origLine->multicurrency_subprice : $origLine->subprice;
-        $corrPrice = $useMulti ? $corrLine->multicurrency_subprice : $corrLine->subprice;
-        if (number_format($origPrice, 2, '.', '') !== number_format($corrPrice, 2, '.', '')) return true;
+        $origRate = $this->rateKey($origLine);
+        $corrRate = $this->rateKey($corrLine);
+        if (ksefFormatDecimal($this->lineUnitPrice($origLine, $useMulti, $origRate), 8) !== ksefFormatDecimal($this->lineUnitPrice($corrLine, $useMulti, $corrRate), 8)) return true;
 
-        // P_10
         $origDiscount = (!empty($origLine->remise_percent) && $origLine->remise_percent > 0) ? $origLine->remise_percent : 0;
         $corrDiscount = (!empty($corrLine->remise_percent) && $corrLine->remise_percent > 0) ? $corrLine->remise_percent : 0;
         if (number_format($origDiscount, 2, '.', '') !== number_format($corrDiscount, 2, '.', '')) return true;
 
-        // P_11
+        if (number_format($this->lineAmount($origLine, $useMulti), 2, '.', '') !== number_format($this->lineAmount($corrLine, $useMulti), 2, '.', '')) return true;
         $origTotal = $useMulti ? $origLine->multicurrency_total_ht : $origLine->total_ht;
         $corrTotal = $useMulti ? $corrLine->multicurrency_total_ht : $corrLine->total_ht;
         if (number_format($origTotal, 2, '.', '') !== number_format($corrTotal, 2, '.', '')) return true;
 
-        // P_12
-        if ($this->mapVatRateToKSeF($origLine->tva_tx, $origLine) !== $this->mapVatRateToKSeF($corrLine->tva_tx, $corrLine)) return true;
+        if ($origRate !== $corrRate || ksefMarginSubtype($origLine) !== ksefMarginSubtype($corrLine)) return true;
 
         return false;
     }
 
     /**
-     * @brief Builds payment information section
+     * @brief Build Platnosc
      * @param $xml DOMDocument
      * @param $parent Parent element
      * @param $invoice Invoice object
-     * @called_by buildFa()
-     * @calls getPaymentMethodCode(), getPaymentMethodCodeByType(), cleanIBAN(), xmlSafe()
      */
     private function buildPlatnosc($xml, $parent, $invoice)
     {
-        global $conf;
-
         $platnosc = $xml->createElement('Platnosc');
-        $parent->appendChild($platnosc);
 
-        // Payment status
+        $fullyPaid = false;
         if ($invoice->statut >= 1) {
-            $payments = $invoice->getListOfPayments('', 0, 1);
+            $payments = $invoice->getListOfPayments('', ksefGetInvoiceCurrency($invoice) !== 'PLN' ? 1 : 0, 1);
 
             if (!empty($payments)) {
                 $isFullyPaid = !empty($invoice->paye);
+                $fullyPaid = $isFullyPaid;
                 $paymentCount = count($payments);
 
                 if ($isFullyPaid && $paymentCount == 1) {
-                    // Full payment
                     $platnosc->appendChild($xml->createElement('Zaplacono', '1'));
-                    $payDate = dol_print_date($this->db->jdate($payments[0]['date']), '%Y-%m-%d');
+                    $payDate = ksefMomentDay($this->db->jdate($payments[0]['date']));
                     $platnosc->appendChild($xml->createElement('DataZaplaty', $payDate));
                 } else {
-                    // Partial/multiple: 1=partial, 2=fully paid in installments
+                    // 1 partial, 2=paid
                     $znacznik = $isFullyPaid ? '2' : '1';
                     $platnosc->appendChild($xml->createElement('ZnacznikZaplatyCzesciowej', $znacznik));
 
-                    foreach ($payments as $payment) {
+                    foreach (array_slice($payments, 0, 100) as $payment) {
                         $zaplataCzesciowa = $xml->createElement('ZaplataCzesciowa');
                         $platnosc->appendChild($zaplataCzesciowa);
 
@@ -2532,33 +3662,29 @@ class FA3Builder
                         ));
                         $zaplataCzesciowa->appendChild($xml->createElement(
                             'DataZaplatyCzesciowej',
-                            dol_print_date($this->db->jdate($payment['date']), '%Y-%m-%d')
+                            ksefMomentDay($this->db->jdate($payment['date']))
                         ));
 
                         if (!empty($payment['type'])) {
-                            $partialPayCode = $this->getPaymentMethodCodeByType($payment['type']);
-                            if ($partialPayCode !== null) {
-                                $zaplataCzesciowa->appendChild($xml->createElement('FormaPlatnosci', $partialPayCode));
-                            }
+                            $this->appendPaymentForm($xml, $zaplataCzesciowa, ksefPaymentForm($this->db, $payment['type']));
                         }
                     }
                 }
             }
         }
 
-        // Payment terms
-        $terminPlatnosci = $xml->createElement('TerminPlatnosci');
-        $platnosc->appendChild($terminPlatnosci);
+        $due = $this->dueDay($invoice, $fullyPaid);
+        if ($due !== '') {
+            $terminPlatnosci = $xml->createElement('TerminPlatnosci');
+            $platnosc->appendChild($terminPlatnosci);
+            $terminPlatnosci->appendChild($xml->createElement('Termin', $due));
+        }
 
-        $dueDate = $invoice->date_lim_reglement ?: ($invoice->date + (30 * 86400));
-        $terminPlatnosci->appendChild($xml->createElement('Termin', dol_print_date($dueDate, '%Y-%m-%d')));
+        $form = ksefPaymentForm($this->db, $this->paymentModeCode($invoice));
+        $this->appendPaymentForm($xml, $platnosc, $form);
 
-        // Payment method
-        $paymentCode = $this->getPaymentMethodCode($invoice->mode_reglement_id);
-        $platnosc->appendChild($xml->createElement('FormaPlatnosci', $paymentCode));
-
-        // Bank account for transfers
-        if ($paymentCode == '6' && !empty($invoice->fk_account)) {
+        $noForm = ($form['form'] === '' && $form['other'] === '');
+        if (($form['form'] === '6' || $noForm) && !empty($invoice->fk_account)) {
             require_once DOL_DOCUMENT_ROOT . '/compta/bank/class/account.class.php';
             $account = new Account($this->db);
             if ($account->fetch($invoice->fk_account) > 0 && !empty($account->iban)) {
@@ -2571,22 +3697,75 @@ class FA3Builder
                 if (!empty($account->bank)) {
                     $rachunekBankowy->appendChild($xml->createElement('NazwaBanku', $this->xmlSafe($account->bank)));
                 }
-                // OpisRachunku: Bank account description/label
-                if (!empty($conf->global->KSEF_FA3_INCLUDE_BANK_DESC) && !empty($account->label)) {
+                if (getDolGlobalString('KSEF_FA3_INCLUDE_BANK_DESC') && !empty($account->label)) {
                     $rachunekBankowy->appendChild($xml->createElement('OpisRachunku', $this->xmlSafe($account->label)));
                 }
             }
         }
 
-        // Factor bank accounts from Dolibarr third-party bank accounts
         if (getDolGlobalString('KSEF_PODMIOT3_SOURCE', 'disabled') === 'enabled') {
             $this->buildRachunekBankowyFaktora($xml, $platnosc, $invoice);
+        }
+
+        if ($platnosc->hasChildNodes()) {
+            $parent->appendChild($platnosc);
         }
     }
 
     /**
-     * @brief Emit <RachunekBankowyFaktora> nodes for factor third-parties
-     * @called_by buildPlatnosc()
+     * @brief Emit payment form
+     * @param DOMDocument $xml
+     * @param DOMElement $parent Platnosc or ZaplataCzesciowa
+     * @param array $form ksefPaymentForm() result
+     */
+    private function appendPaymentForm($xml, $parent, $form)
+    {
+        if ($form['form'] !== '') {
+            $parent->appendChild($xml->createElement('FormaPlatnosci', $form['form']));
+        } elseif ($form['other'] !== '') {
+            $parent->appendChild($xml->createElement('PlatnoscInna', '1'));
+            $parent->appendChild($xml->createElement('OpisPlatnosci', $this->xmlSafe($form['other'])));
+        }
+    }
+
+    /**
+     * @brief Invoice payment code
+     * @param Facture $invoice
+     * @return string '' if none
+     */
+    private function paymentModeCode($invoice)
+    {
+        if (empty($invoice->mode_reglement_id)) {
+            return '';
+        }
+        if (!empty($invoice->mode_reglement_code)) {
+            return (string) $invoice->mode_reglement_code;
+        }
+        $res = $this->db->query("SELECT code FROM " . MAIN_DB_PREFIX . "c_paiement WHERE id = " . ((int) $invoice->mode_reglement_id));
+        $o = $res ? $this->db->fetch_object($res) : null;
+        return $o ? (string) $o->code : '';
+    }
+
+    /**
+     * @brief TerminPlatnosci date
+     * @param Facture $invoice
+     * @param bool $fullyPaid
+     * @return string Y-m-d or ''
+     */
+    private function dueDay($invoice, $fullyPaid)
+    {
+        if ($fullyPaid || (int) $invoice->type === Facture::TYPE_CREDIT_NOTE || empty($invoice->date_lim_reglement)) {
+            return '';
+        }
+        $dueDay = dol_print_date($invoice->date_lim_reglement, '%Y-%m-%d', 'tzserver');
+        if (empty($invoice->cond_reglement_id) && $dueDay <= dol_print_date($invoice->date, '%Y-%m-%d', 'tzserver')) {
+            return '';
+        }
+        return $dueDay;
+    }
+
+    /**
+     * @brief Emit factor accounts
      */
     private function buildRachunekBankowyFaktora($xml, $platnosc, $invoice)
     {
@@ -2622,10 +3801,9 @@ class FA3Builder
     }
 
     /**
-     * @brief Load a third-party's bank accounts from llx_societe_rib.
-     * @param int $socid Societe rowid
-     * @return array List of CompanyBankAccount objects (decrypted IBAN), empty if none
-     * @called_by buildRachunekBankowyFaktora()
+     * @brief Third-party bank accounts
+     * @param int $socid
+     * @return array CompanyBankAccount list
      */
     private function getSocieteBankAccounts($socid)
     {
@@ -2650,65 +3828,78 @@ class FA3Builder
     }
 
     /**
-     * @brief Builds WarunkiTransakcji section (order/contract numbers)
+     * @brief Build WarunkiTransakcji
      * @param DOMDocument $xml
-     * @param DOMElement $parent Parent element (Fa)
-     * @param object $invoice Invoice object
-     * @called_by buildFa()
+     * @param DOMElement $parent Fa element
+     * @param object $invoice
      */
     private function buildWarunkiTransakcji($xml, $parent, $invoice)
     {
         global $conf;
 
-        // NrZamowienia
         $orderRefs = array();
         $zamowieniaSource = getDolGlobalString('KSEF_NR_ZAMOWIENIA_SOURCE', 'ref_client');
         if ($zamowieniaSource === 'ref_client') {
             $val = isset($invoice->ref_client) ? trim((string) $invoice->ref_client) : '';
-            if (!empty($val)) $orderRefs[] = mb_substr($val, 0, 256, 'UTF-8');
+            if (!empty($val)) $orderRefs[] = array(mb_substr($val, 0, 256, 'UTF-8'), '');
         } elseif ($zamowieniaSource === 'linked_order') {
-            foreach ($this->getLinkedOrderRefs($invoice) as $ref) {
-                $orderRefs[] = mb_substr($ref, 0, 256, 'UTF-8');
+            foreach ($this->getLinkedOrderRefs($invoice) as $o) {
+                $orderRefs[] = array(mb_substr($o['ref'], 0, 256, 'UTF-8'), $o['date']);
             }
         } elseif (strpos($zamowieniaSource, 'extrafield:') === 0) {
             $fieldName = substr($zamowieniaSource, strlen('extrafield:'));
             if (!empty($fieldName)) {
                 if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-                    if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+                    $invoice->fetch_optionals();
                 }
                 $val = isset($invoice->array_options['options_' . $fieldName])
                     ? trim(strip_tags((string) $invoice->array_options['options_' . $fieldName]))
                     : '';
-                if (!empty($val)) $orderRefs[] = mb_substr($val, 0, 256, 'UTF-8');
+                $date = '';
+                if ($val !== '' && getDolGlobalInt('KSEF_NR_ZAMOWIENIA_PARSE_DATE')) {
+                    $parsed = ksefParseContractDate($val);
+                    if (!empty($parsed['date']) && $parsed['nr'] !== '') {
+                        $date = $parsed['date'];
+                        $val = $parsed['nr'];
+                    }
+                }
+                if (!empty($val)) $orderRefs[] = array(mb_substr($val, 0, 256, 'UTF-8'), $date);
+            }
+        }
+        if ($orderRefs && getDolGlobalInt('KSEF_FA3_ORDER_DATE_FIELD')) {
+            $efDate = $this->extrafieldDay($invoice, 'ksef_order_date');
+            if ($efDate !== '' && $efDate >= '1990-01-01' && $efDate <= '2050-01-01') {
+                foreach ($orderRefs as $i => $o) {
+                    if ($o[1] === '') {
+                        $orderRefs[$i][1] = $efDate;
+                    }
+                }
             }
         }
 
-        // NrUmowy
         $nrUmowy = '';
         $umowySource = getDolGlobalString('KSEF_NR_UMOWY_SOURCE', 'disabled');
         if (strpos($umowySource, 'thirdparty_extrafield:') === 0) {
             $fieldName = substr($umowySource, strlen('thirdparty_extrafield:'));
             if (!empty($fieldName) && !empty($this->currentCustomer)) {
                 if (!isset($this->currentCustomer->array_options) || empty($this->currentCustomer->array_options)) {
-                    if (method_exists($this->currentCustomer, 'fetch_optionals')) $this->currentCustomer->fetch_optionals();
+                    $this->currentCustomer->fetch_optionals();
                 }
                 $nrUmowy = isset($this->currentCustomer->array_options['options_' . $fieldName])
                     ? trim(strip_tags((string) $this->currentCustomer->array_options['options_' . $fieldName]))
                     : '';
             }
         } elseif (strpos($umowySource, 'extrafield:') === 0) {
-            // Invoice extrafield
             $fieldName = substr($umowySource, strlen('extrafield:'));
             if (!empty($fieldName)) {
                 if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-                    if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+                    $invoice->fetch_optionals();
                 }
                 $nrUmowy = isset($invoice->array_options['options_' . $fieldName])
                     ? trim(strip_tags((string) $invoice->array_options['options_' . $fieldName]))
                     : '';
             }
         }
-        // NrUmowy parse into DataUmowy
         $dataUmowy = '';
         if (!empty($nrUmowy) && getDolGlobalInt('KSEF_NR_UMOWY_PARSE_DATE')) {
             $parsed = ksefParseContractDate($nrUmowy);
@@ -2737,26 +3928,28 @@ class FA3Builder
             }
         }
 
-        foreach ($orderRefs as $ref) {
+        foreach (array_slice($orderRefs, 0, 100) as $o) {
             $zamowienia = $xml->createElement('Zamowienia');
             $warunki->appendChild($zamowienia);
-            $zamowienia->appendChild($xml->createElement('NrZamowienia', $this->xmlSafe($ref)));
+            if ($o[1] !== '') {
+                $zamowienia->appendChild($xml->createElement('DataZamowienia', $o[1]));
+            }
+            $zamowienia->appendChild($xml->createElement('NrZamowienia', $this->xmlSafe($o[0])));
         }
     }
 
     /**
-     * @brief Builds footer section with registry numbers
+     * @brief Build Stopka
      * @param DOMDocument $xml
      * @param DOMElement $parent Parent element
-     * @called_by buildFromInvoice()
      */
     private function buildStopka($xml, $parent, $invoice = null)
     {
         global $conf, $mysoc;
 
-        $krs = !empty($conf->global->KSEF_COMPANY_KRS) ? trim($conf->global->KSEF_COMPANY_KRS) : '';
-        $regon = !empty($conf->global->KSEF_COMPANY_REGON) ? trim($conf->global->KSEF_COMPANY_REGON) : '';
-        $bdo = !empty($conf->global->KSEF_COMPANY_BDO) ? trim($conf->global->KSEF_COMPANY_BDO) : '';
+        $krs = trim(getDolGlobalString('KSEF_COMPANY_KRS'));
+        $regon = trim(getDolGlobalString('KSEF_COMPANY_REGON'));
+        $bdo = trim(getDolGlobalString('KSEF_COMPANY_BDO'));
         if (empty($krs)) {
             $krs = trim(ksefGetIdentifierField($mysoc, 'KRS'));
         }
@@ -2769,10 +3962,8 @@ class FA3Builder
 
         $hasRejestry = !empty($krs) || !empty($regon) || !empty($bdo);
 
-        // StopkaFaktury
         $stopkaTexts = array();
 
-        // note_public
         $noteTarget = getDolGlobalString('KSEF_NOTE_PUBLIC_TARGET', 'stopka_faktury');
         $noteMode = getDolGlobalString('KSEF_DODATKOWY_OPIS_NOTE_MODE', 'simple');
         $includeNoteInStopka = ($noteTarget === 'stopka_faktury' && $noteMode !== 'disabled');
@@ -2780,7 +3971,7 @@ class FA3Builder
         $isDisabledOverride = false;
         if ($invoice) {
             if (!isset($invoice->array_options) || empty($invoice->array_options)) {
-                if (method_exists($invoice, 'fetch_optionals')) $invoice->fetch_optionals();
+                $invoice->fetch_optionals();
             }
             $invoiceOverride = isset($invoice->array_options['options_ksef_dodatkowy_opis_mode'])
                 ? trim((string) $invoice->array_options['options_ksef_dodatkowy_opis_mode'])
@@ -2805,13 +3996,11 @@ class FA3Builder
             }
         }
 
-        // Boilerplate note
         $boilerplate = getDolGlobalString('KSEF_STOPKA_BOILERPLATE', '');
         if (!empty($boilerplate)) {
             $stopkaTexts[] = mb_substr(trim($boilerplate), 0, 3500, 'UTF-8');
         }
 
-        // Extrafields for stopka
         if ($invoice && !$isDisabledOverride) {
             $stopkaEfText = self::collectStopkaExtrafields($invoice, $conf, $this->db, $this->currentCustomer);
             if (!empty($stopkaEfText)) {
@@ -2826,7 +4015,7 @@ class FA3Builder
         $stopka = $xml->createElement('Stopka');
         $parent->appendChild($stopka);
 
-        // StopkaFaktury before Rejestry
+        // XSD sequence
         if (!empty($stopkaTexts)) {
             foreach ($stopkaTexts as $footerText) {
                 $informacje = $xml->createElement('Informacje');
@@ -2852,123 +4041,51 @@ class FA3Builder
     }
 
     /**
-     * @brief Cleans IBAN (removes spaces)
-     * @param $iban IBAN string
-     * @return string Cleaned IBAN
-     * @called_by buildPlatnosc()
+     * @brief Clean IBAN
+     * @param $iban
+     * @return string
      */
     private function cleanIBAN($iban)
     {
         return preg_replace('/\s+/', '', strtoupper($iban));
     }
 
-
     /**
-     * @brief Makes string XML-safe
-     * @param $str String to escape
-     * @return string Escaped string
-     * @called_by buildPodmiot1(), buildPodmiot2(), buildFaWiersz()
+     * @brief Escape for XML
+     * @param $str
+     * @return string
      */
     private function xmlSafe($str)
     {
         return ksefXmlEscape(trim($str));
     }
 
-    // https://github.com/Dolibarr/dolibarr/blob/develop/htdocs/install/mysql/data/llx_c_paiement.sql
     /**
-     * @brief Maps Dolibarr payment mode to KSeF code
-     * @param $mode_reglement_id Payment mode ID
-     * @return string KSeF payment code
-     * @called_by buildPlatnosc()
-     * KSeF codes: 1=Cash, 2=Card, 3=Voucher, 4=Check, 5=Credit, 6=Transfer, 7=Mobile
-     */
-    private function getPaymentMethodCode($mode_reglement_id)
-    {
-        $mapping = array(
-            1  => '6',  // TIP
-            2  => '6',  // VIR
-            3  => '6',  // PRE
-            4  => '1',  // LIQ
-            6  => '2',  // CB
-            7  => '4',  // CHQ
-            50 => '6',  // VAD
-            51 => '6',  // TRA
-            52 => '6',  // LCR
-            53 => '6',  // FAC
-        );
-        return isset($mapping[$mode_reglement_id]) ? $mapping[$mode_reglement_id] : '6';
-    }
-
-    /**
-     * @brief Maps Dolibarr string to KSeF FormaPlatnosci code
-     * @param string $typeCode Payment type code from c_paiement table (e.g. 'VIR', 'CB', 'CHQ')
-     * @return string|null KSeF payment code, or null if unknown
-     * @called_by buildPlatnosc()
-     * KSeF codes: 1=Cash, 2=Card, 3=Voucher, 4=Check, 5=Credit, 6=Transfer, 7=Mobile
-     */
-    private function getPaymentMethodCodeByType($typeCode)
-    {
-        $mapping = array(
-            'TIP' => '6',
-            'VIR' => '6',
-            'PRE' => '6',
-            'LIQ' => '1',
-            'CB'  => '2',
-            'CHQ' => '4',
-            'VAD' => '6',
-            'TRA' => '6',
-            'LCR' => '6',
-            'FAC' => '6',
-        );
-        return isset($mapping[$typeCode]) ? $mapping[$typeCode] : null;
-    }
-
-    /**
-     * @brief Gets KSeF number from previous submission
-     * @param $invoice_id Invoice ID
-     * @return string|null KSeF number
-     * @called_by buildDaneFaKorygowanej()
+     * @brief Previous KSeF number
+     * @param $invoice_id
+     * @return string|null
      */
     private function getInvoiceKsefNumber($invoice_id)
     {
-        $sql = "SELECT ksef_number FROM " . MAIN_DB_PREFIX . "ksef_submissions";
-        $sql .= " WHERE fk_facture = " . (int)$invoice_id . " AND status = 'ACCEPTED' AND ksef_number IS NOT NULL";
-        $sql .= " ORDER BY date_submission DESC LIMIT 1";
-
-        $resql = $this->db->query($sql);
-        if ($resql) {
-            if ($this->db->num_rows($resql) > 0) {
-                $obj = $this->db->fetch_object($resql);
-                return $obj->ksef_number;
-            }
-        }
-        return null;
+        return ksefAcceptedKsefNumber($this->db, $invoice_id);
     }
 
     /**
-     * @brief Gets entity flags (JST, VAT group)
-     * @param $entity Entity object
-     * @return array Flags array
-     * @called_by buildPodmiot2()
+     * @brief JST/VAT group flags
+     * @param $entity
+     * @param Facture|null $invoice Null: buyer only
+     * @return array jst, gv
      */
-    private function getEntityFlags($entity)
+    private function getEntityFlags($entity, $invoice = null)
     {
-        $flags = array('jst' => '2', 'gv' => '2'); // Defaults: No
-
-        if (!empty($entity->array_options['options_is_jst'])) {
-            $flags['jst'] = $entity->array_options['options_is_jst'] ? '1' : '2';
-        }
-        if (!empty($entity->array_options['options_is_vat_group'])) {
-            $flags['gv'] = $entity->array_options['options_is_vat_group'] ? '1' : '2';
-        }
-        return $flags;
+        $f = ksefGvJstFlags($entity, $invoice);
+        return array('jst' => $f['jst'], 'gv' => $f['gv']);
     }
 
     /**
-     * @brief Validates XML against schema
+     * @brief Validate against XSD
      * @param $xml XML string
-     * @return bool True if valid
-     * @called_by KSEF::validateFA3XML()
+     * @return bool
      */
     public function validate($xml)
     {
@@ -2985,26 +4102,19 @@ class FA3Builder
     }
 
     /**
-     * @brief Checks if country is EU member state
-     * @param string $countryCode ISO 2-letter country code
-     * @return bool True if EU member
-     * @called_by buildPodmiot2()
+     * @brief Is EU country
+     * @param string $countryCode ISO alpha-2
+     * @return bool
      */
     private function isEUCountry($countryCode)
     {
-        $euCountries = array(
-            'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
-            'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL',
-            'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE'
-        );
-        return in_array(strtoupper($countryCode), $euCountries);
+        return ksefIsEuCountry($countryCode);
     }
 
     /**
-     * @brief Gets reference numbers of linked sales orders
-     * @param object $invoice Invoice object
-     * @return array Array of order reference strings
-     * @called_by buildWarunkiTransakcji()
+     * @brief Linked order refs
+     * @param object $invoice
+     * @return array (ref, date) pairs
      */
     private function getLinkedOrderRefs($invoice)
     {
@@ -3017,61 +4127,94 @@ class FA3Builder
             $order = new Commande($this->db);
             if ($order->fetch($orderId) > 0) {
                 $ref = trim($order->ref);
-                if (!empty($ref)) $refs[] = $ref;
+                if (empty($ref)) continue;
+                $ts = !empty($order->date_commande) ? $order->date_commande : ($order->date ?? 0);
+                $day = !empty($ts) ? dol_print_date($ts, '%Y-%m-%d', 'tzserver') : '';
+                if ($day !== '' && ($day < '1990-01-01' || $day > '2050-01-01')) {
+                    $day = '';
+                }
+                $refs[] = array('ref' => $ref, 'date' => $day);
             }
         }
         return $refs;
     }
 
     /**
-     * @brief Maps VAT rate to KSeF P_12 value
-     * @param float $vatRate VAT rate from invoice line
-     * @param object $line Invoice line object (for additional context)
-     * @return string KSeF P_12 value
-     * @called_by buildFaWiersz(), calculateVatSummary()
+     * @brief Shipment WZ refs
+     * @param object $invoice
+     * @return array
      */
-    private function mapVatRateToKSeF($vatRate, $line = null)
+    private function getLinkedShipmentRefs($invoice)
     {
-        $rateInt = (int) round($vatRate);
-        if (in_array($rateInt, array(23, 22, 8, 7, 5, 4, 3))) {
-            return (string) $rateInt;
-        }
-
-        if ($rateInt == 0) {
-            $code = !empty($line->vat_src_code) ? strtoupper(trim($line->vat_src_code)) : '';
-            if (!empty($code)) {
-                if ($code === 'ZW')  return 'zw';
-                if ($code === 'RC' || $code === 'OO')  return 'oo';
-                if ($code === 'NP2' || $code === 'NPII' || $code === 'NP II') return 'np II';
-                if ($code === 'NP' || $code === 'NP1' || $code === 'NPI' || $code === 'NP I') return 'np I';
-                if ($code === 'WDT') return '0 WDT';
-                if ($code === 'EX')  return '0 EX';
-
-                if (strpos($code, 'ZW') !== false)  return 'zw';
-                if (strpos($code, 'RC') !== false || strpos($code, 'OO') !== false)  return 'oo';
-                if (strpos($code, 'WDT') !== false) return '0 WDT';
-                if (strpos($code, 'EX') !== false)  return '0 EX';
-                if (strpos($code, 'NP2') !== false || strpos($code, 'NPII') !== false) return 'np II';
-                if (strpos($code, 'NP') !== false)  return 'np I';
+        // Shipments maybe off
+        $P = MAIN_DB_PREFIX;
+        $id = (int) $invoice->id;
+        $sql = "SELECT e.ref FROM " . $P . "element_element AS ee JOIN " . $P . "expedition AS e ON e.rowid ="
+            . " CASE WHEN ee.fk_target = " . $id . " AND ee.targettype = 'facture' THEN ee.fk_source ELSE ee.fk_target END"
+            . " WHERE ((ee.fk_target = " . $id . " AND ee.targettype = 'facture' AND ee.sourcetype IN ('shipping', 'expedition'))"
+            . " OR (ee.fk_source = " . $id . " AND ee.sourcetype = 'facture' AND ee.targettype IN ('shipping', 'expedition')))"
+            . " AND e.fk_statut >= 1 ORDER BY e.date_creation, e.rowid";
+        $refs = array();
+        $res = $this->db->query($sql);
+        while ($res && ($o = $this->db->fetch_object($res))) {
+            $ref = mb_substr(trim((string) $o->ref), 0, 256, 'UTF-8');
+            if ($ref !== '' && !in_array($ref, $refs, true)) {
+                $refs[] = $ref;
             }
+        }
+        return array_slice($refs, 0, 1000);
+    }
 
-            if (!empty($this->currentCustomerCountry)) {
-                if ($this->currentCustomerCountry === 'PL') {
-                    return '0 KR';
-                } elseif ($this->currentCustomerIsEU) {
-                    return '0 WDT';
-                } else {
-                    return '0 EX';
+    /**
+     * @brief Exemption basis
+     * @param Facture $invoice
+     * @return array array(has exempt line, basis text, P_19 element or 'disabled')
+     */
+    public function exemptionBasis($invoice)
+    {
+        $hasExempt = false;
+        foreach ($invoice->lines as $line) {
+            if ($this->rateKey($line) === 'zw') {
+                $hasExempt = true;
+                break;
+            }
+        }
+        $globalPodstawa = getDolGlobalString('KSEF_ZWOLNIENIE_PODSTAWA', '');
+        $zwolnienieType = getDolGlobalString('KSEF_ZWOLNIENIE_TYPE', 'disabled');
+        $productField = getDolGlobalString('KSEF_ZWOLNIENIE_PRODUCT_FIELD', '');
+
+        $podstawa = '';
+        if ($hasExempt && $zwolnienieType !== 'disabled') {
+            $bases = array();
+            if (!empty($productField) && !empty($invoice->lines)) {
+                require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+                $productCache = array();
+                foreach ($invoice->lines as $line) {
+                    $ksefRate = $this->rateKey($line);
+                    if ($ksefRate !== 'zw' || empty($line->fk_product)) continue;
+
+                    if (!isset($productCache[$line->fk_product])) {
+                        $prod = new Product($this->db);
+                        if ($prod->fetch($line->fk_product) > 0) {
+                            $prod->fetch_optionals();
+                            $productCache[$line->fk_product] = $prod;
+                        }
+                    }
+                    if (isset($productCache[$line->fk_product])) {
+                        $val = $productCache[$line->fk_product]->array_options['options_' . $productField] ?? '';
+                        $val = trim(strip_tags((string) $val));
+                        if (!empty($val)) $bases[$val] = true;
+                    }
                 }
             }
 
-            return '0 KR';
+            if (!empty($bases)) {
+                $podstawa = implode(', ', array_keys($bases));
+            } elseif (!empty($globalPodstawa)) {
+                $podstawa = $globalPodstawa;
+            }
         }
 
-        if ($vatRate > 0) {
-            return (string) $rateInt;
-        }
-
-        return 'np I';
+        return array($hasExempt, $podstawa, $zwolnienieType);
     }
 }

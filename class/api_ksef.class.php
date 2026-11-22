@@ -18,52 +18,15 @@
 /**
  * \file    ksef/class/api_ksef.class.php
  * \ingroup ksef
- * \brief   REST API for KSeF module
- *
- * Submissions:
- *   GET    /submissions                        List submissions
- *   GET    /submissions/stats                  Statistics
- *   GET    /submissions/{id}                   Submission detail
- *   GET    /submissions/invoice/{invoice_id}   Lookup by invoice
- *   POST   /submissions/{invoice_id}/submit    Submit online
- *   POST   /submissions/{invoice_id}/submit-offline  Submit offline
- *   POST   /submissions/{invoice_id}/retry     Retry submission
- *   GET    /submissions/{invoice_id}/status    Poll status
- *   GET    /submissions/{invoice_id}/upo       Download UPO
- *   GET    /submissions/{invoice_id}/xml       Get FA(3) XML
- *
- * Incoming invoices:
- *   GET    /incoming                           List incoming
- *   GET    /incoming/{id}                      Detail
- *   GET    /incoming/{id}/xml                  Raw XML
- *   GET    /incoming/{id}/pdf                  PDF (base64)
- *   POST   /incoming/{id}/link                 Link supplier invoice
- *   DELETE /incoming/{id}                      Delete record
- *   POST   /incoming/sync                      Trigger sync
- *   GET    /incoming/sync/status               Poll sync
- *   POST   /incoming/sync/reset                Reset sync
- *
- * Credit notes:
- *   GET    /creditnotes/{id}/discounts         Discount rows
- *   POST   /creditnotes/{id}/convert           Convert to discounts
- *   POST   /creditnotes/{id}/apply-line        Apply as lines
- *   POST   /creditnotes/{id}/apply-payment     Apply as payment
- *   POST   /creditnotes/{id}/refund            Cash refund
- *   GET    /creditnotes/{id}/resolution-state  State + modes
- *   PUT    /submissions/{invoice_id}/correction  Set KOR fields
- *
- * Health / configuration:
- *   GET    /status                             Health check
- *   GET    /config                             Module settings
- *   POST   /test-connection                    Connectivity test
+ * \brief   KSeF REST API
  */
 
 use Luracast\Restler\RestException;
 
 /**
- * KSeF REST API
+ * @brief KSeF REST API
  * @access protected
- * @class DolibarrApiAccess {@requires user,external}
+ * @class DolibarrApiAccess {@requires user}
  */
 class KsefApi extends DolibarrApi
 {
@@ -76,6 +39,9 @@ class KsefApi extends DolibarrApi
     private $creditNoteNotFound = false;
     private $creditNoteError = '';
 
+    /**
+     * @brief Constructor
+     */
     public function __construct()
     {
         global $db;
@@ -83,9 +49,8 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Loads module classes
+     * @brief Load module classes
      * @return void
-     * @called_by checkKsefReadPermission(), checkKsefWritePermission()
      */
     private function loadKsefClasses()
     {
@@ -100,19 +65,17 @@ class KsefApi extends DolibarrApi
         $loaded = true;
     }
 
-
     /**
      * @brief List submissions
-     * @param  string $status        Filter by status (e.g. PENDING, ACCEPTED, REJECTED, FAILED, OFFLINE, TIMEOUT; not enforced) {@from query}
-     * @param  string $environment   Filter by environment (e.g. TEST, DEMO, PRODUCTION; not enforced) {@from query}
-     * @param  string $date_from     Filter: submitted after (YYYY-MM-DD) {@from query}
-     * @param  string $date_to       Filter: submitted before (YYYY-MM-DD) {@from query}
-     * @param  string $sortfield     Sort field (one of t.date_submission, t.status, t.environment, t.ksef_number, t.rowid; falls back to t.date_submission) {@from query}
-     * @param  string $sortorder     Sort order ASC or DESC (defaults to DESC) {@from query}
-     * @param  int    $limit         Limit number of results (0 = conf default) {@from query}
-     * @param  int    $page          Page number (0-based) {@from query}
-     * @return array List of formatSubmission() summary objects (full=false)
-     * @calls formatSubmission()
+     * @param  string $status        Status filter {@from query}
+     * @param  string $environment   TEST, DEMO or PRODUCTION {@from query}
+     * @param  string $date_from     YYYY-MM-DD {@from query}
+     * @param  string $date_to       YYYY-MM-DD {@from query}
+     * @param  string $sortfield     Sort field {@from query}
+     * @param  string $sortorder     ASC or DESC {@from query}
+     * @param  int    $limit         0 = default, max 500 {@from query}
+     * @param  int    $page          0-based {@from query}
+     * @return array
      * @url GET /submissions
      * @throws RestException 400, 403, 500
      */
@@ -127,16 +90,12 @@ class KsefApi extends DolibarrApi
         $page = 0
     ) {
         $this->checkKsefReadPermission();
+        $this->checkInvoiceReadRight();
+        list($limit, $offset) = $this->listPage($limit, $page);
 
-        if (empty($limit)) {
-            $limit = getDolGlobalInt('MAIN_SIZE_LISTE_LIMIT', 25);
-        }
-        $offset = $limit * $page;
-
-        $sql = "SELECT t.rowid FROM " . MAIN_DB_PREFIX . "ksef_submissions as t";
+        $sql = "SELECT " . KsefSubmission::selectColumns(false) . " FROM " . MAIN_DB_PREFIX . "ksef_submissions as t";
         $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "facture as f ON f.rowid = t.fk_facture";
-        $sql .= " AND f.entity IN (" . getEntity('invoice') . ")";
-        $sql .= " WHERE 1 = 1";
+        $sql .= " WHERE 1 = 1" . ksefSqlInvoiceVisibility(DolibarrApiAccess::$user, 'f');
 
         if (!empty($status)) {
             $sql .= " AND t.status = '" . $this->db->escape($status) . "'";
@@ -173,41 +132,47 @@ class KsefApi extends DolibarrApi
         $result = array();
         $resql = $this->db->query($sql);
         if (!$resql) {
-            throw new RestException(500, 'Database error: ' . $this->db->lasterror());
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $this->db->lasterror()));
         }
 
         while ($obj = $this->db->fetch_object($resql)) {
             $sub = new KsefSubmission($this->db);
-            if ($sub->fetch($obj->rowid) > 0) {
-                $result[] = $this->formatSubmission($sub);
-            }
+            $sub->setFromRow($obj);
+            $row = $this->formatSubmission($sub);
+            $row['has_fa3_xml'] = !empty($obj->has_fa3_xml);
+            $row['has_upo_xml'] = !empty($obj->has_upo_xml);
+            $result[] = $row;
         }
         $this->db->free($resql);
 
         return $result;
     }
 
-
     /**
      * @brief Submission statistics
-     * @param  int   $days  Number of days to include (default 30) {@from query}
-     * @return array Statistics (total, accepted, pending, failed, success_rate, common_errors)
+     * @param  int   $days  Days back {@from query}
+     * @param  string $environment TEST, DEMO or PRODUCTION {@from query}
+     * @return array
      * @url GET /submissions/stats
      * @throws RestException 403
      */
-    public function getSubmissionStats($days = 30)
+    public function getSubmissionStats($days = 30, $environment = '')
     {
         $this->checkKsefReadPermission();
+        $this->checkInvoiceReadRight();
 
+        $environment = strtoupper((string) $environment);
+        if (!in_array($environment, array('TEST', 'DEMO', 'PRODUCTION'), true)) {
+            $environment = ksefGetEnvironment();
+        }
         $sub = new KsefSubmission($this->db);
-        return $sub->getStatistics((int)$days);
+        return $sub->getStatistics((int)$days, $environment, DolibarrApiAccess::$user);
     }
 
-
     /**
-     * @brief Submission detail by ID
-     * @param  int   $id  Submission row ID {@from path}
-     * @return array      formatSubmission() full output (includes fa3_xml, upo_xml, api_response)
+     * @brief Submission detail
+     * @param  int   $id  Submission id {@from path}
+     * @return array
      * @url GET /submissions/{id}
      * @throws RestException 403, 404
      */
@@ -228,11 +193,10 @@ class KsefApi extends DolibarrApi
         return $this->formatSubmission($sub, true);
     }
 
-
     /**
-     * @brief Submission for an invoice
-     * @param  int   $invoice_id  Invoice (facture) ID {@from path}
-     * @return array              formatSubmission() full output (includes fa3_xml, upo_xml, api_response)
+     * @brief Latest invoice submission
+     * @param  int   $invoice_id  Invoice id {@from path}
+     * @return array
      * @url GET /submissions/invoice/{invoice_id}
      * @throws RestException 403, 404
      */
@@ -249,108 +213,164 @@ class KsefApi extends DolibarrApi
         return $this->formatSubmission($sub, true);
     }
 
-
     /**
      * @brief Submit invoice online
-     * @param  int   $invoice_id  Invoice (facture) ID {@from path}
-     * @return array              Result with status, ksef_number, etc.
+     * @param  int   $invoice_id  Invoice id {@from path}
+     * @param  bool  $send_without_deposits  Acknowledge deposit notices {@from body}
+     * @param  string $nbp_rate_pick  keep or exact {@from body}
+     * @param  bool  $send_with_negative_rate  Acknowledge negative VAT {@from body}
+     * @return array
      * @url POST /submissions/{invoice_id}/submit
-     * @throws RestException 403, 404, 500, 502
+     * @throws RestException 403, 404, 409, 422, 500, 503
      */
-    public function submitInvoice($invoice_id)
+    public function submitInvoice($invoice_id, $send_without_deposits = false, $nbp_rate_pick = '', $send_with_negative_rate = false)
     {
-        $this->checkKsefWritePermission();
+        $this->checkSendPermission();
         $invoice = $this->checkFactureAccess((int) $invoice_id);
         dol_syslog("KsefApi::submitInvoice invoice_id=$invoice_id", LOG_INFO);
 
-        $this->ensureInvoiceNbpRate($invoice);
-
         $ksef = new KsefService($this->db);
+        $ksef->acknowledgeDeposits = !empty($send_without_deposits);
+        $ksef->acknowledgeNegativeRates = !empty($send_with_negative_rate);
+        $this->checkInvoiceSubmittable($ksef, $invoice);
+        $this->ensureInvoiceNbpRate($invoice, $nbp_rate_pick);
+
         $result = $ksef->submitInvoice(
             (int)$invoice_id,
             DolibarrApiAccess::$user,
             'SYNC'
         );
 
-        if (!$result) {
-            throw new RestException(500, $ksef->error ?: 'Submission failed');
-        }
-
-        return $result;
+        return $this->mapSendResult($ksef, $result, 'Submission failed');
     }
-
 
     /**
      * @brief Submit invoice offline
-     * @param  int    $invoice_id     Invoice (facture) ID {@from path}
-     * @param  string $reason         Reason for offline mode {@from body}
-     * @return array                  Result with status, offline_deadline, etc.
+     * @param  int    $invoice_id     Invoice id {@from path}
+     * @param  string $reason         Offline reason {@from body}
+     * @param  bool   $send_without_deposits  Acknowledge deposit notices {@from body}
+     * @param  string $nbp_rate_pick  keep or exact {@from body}
+     * @param  bool   $send_with_negative_rate  Acknowledge negative VAT {@from body}
+     * @return array
      * @url POST /submissions/{invoice_id}/submit-offline
-     * @throws RestException 403, 404, 422, 500, 502
+     * @throws RestException 403, 404, 409, 422, 500
      */
-    public function submitInvoiceOffline($invoice_id, $reason = 'api_request')
+    public function submitInvoiceOffline($invoice_id, $reason = 'api_request', $send_without_deposits = false, $nbp_rate_pick = '', $send_with_negative_rate = false)
     {
-        $this->checkKsefWritePermission();
+        $this->checkSendPermission();
         $invoice = $this->checkFactureAccess((int) $invoice_id);
         dol_syslog("KsefApi::submitInvoiceOffline invoice_id=$invoice_id reason=$reason", LOG_INFO);
 
-        $this->ensureInvoiceNbpRate($invoice);
-
         $ksef = new KsefService($this->db);
+        $ksef->acknowledgeDeposits = !empty($send_without_deposits);
+        $ksef->acknowledgeNegativeRates = !empty($send_with_negative_rate);
+        $this->checkInvoiceSubmittable($ksef, $invoice);
+        $this->ensureInvoiceNbpRate($invoice, $nbp_rate_pick);
+
         $result = $ksef->submitInvoiceOffline(
             (int)$invoice_id,
             DolibarrApiAccess::$user,
             $reason
         );
 
-        if (!$result) {
-            throw new RestException(500, $ksef->error ?: 'Offline submission failed');
-        }
-        if ($result['status'] === 'FAILED') {
-            $code = !empty($result['needs_certificate']) ? 422 : 500;
-            throw new RestException($code, $result['error']);
+        if (is_array($result) && ($result['status'] ?? '') === 'OFFLINE' && !empty($result['submission_id'])
+            && in_array($reason, array('backdated', 'backdated_retry'), true)) {
+            $offSub = new KsefSubmission($this->db);
+            if ($offSub->fetch((int) $result['submission_id']) > 0) {
+                $upload = $ksef->retryOfflineWithStoredXML($offSub, DolibarrApiAccess::$user);
+                if (is_array($upload) && (($upload['status'] ?? '') === 'ACCEPTED'
+                    || (!in_array(($upload['status'] ?? ''), array('TIMEOUT', 'OFFLINE', 'PENDING', ''), true) && ($upload['failure_kind'] ?? '') !== 'transport'))) {
+                    return $this->mapSendResult($ksef, $upload, 'Offline submission failed');
+                }
+                $result['upload_status'] = is_array($upload) ? (string) ($upload['status'] ?? '') : '';
+                $result['upload_error'] = is_array($upload) ? (string) ($upload['error'] ?? '') : '';
+            }
         }
 
-        return $result;
+        return $this->mapSendResult($ksef, $result, 'Offline submission failed');
     }
 
-
     /**
-     * @brief Retry failed submission
-     * @param  int   $invoice_id  Invoice (facture) ID {@from path}
-     * @return array              Result with status
+     * @brief Retry submission
+     * @param  int   $invoice_id  Invoice id {@from path}
+     * @param  bool  $send_without_deposits  Acknowledge deposit notices {@from body}
+     * @param  bool  $send_with_negative_rate  Acknowledge negative VAT {@from body}
+     * @return array
      * @url POST /submissions/{invoice_id}/retry
-     * @throws RestException 403, 404, 500
+     * @throws RestException 403, 404, 409, 422, 500, 503
      */
-    public function retrySubmission($invoice_id)
+    public function retrySubmission($invoice_id, $send_without_deposits = false, $send_with_negative_rate = false)
     {
-        $this->checkKsefWritePermission();
+        $this->checkSendPermission();
         $this->checkFactureAccess((int) $invoice_id);
         dol_syslog("KsefApi::retrySubmission invoice_id=$invoice_id", LOG_INFO);
 
         $ksef = new KsefService($this->db);
+        $ksef->acknowledgeDeposits = !empty($send_without_deposits);
+        $ksef->acknowledgeNegativeRates = !empty($send_with_negative_rate);
         $result = $ksef->retrySubmission(
             (int)$invoice_id,
             DolibarrApiAccess::$user
         );
 
-        if (!$result) {
-            throw new RestException(500, $ksef->error ?: 'Retry failed');
-        }
-
-        return $result;
+        return $this->mapSendResult($ksef, $result, 'Retry failed');
     }
 
+    /**
+     * @brief Link KSeF number
+     * @param  int    $invoice_id   Invoice id {@from path}
+     * @param  string $ksef_number  KSeF number {@from body}
+     * @return array
+     * @url POST /submissions/{invoice_id}/link
+     * @throws RestException 400, 403, 404, 409, 422, 500, 503
+     */
+    public function linkSubmission($invoice_id, $ksef_number = '')
+    {
+        $this->checkKsefWritePermission();
+        if (!ksefUserCan(DolibarrApiAccess::$user, 'link_ksef_number')) {
+            throw new RestException(403, 'Not enough permissions to tie a KSeF number (ksef write and facture creer)');
+        }
+        $this->checkFactureAccess((int) $invoice_id);
+        $ksef_number = trim((string) $ksef_number);
+        if ($ksef_number === '' || !ksefIsKsefNumber($ksef_number)) {
+            throw new RestException(400, 'ksef_number is required and must be a KSeF number');
+        }
+        dol_syslog("KsefApi::linkSubmission invoice_id=" . (int) $invoice_id . " ksef_number=" . $ksef_number, LOG_INFO);
+
+        $ksef = new KsefService($this->db);
+        $result = $ksef->linkKsefNumber((int) $invoice_id, $ksef_number, DolibarrApiAccess::$user);
+        if (($result['status'] ?? '') === 'ACCEPTED') {
+            return $result;
+        }
+        $reason = (string) ($result['reason'] ?? '');
+        $msg = (string) ($result['error'] ?? $ksef->error);
+        $details = array('status' => 'LINK_REFUSED', 'reason' => $reason);
+        if ($reason === 'record') {
+            throw new RestException(500, $msg, array('status' => 'RECORD_FAILED'));
+        }
+        if (in_array($reason, array('gateway', 'no_permission'), true)) {
+            throw new RestException(503, $msg, $details);
+        }
+        if (in_array($reason, array('not_found', 'fields'), true)) {
+            throw new RestException(422, $msg, $details);
+        }
+        if ($reason === 'bad_number') {
+            throw new RestException(400, $msg, $details);
+        }
+        throw new RestException(409, $msg, $details);
+    }
 
     /**
-     * @brief Check status at KSeF
-     * @param  int   $invoice_id  Invoice (facture) ID {@from path}
-     * @return array              Status result
+     * @brief Poll KSeF status
+     * @param  int   $invoice_id  Invoice id {@from path}
+     * @return array
      * @url GET /submissions/{invoice_id}/status
-     * @throws RestException 403 Access denied
-     * @throws RestException 404 Not found
-     * @throws RestException 409 No KSeF reference yet
-     * @throws RestException 503 Gateway unavailable
+     * @throws RestException 403
+     * @throws RestException 404
+     * @throws RestException 409
+     * @throws RestException 429
+     * @throws RestException 500
+     * @throws RestException 503
      */
     public function checkSubmissionStatus($invoice_id)
     {
@@ -363,25 +383,47 @@ class KsefApi extends DolibarrApi
         }
 
         $ksef = new KsefService($this->db);
-        $result = $ksef->checkStatus((int)$invoice_id, DolibarrApiAccess::$user);
+        $result = $ksef->checkStatus((int)$invoice_id, DolibarrApiAccess::$user, true);
 
         if ($result === false) {
+            if ($ksef->failureReason === 'right') {
+                throw new RestException(403, $ksef->error, array('status' => 'HASH_SEARCH_RIGHT'));
+            }
+            if ($ksef->failureReason === 'wait') {
+                $wait = max(1, (int) $ksef->hashSearchWaitUntil - dol_now());
+                throw new RestException(429, $ksef->error, array('status' => 'HASH_SEARCH_WAIT', 'retry_after' => $wait,
+                    'retry_at' => dol_print_date((int) $ksef->hashSearchWaitUntil, 'dayhourrfc', 'gmt')));
+            }
             if ($ksef->failureReason === 'noref') {
-                throw new RestException(409, $ksef->error ?: 'Submission has no KSeF reference yet');
+                throw new RestException(409, $ksef->error ?: 'Submission has no KSeF reference yet', array('status' => 'NO_REFERENCE'));
+            }
+            if ($ksef->failureReason === 'record' && $ksef->notRecordedNumber !== '') {
+                throw new RestException(500, $ksef->error, array('status' => 'ACCEPTED_NOT_RECORDED',
+                    'ksef_number' => $ksef->notRecordedNumber, 'submission_id' => (int) $sub->rowid));
+            }
+            if ($ksef->failureReason === 'record') {
+                throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $ksef->error));
+            }
+            if ($ksef->failureReason === 'notfound' && $ksef->searchedByHash) {
+                throw new RestException(409, $ksef->error, array('status' => 'NOT_FOUND_IN_KSEF',
+                    'retry_later' => ($ksef->hashNotFoundFresh || !$ksef->hashSearchComplete) ? 1 : 0));
+            }
+            if ($ksef->failureReason === 'ambiguous') {
+                throw new RestException(409, $ksef->error, array('status' => 'HASH_AMBIGUOUS'));
             }
             throw new RestException(503, $ksef->error ?: 'KSeF gateway unavailable');
         }
+        unset($result['raw_response']);
 
         return $result;
     }
 
-
     /**
-     * @brief Download UPO confirmation
-     * @param  int   $invoice_id  Invoice (facture) ID {@from path}
-     * @return array              UPO XML content and metadata
+     * @brief Download UPO
+     * @param  int   $invoice_id  Invoice id {@from path}
+     * @return array
      * @url GET /submissions/{invoice_id}/upo
-     * @throws RestException 403, 404
+     * @throws RestException 403, 404, 409, 503
      */
     public function getSubmissionUpo($invoice_id)
     {
@@ -394,26 +436,23 @@ class KsefApi extends DolibarrApi
         }
 
         if (empty($sub->upo_xml)) {
-            if ($sub->status === KsefSubmission::STATUS_ACCEPTED
-                && !empty($sub->ksef_number)
-            ) {
-                global $conf;
-                $client = new KsefClient(
-                    $this->db,
-                    getDolGlobalString('KSEF_ENVIRONMENT', 'TEST')
-                );
-                try {
-                    $upo = $client->downloadUPO($sub->ksef_number);
-                    if ($upo) {
-                        $sub->upo_xml = $upo;
-                        $sub->update(DolibarrApiAccess::$user, 1);
-                    }
-                } catch (Exception $e) {}
-            }
-
-            if (empty($sub->upo_xml)) {
+            if ($sub->status !== KsefSubmission::STATUS_ACCEPTED || empty($sub->ksef_number)) {
                 throw new RestException(404, 'UPO not available yet');
             }
+            if ($sub->getSessionReference() === '') {
+                global $langs;
+                $langs->load('ksef@ksef');
+                throw new RestException(409, $langs->transnoentitiesnoconv('KSEF_RestUpoNeedsRecovery'), array('status' => 'UPO_NEEDS_RECOVERY'));
+            }
+            $ksef = new KsefService($this->db);
+            $upo = $ksef->downloadUPOForSubmission($sub, DolibarrApiAccess::$user);
+            if ($upo === false) {
+                if ($ksef->lastFailureWasTransport()) {
+                    throw new RestException(503, $ksef->error ?: 'KSeF gateway unavailable');
+                }
+                throw new RestException(404, 'UPO not available yet', array('detail' => (string) $ksef->error));
+            }
+            $sub->upo_xml = $upo;
         }
 
         return array(
@@ -423,11 +462,10 @@ class KsefApi extends DolibarrApi
         );
     }
 
-
     /**
-     * @brief Get submission FA(3) XML
-     * @param  int   $invoice_id  Invoice (facture) ID {@from path}
-     * @return array              FA3 XML content and metadata
+     * @brief Submission FA(3) XML
+     * @param  int   $invoice_id  Invoice id {@from path}
+     * @return array
      * @url GET /submissions/{invoice_id}/xml
      * @throws RestException 403, 404
      */
@@ -455,22 +493,21 @@ class KsefApi extends DolibarrApi
         );
     }
 
-
     /**
      * @brief List incoming invoices
-     * @param  string $seller_nip       Filter by seller NIP {@from query}
-     * @param  string $seller_name      Filter by seller name (partial) {@from query}
-     * @param  string $invoice_number   Filter by invoice number (partial) {@from query}
-     * @param  string $ksef_number      Filter by KSeF number (partial) {@from query}
-     * @param  string $import_status    Filter by import status (NEW, IMPORTED, ERROR) {@from query}
-     * @param  string $environment      Filter by environment {@from query}
-     * @param  string $date_from        Filter: invoice date from (YYYY-MM-DD) {@from query}
-     * @param  string $date_to          Filter: invoice date to (YYYY-MM-DD) {@from query}
+     * @param  string $seller_nip       Seller NIP {@from query}
+     * @param  string $seller_name      Partial match {@from query}
+     * @param  string $invoice_number   Partial match {@from query}
+     * @param  string $ksef_number      Partial match {@from query}
+     * @param  string $import_status    Status filter {@from query}
+     * @param  string $environment      Environment {@from query}
+     * @param  string $date_from        YYYY-MM-DD {@from query}
+     * @param  string $date_to          YYYY-MM-DD {@from query}
      * @param  string $sortfield        Sort field {@from query}
-     * @param  string $sortorder        Sort order ASC or DESC {@from query}
-     * @param  int    $limit            Limit number of results {@from query}
-     * @param  int    $page             Page number (0-based) {@from query}
-     * @return array                    List of incoming invoice objects
+     * @param  string $sortorder        ASC or DESC {@from query}
+     * @param  int    $limit            0 = default, max 500 {@from query}
+     * @param  int    $page             0-based {@from query}
+     * @return array
      * @url GET /incoming
      * @throws RestException 400, 403, 500
      */
@@ -489,11 +526,7 @@ class KsefApi extends DolibarrApi
         $page = 0
     ) {
         $this->checkKsefReadPermission();
-
-        if (empty($limit)) {
-            $limit = getDolGlobalInt('MAIN_SIZE_LISTE_LIMIT', 25);
-        }
-        $offset = $limit * $page;
+        list($limit, $offset) = $this->listPage($limit, $page);
 
         $filters = array();
         if (!empty($seller_nip)) {
@@ -529,11 +562,7 @@ class KsefApi extends DolibarrApi
             $filters['invoice_date_end'] = $ts;
         }
 
-        $allowedSort = array(
-            'i.invoice_date', 'i.fetch_date', 'i.seller_name',
-            'i.total_gross', 'i.import_status', 'i.rowid'
-        );
-        if (!in_array($sortfield, $allowedSort)) {
+        if (!in_array($sortfield, KsefIncoming::SORT_FIELDS, true)) {
             $sortfield = 'i.invoice_date';
         }
         $sortorder = strtoupper($sortorder) === 'ASC' ? 'ASC' : 'DESC';
@@ -544,7 +573,7 @@ class KsefApi extends DolibarrApi
         );
 
         if ($records === -1) {
-            throw new RestException(500, 'Database error: ' . $incoming->error);
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $incoming->error));
         }
 
         $result = array();
@@ -555,11 +584,10 @@ class KsefApi extends DolibarrApi
         return $result;
     }
 
-
     /**
      * @brief Incoming invoice detail
-     * @param  int   $id  Incoming invoice row ID {@from path}
-     * @return array      Incoming invoice object with line_items and vat_summary
+     * @param  int   $id  Incoming id {@from path}
+     * @return array
      * @url GET /incoming/{id}
      * @throws RestException 403, 404, 500
      */
@@ -584,11 +612,10 @@ class KsefApi extends DolibarrApi
         return $data;
     }
 
-
     /**
-     * @brief Raw incoming FA(3) XML
-     * @param  int   $id  Incoming invoice row ID {@from path}
-     * @return array      XML content
+     * @brief Incoming FA(3) XML
+     * @param  int   $id  Incoming id {@from path}
+     * @return array
      * @url GET /incoming/{id}/xml
      * @throws RestException 403, 404
      */
@@ -613,11 +640,10 @@ class KsefApi extends DolibarrApi
         );
     }
 
-
     /**
      * @brief Incoming invoice PDF
-     * @param  int   $id  Incoming invoice row ID {@from path}
-     * @return array      PDF content (base64-encoded) and metadata
+     * @param  int   $id  Incoming id {@from path}
+     * @return array
      * @url GET /incoming/{id}/pdf
      * @throws RestException 403, 404, 500
      */
@@ -632,6 +658,9 @@ class KsefApi extends DolibarrApi
             throw new RestException(404, 'Incoming invoice not found');
         }
 
+        if ($incoming->import_status === KsefIncoming::STATUS_FETCH_ERROR || empty($incoming->fa3_xml)) {
+            throw new RestException(409, 'FETCH_ERROR: no readable invoice XML, no visualisation');
+        }
         $pdfContent = $incoming->generatePdfVisualization();
         if ($pdfContent === false) {
             throw new RestException(500, $incoming->error ?: 'PDF generation failed');
@@ -647,12 +676,11 @@ class KsefApi extends DolibarrApi
         );
     }
 
-
     /**
-     * @brief Trigger incoming sync
-     * @return array  Sync initiation result with reference number
+     * @brief Start incoming sync
+     * @return array
      * @url POST /incoming/sync
-     * @throws RestException 403, 409, 500
+     * @throws RestException 403, 409, 429, 503
      */
     public function triggerIncomingSync()
     {
@@ -663,7 +691,10 @@ class KsefApi extends DolibarrApi
         $result = $ksef->initIncomingFetch(DolibarrApiAccess::$user);
 
         if ($result === false) {
-            throw new RestException(500, $ksef->error ?: 'Failed to initiate sync');
+            if ((int) $ksef->last_http_code === 429) {
+                throw new RestException(429, $ksef->error ?: 'KSeF rate limit', array('status' => 'RATE_LIMITED', 'retry_after' => (int) $ksef->last_retry_after ?: null));
+            }
+            throw new RestException(503, $ksef->error ?: 'Failed to initiate sync', array('status' => 'KSEF_UNAVAILABLE'));
         }
 
         if ($result['status'] === 'ALREADY_PROCESSING') {
@@ -673,10 +704,9 @@ class KsefApi extends DolibarrApi
         return $result;
     }
 
-
     /**
-     * @brief Incoming sync progress
-     * @return array  Sync status with progress details
+     * @brief Incoming sync state
+     * @return array
      * @url GET /incoming/sync/status
      * @throws RestException 403
      */
@@ -685,92 +715,105 @@ class KsefApi extends DolibarrApi
         $this->checkKsefReadPermission();
 
         $ksef = new KsefService($this->db);
-        $syncState = $ksef->getIncomingSyncState();
-
-        $data = array(
-            'is_fetching'    => $syncState->isFetchInProgress(),
-            'is_processing'  => $syncState->isProcessingInProgress(),
-            'is_rate_limited' => $syncState->isRateLimited(),
-            'can_sync_now'   => $syncState->canSyncNow(),
-            'fetch_reference' => $syncState->fetch_reference ?: null,
-            'fetch_status'   => $syncState->fetch_status ?: null,
-            'fetch_started'  => $syncState->fetch_started ?: null,
-            'fetch_error'    => $syncState->fetch_error ?: null,
-            'hwm_date'       => $syncState->hwm_date ?: null,
-            'last_sync'      => $syncState->last_sync ?: null,
-            'last_sync_new'  => (int)$syncState->last_sync_new,
-            'last_sync_existing' => (int)$syncState->last_sync_existing,
-            'last_sync_total' => (int)$syncState->last_sync_total,
-        );
-
-        if ($syncState->isProcessingInProgress()) {
-            $data['processing_progress'] = $syncState->getProcessingProgress();
-        }
-
-        if ($syncState->isRateLimited()) {
-            $data['rate_limit_until'] = $syncState->rate_limit_until;
-            $data['rate_limit_seconds'] = $syncState->secondsUntilNextSync();
-        }
-
-        if ($syncState->isFetchInProgress() && !$syncState->isFetchTimedOut()) {
-            $ksef2 = new KsefService($this->db);
-            $pollResult = $ksef2->checkIncomingFetchStatus(DolibarrApiAccess::$user);
-            if ($pollResult) {
-                $data['poll_result'] = $pollResult;
-            }
-        }
-
-        return $data;
+        return $ksef->getIncomingSyncStatus('incoming');
     }
-
 
     /**
-     * @brief Reset stuck sync state
-     * @param  int   $days_back  Reset HWM to this many days ago (default: keep current) {@from body}
-     * @return array             Result
-     * @url POST /incoming/sync/reset
-     * @throws RestException 403, 500
+     * @brief Advance sync round
+     * @return array
+     * @url POST /incoming/sync/advance
+     * @throws RestException 403, 409, 429, 500, 503
      */
-    public function resetIncomingSync($days_back = 0)
+    public function advanceIncomingSync()
     {
         $this->checkKsefWritePermission();
-        dol_syslog("KsefApi::resetIncomingSync days_back=$days_back", LOG_INFO);
+        dol_syslog("KsefApi::advanceIncomingSync", LOG_INFO);
 
         $ksef = new KsefService($this->db);
-
-        if ($days_back > 0) {
-            $result = $ksef->resetIncomingSyncState(
-                DolibarrApiAccess::$user,
-                (int)$days_back
-            );
-        } else {
-            $result = $ksef->resetIncomingFetch();
+        $result = $ksef->advanceIncomingSync(DolibarrApiAccess::$user, 'incoming');
+        if (!is_array($result)) {
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $ksef->error));
+        }
+        $status = (string) ($result['status'] ?? '');
+        if ($status === 'RATE_LIMITED') {
+            throw new RestException(429, 'KSeF rate limit', array('status' => 'RATE_LIMITED', 'retry_after' => (int) ($result['retry_after'] ?? 0) ?: null));
+        }
+        if ($status === 'CHECK_FAILED') {
+            throw new RestException(503, (string) ($result['error'] ?? '') !== '' ? $result['error'] : 'KSeF not reachable', array('status' => 'KSEF_UNAVAILABLE'));
+        }
+        if ($status === 'NO_PENDING_FETCH') {
+            throw new RestException(409, 'No sync round in progress: start one with POST /incoming/sync', array('status' => 'NO_PENDING_FETCH'));
+        }
+        if ($status === 'TIMEOUT' || $status === 'FAILED') {
+            $msg = (string) ($result['error'] ?? '');
+            throw new RestException(409, $msg !== '' ? $msg : 'The sync round ended without importing: start a new one with POST /incoming/sync', array('status' => $status));
         }
 
-        if (!$result) {
-            throw new RestException(500, 'Failed to reset sync state');
-        }
-
-        return array(
-            'success' => true,
-            'message' => $days_back > 0
-                ? "Sync state reset, HWM moved back {$days_back} days"
-                : 'Fetch state cleared',
-        );
+        return $result;
     }
 
+    /**
+     * @brief Reset incoming sync
+     * @param  string $from_date  YYYY-MM-DD {@from body}
+     * @param  string $days_back  Days before today {@from body}
+     * @return array
+     * @url POST /incoming/sync/reset
+     * @throws RestException 400, 403, 500
+     */
+    public function resetIncomingSync($from_date = '', $days_back = '')
+    {
+        $this->checkKsefWritePermission();
+        $fromDate = trim((string) $from_date);
+        $daysBack = trim((string) $days_back);
+        dol_syslog("KsefApi::resetIncomingSync from_date=" . $fromDate . " days_back=" . $daysBack, LOG_INFO);
+
+        $ksef = new KsefService($this->db);
+        $rewind = $fromDate !== '' || ($daysBack !== '' && $daysBack !== '0');
+
+        if (!$rewind) {
+            if (!$ksef->resetIncomingFetch('incoming')) {
+                throw new RestException(500, 'Failed to reset sync state');
+            }
+            return array(
+                'success'  => true,
+                'message'  => 'Fetch state cleared',
+                'hwm_date' => $ksef->getIncomingSyncState('incoming')->hwm_date ?: null,
+            );
+        }
+
+        if (!KsefService::canRewindSync(DolibarrApiAccess::$user)) {
+            throw new RestException(403, 'Only an administrator may move the sync point back (from_date / days_back)');
+        }
+        $start = $ksef->syncResetStartDate($fromDate, $daysBack);
+        if ($start === false) {
+            throw new RestException(400, $ksef->error);
+        }
+        if (!$ksef->resetIncomingSyncState(DolibarrApiAccess::$user, 'incoming', $start)) {
+            throw new RestException(500, 'Failed to reset sync state');
+        }
+        $hwm = $ksef->getIncomingSyncState('incoming')->hwm_date ?: null;
+
+        return array(
+            'success'  => true,
+            'message'  => 'Sync state reset, the next sync starts at ' . ($hwm ? dol_print_date(strtotime($hwm), 'dayrfc') : 'the KSeF start'),
+            'hwm_date' => $hwm,
+        );
+    }
 
     /**
      * @brief Delete incoming record
-     * @param  int   $id  Incoming invoice row ID {@from path}
-     * @return array      Result
+     * @param  int   $id  Incoming id {@from path}
+     * @return array
      * @url DELETE /incoming/{id}
-     * @throws RestException 403, 404, 500
+     * @throws RestException 403, 404, 409, 500
      */
     public function deleteIncoming($id)
     {
         $this->checkKsefWritePermission();
         dol_syslog("KsefApi::deleteIncoming id=$id", LOG_INFO);
+        if (!ksefUserCan(DolibarrApiAccess::$user, 'delete_incoming')) {
+            throw new RestException(403, 'Not enough permissions to delete incoming invoices (ksef/write and fournisseur/facture/creer)');
+        }
 
         $incoming = new KsefIncoming($this->db);
         $res = $incoming->fetch((int)$id);
@@ -778,10 +821,13 @@ class KsefApi extends DolibarrApi
         if ($res <= 0) {
             throw new RestException(404, 'Incoming invoice not found');
         }
+        if (!$incoming->canDelete()) {
+            throw new RestException(409, 'An imported incoming invoice (linked to a supplier invoice) cannot be deleted; reset its import status first', array('status' => 'NOT_DELETABLE', 'import_status' => $incoming->import_status));
+        }
 
         $delResult = $incoming->delete(DolibarrApiAccess::$user);
         if ($delResult < 0) {
-            throw new RestException(500, 'Delete failed: ' . $incoming->error);
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $incoming->error ?: implode(', ', (array) $incoming->errors)));
         }
 
         return array(
@@ -791,12 +837,12 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Link incoming to supplier invoice
-     * @param  int   $id                Incoming invoice row ID {@from path}
-     * @param  int   $fk_facture_fourn  Existing supplier invoice ID to link {@from body}
-     * @return array                    Result
+     * @brief Link supplier invoice
+     * @param  int   $id                Incoming id {@from path}
+     * @param  int   $fk_facture_fourn  Supplier invoice id {@from body}
+     * @return array
      * @url POST /incoming/{id}/link
-     * @throws RestException 403, 404, 422, 500
+     * @throws RestException 400, 403, 404, 409, 500
      */
     public function linkIncoming($id, $fk_facture_fourn = 0)
     {
@@ -805,7 +851,7 @@ class KsefApi extends DolibarrApi
 
         if ($fk_facture_fourn <= 0) {
             throw new RestException(
-                422,
+                400,
                 'fk_facture_fourn is required (supplier invoice ID)'
             );
         }
@@ -833,14 +879,14 @@ class KsefApi extends DolibarrApi
             throw new RestException(403, 'Access not allowed for login ' . DolibarrApiAccess::$user->login);
         }
 
-        $incoming->fk_facture_fourn = (int)$fk_facture_fourn;
-        $incoming->import_status = KsefIncoming::STATUS_IMPORTED;
-        $incoming->import_date = dol_now();
-        $incoming->import_error = null;
-
-        $updResult = $incoming->update(DolibarrApiAccess::$user, 1);
-        if ($updResult < 0) {
-            throw new RestException(500, 'Failed to update: ' . $incoming->error);
+        $linkResult = $incoming->linkToInvoice(DolibarrApiAccess::$user, (int)$fk_facture_fourn);
+        if ($linkResult === 0) {
+            throw new RestException(409, $incoming->error, $incoming->error_code === 'ALREADY_LINKED'
+                ? array('status' => 'ALREADY_LINKED', 'fk_facture_fourn' => (int) $incoming->fk_facture_fourn)
+                : array('status' => $incoming->error_code ?: 'STATUS_CHANGED'));
+        }
+        if ($linkResult < 0) {
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $incoming->error));
         }
 
         return array(
@@ -851,12 +897,200 @@ class KsefApi extends DolibarrApi
         );
     }
 
+    /**
+     * @brief List sales rows
+     * @param  string $link_status    Status filter {@from query}
+     * @param  string $environment    Environment {@from query}
+     * @param  string $ksef_number    Partial match {@from query}
+     * @param  string $invoice_number Partial match {@from query}
+     * @param  string $date_from      YYYY-MM-DD {@from query}
+     * @param  string $date_to        YYYY-MM-DD {@from query}
+     * @param  string $sortfield      Sort field {@from query}
+     * @param  string $sortorder      ASC or DESC {@from query}
+     * @param  int    $limit          0 = default, max 500 {@from query}
+     * @param  int    $page           0-based {@from query}
+     * @return array
+     * @url GET /sales
+     * @throws RestException 400, 403, 500
+     */
+    public function getSales(
+        $link_status = '',
+        $environment = '',
+        $ksef_number = '',
+        $invoice_number = '',
+        $date_from = '',
+        $date_to = '',
+        $sortfield = 'i.invoice_date',
+        $sortorder = 'DESC',
+        $limit = 0,
+        $page = 0
+    ) {
+        $this->checkKsefReadPermission();
+        $this->checkInvoiceReadRight();
+        dol_include_once('/ksef/class/ksef_sales.class.php');
+        list($limit, $offset) = $this->listPage($limit, $page);
+        $environment = strtoupper((string) $environment);
+        if (!in_array($environment, array('TEST', 'DEMO', 'PRODUCTION'), true)) {
+            $environment = ksefGetEnvironment();
+        }
+
+        $sql = "SELECT i.rowid FROM " . MAIN_DB_PREFIX . "ksef_sales as i";
+        $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . "facture as f ON f.rowid = i.fk_facture";
+        $sql .= " WHERE i.entity IN (" . getEntity('ksef_sales') . ")";
+        $sql .= " AND i.environment = '" . $this->db->escape($environment) . "'";
+        if (!ksefUserSeesAllCustomers(DolibarrApiAccess::$user)) {
+            $sql .= " AND i.fk_facture IS NOT NULL" . ksefSqlInvoiceVisibility(DolibarrApiAccess::$user, 'f');
+        }
+        $link_status = strtoupper((string) $link_status);
+        if ($link_status === KsefSales::STATUS_FETCH_ERROR) {
+            $sql .= " AND i.import_status = '" . KsefSales::STATUS_FETCH_ERROR . "'";
+        } elseif ($link_status === KsefSales::LINK_SKIPPED) {
+            $sql .= " AND i.import_status = '" . KsefSales::STATUS_SKIPPED . "'";
+        } elseif ($link_status !== '') {
+            if (!in_array($link_status, array(KsefSales::LINK_OK, KsefSales::LINK_DIFFERS, KsefSales::LINK_LINKABLE, KsefSales::LINK_SUGGEST,
+                KsefSales::LINK_IMPORTABLE, KsefSales::LINK_CONFLICT, KsefSales::LINK_UNSUPPORTED), true)) {
+                throw new RestException(400, "Invalid link_status '" . $link_status . "'");
+            }
+            $sql .= " AND i.import_status NOT IN ('" . KsefSales::STATUS_FETCH_ERROR . "', '" . KsefSales::STATUS_SKIPPED . "')";
+            $sql .= $link_status === KsefSales::LINK_IMPORTABLE ? " AND (i.link_status IS NULL OR i.link_status = '' OR i.link_status = '" . KsefSales::LINK_IMPORTABLE . "')"
+                : " AND i.link_status = '" . $this->db->escape($link_status) . "'";
+        }
+        if ($ksef_number !== '') {
+            $sql .= " AND i.ksef_number LIKE '%" . $this->db->escape($ksef_number) . "%'";
+        }
+        if ($invoice_number !== '') {
+            $sql .= " AND i.invoice_number LIKE '%" . $this->db->escape($invoice_number) . "%'";
+        }
+        if (!empty($date_from)) {
+            $ts = strtotime($date_from);
+            if ($ts === false) {
+                throw new RestException(400, 'Invalid date_from (expected YYYY-MM-DD)');
+            }
+            $sql .= " AND i.invoice_date >= " . (int) $ts;
+        }
+        if (!empty($date_to)) {
+            $ts = strtotime($date_to . ' 23:59:59');
+            if ($ts === false) {
+                throw new RestException(400, 'Invalid date_to (expected YYYY-MM-DD)');
+            }
+            $sql .= " AND i.invoice_date <= " . (int) $ts;
+        }
+        if (!in_array($sortfield, KsefIncoming::SORT_FIELDS, true)) {
+            $sortfield = 'i.invoice_date';
+        }
+        $sortorder = strtoupper($sortorder) === 'ASC' ? 'ASC' : 'DESC';
+        $sql .= " ORDER BY " . $sortfield . " " . $sortorder . ($sortfield !== 'i.rowid' ? ", i.rowid " . $sortorder : '');
+        $sql .= $this->db->plimit($limit, $offset);
+
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $this->db->lasterror()));
+        }
+        $ids = array();
+        while ($obj = $this->db->fetch_object($resql)) {
+            $ids[] = (int) $obj->rowid;
+        }
+        $this->db->free($resql);
+        $result = array();
+        foreach ($ids as $id) {
+            $row = new KsefSales($this->db);
+            if ($row->fetch($id) > 0) {
+                $result[] = $this->formatSales($row);
+            }
+        }
+        return $result;
+    }
 
     /**
-     * @brief Credit note discount rows
-     * @param  int    $id     Credit note (facture) ID {@from path}
-     * @param  string $state  Row state filter, one of available (unlinked), used (linked to an invoice or line) or none (all rows); default none {@from query}
-     * @return array          One row per VAT rate, each with keys: id (discount rowid), tva_tx (absolute VAT rate), amount_ht, amount_tva, amount_ttc (absolute amounts), description, fk_facture (linked invoice id or null), fk_facture_line (linked line id or null), used (bool, true when linked)
+     * @brief Sales status counts
+     * @param  string $environment  Environment {@from query}
+     * @return array
+     * @url GET /sales/counts
+     * @throws RestException 403
+     */
+    public function getSalesCounts($environment = '')
+    {
+        $this->checkKsefReadPermission();
+        $this->checkInvoiceReadRight();
+        if (!ksefUserSeesAllCustomers(DolibarrApiAccess::$user)) {
+            throw new RestException(403, 'The counts cover every customer: not available to a user limited to some customers');
+        }
+        dol_include_once('/ksef/class/ksef_sales.class.php');
+        $environment = strtoupper((string) $environment);
+        if (!in_array($environment, array('TEST', 'DEMO', 'PRODUCTION'), true)) {
+            $environment = ksefGetEnvironment();
+        }
+        $sales = new KsefSales($this->db);
+        $counts = $sales->getReconcileCounts($environment);
+        $counts['synced_until'] = KsefSales::syncedUntil();
+        return $counts;
+    }
+
+    /**
+     * @brief Sales gaps
+     * @param  string $environment  Environment {@from query}
+     * @return array
+     * @url GET /sales/gaps
+     * @throws RestException 403
+     */
+    public function getSalesGaps($environment = '')
+    {
+        $this->checkKsefReadPermission();
+        $this->checkInvoiceReadRight();
+        dol_include_once('/ksef/class/ksef_sales.class.php');
+        $environment = strtoupper((string) $environment);
+        if (!in_array($environment, array('TEST', 'DEMO', 'PRODUCTION'), true)) {
+            $environment = ksefGetEnvironment();
+        }
+        $sales = new KsefSales($this->db);
+        $all = ksefUserSeesAllCustomers(DolibarrApiAccess::$user);
+        $out = array();
+        foreach ($sales->getDolibarrGaps($environment) as $g) {
+            if ($all || ksefUserCanReadInvoice(DolibarrApiAccess::$user, $g['fk_facture'])) {
+                $out[] = $g;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Sales row detail
+     * @param  int   $id  Sales row id {@from path}
+     * @return array
+     * @url GET /sales/{id}
+     * @throws RestException 403, 404
+     */
+    public function getSalesById($id)
+    {
+        return $this->formatSales($this->fetchSalesForUser((int) $id));
+    }
+
+    /**
+     * @brief Sales row XML
+     * @param  int   $id  Sales row id {@from path}
+     * @return array
+     * @url GET /sales/{id}/xml
+     * @throws RestException 403, 404
+     */
+    public function getSalesXml($id)
+    {
+        $row = $this->fetchSalesForUser((int) $id);
+        if (empty($row->fa3_xml)) {
+            throw new RestException(404, 'No FA(3) XML stored for this invoice');
+        }
+        return array(
+            'id'           => (int) $row->rowid,
+            'ksef_number'  => $row->ksef_number,
+            'invoice_hash' => $row->invoice_hash,
+            'fa3_xml'      => $row->fa3_xml,
+        );
+    }
+
+    /**
+     * @brief Credit note discounts
+     * @param  int    $id     Credit note id {@from path}
+     * @param  string $state  available, used or none {@from query}
+     * @return array
      * @url GET /creditnotes/{id}/discounts
      * @throws RestException 400, 403, 404, 409, 500
      */
@@ -885,7 +1119,7 @@ class KsefApi extends DolibarrApi
 
         $resql = $this->db->query($sql);
         if (!$resql) {
-            throw new RestException(500, 'Error querying discounts: ' . $this->db->lasterror());
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', $this->db->lasterror()));
         }
 
         $rows = array();
@@ -907,11 +1141,10 @@ class KsefApi extends DolibarrApi
         return $rows;
     }
 
-
     /**
      * @brief Convert credit note to discounts
-     * @param  int $id  Credit note (facture) ID, must be validated {@from path}
-     * @return array    Result with keys: converted (bool, always true on success), already_converted (bool, true when discount rows already existed and none were created), discount_rows (array of resulting discount rows, one per VAT rate)
+     * @param  int $id  Credit note id {@from path}
+     * @return array
      * @url POST /creditnotes/{id}/convert
      * @throws RestException 403, 404, 409, 500
      */
@@ -1014,12 +1247,12 @@ class KsefApi extends DolibarrApi
             $discount->tva_tx = abs((float) $r);
             if ($discount->create(DolibarrApiAccess::$user) < 0) {
                 $this->db->rollback();
-                throw new RestException(500, 'Could not create discount row: ' . $discount->error);
+                throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not create discount row: ' . $discount->error));
             }
         }
         if ($note->setPaid(DolibarrApiAccess::$user) < 0) {
             $this->db->rollback();
-            throw new RestException(500, 'Could not set the credit note paid: ' . $note->error);
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not set the credit note paid: ' . $note->error));
         }
         $this->db->commit();
 
@@ -1029,9 +1262,9 @@ class KsefApi extends DolibarrApi
 
     /**
      * @brief Apply credit note as lines
-     * @param  int $id                Credit note (facture) ID, must be validated {@from path}
-     * @param  int $target_invoice_id Target invoice ID, must be a DRAFT in the same currency; discount rows are inserted as invoice lines {@from body}
-     * @return array                  Result with keys: applied (array of applied discount row ids), target (object with id, remaining_after (remain-to-pay after applying), paye (0/1 paid flag))
+     * @param  int $id                Credit note id {@from path}
+     * @param  int $target_invoice_id Draft invoice id {@from body}
+     * @return array
      * @url POST /creditnotes/{id}/apply-line
      * @throws RestException 400, 403, 404, 405, 409, 500
      */
@@ -1042,10 +1275,10 @@ class KsefApi extends DolibarrApi
 
     /**
      * @brief Apply credit note as payment
-     * @param  int $id                Credit note (facture) ID, must be validated {@from path}
-     * @param  int $target_invoice_id Target invoice ID, must be a VALIDATED invoice in the same currency; the credit is linked as a payment {@from body}
-     * @param  int $closeifpaid       1 to set the target paid when its remain-to-pay reaches zero, 0 to leave it open; default 1 {@from query}
-     * @return array                  Result with keys: applied (array of applied discount row ids), target (object with id, remaining_after (remain-to-pay after applying), paye (0/1 paid flag))
+     * @param  int $id                Credit note id {@from path}
+     * @param  int $target_invoice_id Validated invoice id {@from body}
+     * @param  int $closeifpaid       1: close when paid {@from query}
+     * @return array
      * @url POST /creditnotes/{id}/apply-payment
      * @throws RestException 400, 403, 404, 409, 500
      */
@@ -1055,12 +1288,12 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Shared apply implementation
-     * @param  int    $id        Credit note ID
-     * @param  int    $targetId  Target invoice ID
-     * @param  string $op        Apply op
-     * @param  int    $closeifpaid  Auto-close zeroed target
-     * @return array Apply result
+     * @brief Apply credit note
+     * @param  int    $id        Credit note id
+     * @param  int    $targetId
+     * @param  string $op
+     * @param  int    $closeifpaid
+     * @return array
      * @throws RestException 400, 403, 404, 405, 409, 500
      */
     private function applyCreditNote($id, $targetId, $op, $closeifpaid = 1)
@@ -1115,7 +1348,7 @@ class KsefApi extends DolibarrApi
             if ($op === self::OP_APPLY_LINE) {
                 if ($target->insert_discount($row['id']) < 0) {
                     $this->db->rollback();
-                    throw new RestException(500, 'Could not apply discount line: ' . $target->error);
+                    throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not apply discount line: ' . $target->error));
                 }
             } else {
                 $discount = new DiscountAbsolute($this->db);
@@ -1125,7 +1358,7 @@ class KsefApi extends DolibarrApi
                 }
                 if ($discount->link_to_invoice(0, $target->id) < 0) {
                     $this->db->rollback();
-                    throw new RestException(500, 'Could not apply credit as payment: ' . $discount->error);
+                    throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not apply credit as payment: ' . $discount->error));
                 }
             }
             $applied[] = (int) $row['id'];
@@ -1133,40 +1366,51 @@ class KsefApi extends DolibarrApi
 
         if ($op === self::OP_APPLY_PAYMENT && $closeifpaid) {
             $target->fetch($target->id);
-            if ((float) $target->getRemainToPay() <= self::EPSILON && (int) $target->paye !== 1) {
+            // no DISCOUNT_MODIFY close
+            if (ksefCloseForeignPaid($this->db, DolibarrApiAccess::$user, $target) < 0) {
+                $this->db->rollback();
+                throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not set target paid: ' . $target->error));
+            }
+            $fst = ksefForeignSettledState($target);
+            $paidOff = $fst['foreign'] ? ($fst['settled'] && $fst['remain_pln'] == 0) : (float) $target->getRemainToPay() <= self::EPSILON;
+            if ($paidOff && (int) $target->paye !== 1) {
                 if ($target->setPaid(DolibarrApiAccess::$user) < 0) {
                     $this->db->rollback();
-                    throw new RestException(500, 'Could not set target paid: ' . $target->error);
+                    throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not set target paid: ' . $target->error));
                 }
             }
         }
         $this->db->commit();
 
         $target->fetch($target->id);
+        $isForeign = (string) $targetCurrency !== (string) $baseCurrency;
         return array(
             'applied' => $applied,
             'target'  => array(
-                'id'              => (int) $target->id,
-                'remaining_after' => (float) $target->getRemainToPay(),
-                'paye'            => (int) $target->paye,
+                'id'                       => (int) $target->id,
+                'remaining_after'          => (float) $target->getRemainToPay(),
+                'currency'                 => (string) $targetCurrency,
+                'remaining_after_currency' => (float) price2num($target->getRemainToPay($isForeign ? 1 : 0), 'MT'),
+                'paye'                     => (int) $target->paye,
             ),
         );
     }
 
     /**
-     * @brief Cash refund a credit note
-     * @param  int    $id           Credit note (facture) ID, must be validated {@from path}
-     * @param  float  $amount       Refund amount, positive; capped at the remaining refundable amount {@from body}
-     * @param  int    $paymentid    Payment mode id (c_paiement.id), mandatory {@from body}
-     * @param  int    $accountid    Bank account id (used when the bank module is enabled) {@from body}
-     * @param  string $datepaye     Payment date (YYYY-MM-DD or a unix timestamp); defaults to now when empty {@from body}
-     * @param  string $num_payment  Payment reference / transaction number {@from body}
-     * @param  string $comment      Private note stored on the payment {@from body}
-     * @return array                Result with keys: payment_id (created payment id) and remaining_refundable_after (refundable amount left after this refund, or null if it could not be recomputed)
+     * @brief Refund credit note
+     * @param  int    $id           Credit note id {@from path}
+     * @param  float  $amount       Positive amount {@from body}
+     * @param  int    $paymentid    Payment mode id {@from body}
+     * @param  int    $accountid    Bank account id {@from body}
+     * @param  string $datepaye     YYYY-MM-DD or timestamp {@from body}
+     * @param  string $num_payment  Payment reference {@from body}
+     * @param  string $comment      Private note {@from body}
+     * @param  string $currency     Note currency, empty = PLN {@from body}
+     * @return array
      * @url POST /creditnotes/{id}/refund
      * @throws RestException 400, 403, 404, 409, 500
      */
-    public function refundCreditNote($id, $amount = 0, $paymentid = 0, $accountid = 0, $datepaye = '', $num_payment = '', $comment = '')
+    public function refundCreditNote($id, $amount = 0, $paymentid = 0, $accountid = 0, $datepaye = '', $num_payment = '', $comment = '', $currency = '')
     {
         $this->checkKsefWritePermission();
         $note = $this->checkFactureAccess((int) $id);
@@ -1182,6 +1426,21 @@ class KsefApi extends DolibarrApi
         $amount = (float) $amount;
         if (empty($paymentid)) {
             throw new RestException(400, 'paymentid is mandatory');
+        }
+        global $conf;
+        $baseCurrency = (is_object($conf) && !empty($conf->currency)) ? (string) $conf->currency : getDolGlobalString('MAIN_MONNAIE', '');
+        $noteCurrency = (string) $note->multicurrency_code !== '' ? (string) $note->multicurrency_code : $baseCurrency;
+        $currency = strtoupper(trim((string) $currency));
+        $mcOff = $noteCurrency !== $baseCurrency && !isModEnabled('multicurrency');
+        $amountInBase = $noteCurrency !== $baseCurrency && $currency === '' && !$mcOff;
+        if ($amountInBase && (float) $note->multicurrency_tx <= 0) {
+            throw new RestException(409, 'The credit note in ' . $noteCurrency . ' has no exchange rate: give the amount in ' . $noteCurrency . ' with currency ' . $noteCurrency);
+        }
+        if ($currency !== '' && $currency !== $noteCurrency) {
+            throw new RestException(400, 'The refund is in the credit note\'s currency ' . $noteCurrency . ', not ' . $currency);
+        }
+        if ($mcOff && $currency !== '') {
+            throw new RestException(409, 'A credit note in ' . $noteCurrency . ' is refunded in ' . $noteCurrency . ', which needs the Multicurrency module enabled; without currency the amount is in ' . $baseCurrency);
         }
 
         $paiementcode = (string) dol_getIdFromCode($this->db, (int) $paymentid, 'c_paiement', 'id', 'code', 1);
@@ -1202,6 +1461,7 @@ class KsefApi extends DolibarrApi
         } elseif (is_numeric($datepaye)) {
             $datepaye_ts = (int) $datepaye;
         } else {
+            require_once DOL_DOCUMENT_ROOT . '/core/lib/date.lib.php';
             $datepaye_ts = dol_stringtotime($datepaye);
         }
         if ($datepaye_ts <= 0) {
@@ -1216,6 +1476,22 @@ class KsefApi extends DolibarrApi
             $this->db->rollback();
             throw new RestException($this->creditNoteNotFound ? 404 : 500, $this->creditNoteError);
         }
+        // amount > 0
+        if ($amountInBase && !empty($state['foreign']) && $amount > 0) {
+            $plnRemain = (float) $state['remaining_refundable'];
+            if (abs($amount) > $plnRemain + self::EPSILON) {
+                $this->db->rollback();
+                throw new RestException(409, 'Refund amount ' . abs($amount) . ' ' . $baseCurrency . ' exceeds remaining refundable ' . $plnRemain . ' ' . $baseCurrency);
+            }
+            if ((float) $state['remaining_refundable_currency'] <= 0 && empty($state['paye'])) {
+                $this->db->rollback();
+                throw new RestException(409, 'Nothing left to refund on this credit note in ' . $noteCurrency);
+            }
+            $full = abs($amount) > 0 && (float) price2num(abs($amount), 'MT') >= (float) price2num($plnRemain, 'MT');
+            // rounding exceeds remain
+            $amount = $full ? (float) $state['remaining_refundable_currency']
+                : min((float) price2num(abs($amount) * (float) $note->multicurrency_tx, 'MT'), (float) $state['remaining_refundable_currency']);
+        }
         try {
             $this->settleGuard($state, self::OP_REFUND, null, $amount);
         } catch (Exception $e) {
@@ -1223,13 +1499,19 @@ class KsefApi extends DolibarrApi
             throw $e;
         }
 
-        $amount = min(abs((float) $amount), (float) $state['remaining_refundable']);
+        $foreign = !empty($state['foreign']);
+        $amount = min(abs((float) $amount), (float) $state[$foreign ? 'remaining_refundable_currency' : 'remaining_refundable']);
         if ((float) price2num($amount, 'MT') <= 0.0) {
             $this->db->rollback();
             throw new RestException(409, 'Nothing left to refund on this credit note');
         }
 
         $amounts = array((int) $id => (float) price2num(-1 * abs($amount), 'MT'));
+        $mcAmounts = array();
+        if ($foreign) {
+            $mcAmounts = $amounts;
+            $amounts = array();
+        }
 
         $recheck = $this->computeCreditNoteState((int) $id);
         if ($recheck !== false && (float) $recheck['converted_ttc'] > self::EPSILON) {
@@ -1240,6 +1522,11 @@ class KsefApi extends DolibarrApi
         $payment = new Paiement($this->db);
         $payment->datepaye = $datepaye_ts;
         $payment->amounts = $amounts;
+        if ($mcAmounts) {
+            $payment->multicurrency_amounts = $mcAmounts;
+            $payment->multicurrency_code = array((int) $id => $noteCurrency);
+            $payment->multicurrency_tx = array((int) $id => (float) $note->multicurrency_tx);
+        }
         $payment->paiementid = (int) $paymentid;
         $payment->paiementcode = $paiementcode;
         $payment->num_payment = $num_payment;
@@ -1260,26 +1547,39 @@ class KsefApi extends DolibarrApi
 
         $postState = $this->computeCreditNoteState((int) $id);
         $remainingAfter = ($postState !== false) ? (float) $postState['remaining_refundable'] : null;
-        if ($remainingAfter !== null && $remainingAfter <= self::EPSILON) {
+        $remainingAfterCur = ($postState !== false) ? (float) $postState['remaining_refundable_currency'] : null;
+        if ($foreign) {
+            if ($remainingAfterCur !== null && $remainingAfterCur == 0 && (int) $note->paye !== 1) {
+                $note->fetch((int) $id);
+                $closed = ksefCloseForeignPaid($this->db, DolibarrApiAccess::$user, $note);
+                if ($closed < 0 || ($closed === 0 && (int) $note->paye !== 1 && $note->setPaid(DolibarrApiAccess::$user) < 0)) {
+                    $this->db->rollback();
+                    throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not set the credit note paid: ' . $note->error));
+                }
+            }
+        } elseif ($remainingAfter !== null && $remainingAfter <= self::EPSILON) {
             if ((int) $note->paye !== 1 && $note->setPaid(DolibarrApiAccess::$user) < 0) {
                 $this->db->rollback();
-                throw new RestException(500, 'Could not set the credit note paid: ' . $note->error);
+                throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not set the credit note paid: ' . $note->error));
             }
         }
         $this->db->commit();
 
         return array(
             'payment_id'                 => (int) $payment_id,
+            'refunded_currency'          => (float) price2num(abs($amount), 'MT'),
             'remaining_refundable_after' => $remainingAfter,
+            'currency'                   => $mcOff ? $baseCurrency : $noteCurrency,
+            'remaining_refundable_after_currency' => $remainingAfterCur,
         );
     }
 
     /**
-     * @brief Set KOR correction fields
-     * @param  int    $invoice_id      Correction invoice (facture) ID; must be a credit note or replacement with a source invoice, and not yet submitted to KSeF {@from path}
-     * @param  string $reason          PrzyczynaKorekty text, non-empty and at most 256 characters {@from body}
-     * @param  int    $correction_type TypKorekty, one of 1, 2 or 3 {@from body}
-     * @return array                   Result with keys: invoice_id, correction_reason (stored reason) and correction_type (stored type)
+     * @brief Set KOR fields
+     * @param  int    $invoice_id      Correction id {@from path}
+     * @param  string $reason          Max 256 chars {@from body}
+     * @param  int    $correction_type 1, 2 or 3 {@from body}
+     * @return array
      * @url PUT /submissions/{invoice_id}/correction
      * @throws RestException 400, 403, 404, 409, 500
      */
@@ -1313,7 +1613,7 @@ class KsefApi extends DolibarrApi
         $invoice->array_options['options_ksef_correction_reason'] = $reason;
         $invoice->array_options['options_ksef_correction_type'] = $correction_type;
         if ($invoice->insertExtraFields() < 0) {
-            throw new RestException(500, 'Could not save correction fields: ' . $invoice->error);
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not save correction fields: ' . $invoice->error));
         }
 
         return array(
@@ -1324,13 +1624,90 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Ensure a foreign-currency invoice carries an NBP rate + date before submission
-     * @param  Facture $invoice  Access-checked invoice (from checkFactureAccess)
-     * @return void
-     * @throws RestException 502 NBP rate could not be resolved
-     * @called_by submitInvoice(), submitInvoiceOffline()
+     * @brief Invoice exchange rates
+     * @param  int $invoice_id Invoice id {@from path}
+     * @param  int $check_nbp  1: query NBP {@from query}
+     * @return array
+     * @url GET /rates/{invoice_id}
+     * @throws RestException 403, 404
      */
-    private function ensureInvoiceNbpRate($invoice)
+    public function getInvoiceRates($invoice_id, $check_nbp = 0)
+    {
+        $this->checkKsefReadPermission();
+        $invoice = $this->checkFactureAccess((int) $invoice_id);
+        $invoice->fetch_optionals();
+        $out = array('invoice_id' => (int) $invoice->id, 'currency' => (string) $invoice->multicurrency_code, 'rate' => null, 'table_date' => null, 'typed' => null, 'lines' => array());
+        if (!ksefInvoiceIsForeign($invoice)) {
+            return $out;
+        }
+        $k = ksefInvoiceKurs($invoice, array('db' => $this->db));
+        $out['rate'] = $k > 0 ? $k : null;
+        $kd = $invoice->array_options['options_ksef_kurs_data'] ?? '';
+        $out['table_date'] = $kd !== '' && $kd !== null ? dol_print_date(is_numeric($kd) ? (int) $kd : strtotime((string) $kd), '%Y-%m-%d', 'tzserver') : null;
+        $typed = ksefTypedRateCheck($this->db, $invoice, array('ask_nbp' => (int) $check_nbp > 0));
+        if ($typed !== null) {
+            $out['typed'] = array('state' => $typed['state'], 'nbp' => $typed['nbp']);
+        }
+        $map = ksefLineKursMap($this->db, $invoice);
+        foreach (ksefLineKursList($this->db, $invoice) as $lid => $l) {
+            $own = isset($map['lines'][$lid]) ? (float) $map['lines'][$lid] : (float) $l['kurs'];
+            $out['lines'][] = array('line_id' => (int) $lid, 'rate' => $own > 0 ? $own : ($k > 0 ? $k : null), 'own' => $own > 0,
+                'delivery_day' => $l['day'] !== '' ? $l['day'] : null);
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Delete korekta
+     * @param  int $invoice_id   Korekta id {@from path}
+     * @param  int $idwarehouse  -1: no stock move {@from query}
+     * @return array
+     * @url DELETE /corrections/{invoice_id}
+     * @throws RestException 400, 403, 404, 409
+     */
+    public function deleteCorrection($invoice_id, $idwarehouse = -1)
+    {
+        $this->checkKsefWritePermission();
+        $invoice = $this->checkFactureAccess((int) $invoice_id);
+        if (!DolibarrApiAccess::$user->hasRight('facture', 'supprimer')) {
+            throw new RestException(403, 'Not enough permissions (facture/supprimer)');
+        }
+        if ((int) $invoice->type !== Facture::TYPE_REPLACEMENT || empty($invoice->fk_facture_source)) {
+            throw new RestException(409, 'Invoice is not a korekta (replacement with a source invoice); use DELETE /invoices/{id}', array('status' => 'NOT_A_KOREKTA'));
+        }
+        $idwarehouse = (int) $idwarehouse;
+        if ($idwarehouse !== -1) {
+            require_once DOL_DOCUMENT_ROOT . '/product/stock/class/entrepot.class.php';
+            $wh = new Entrepot($this->db);
+            if ($idwarehouse <= 0 || !isModEnabled('stock') || $wh->fetch($idwarehouse) <= 0) {
+                throw new RestException(400, 'idwarehouse must be -1 or an existing warehouse');
+            }
+            // core always restocks
+            if ((int) $invoice->status < Facture::STATUS_VALIDATED || !getDolGlobalString('STOCK_CALCULATE_ON_BILL')) {
+                throw new RestException(400, 'idwarehouse only for a validated korekta with stock decrease on invoice validation');
+            }
+            if (!ksefUserCan(DolibarrApiAccess::$user, 'stock_movement')) {
+                throw new RestException(403, 'Not enough permissions to move stock (stock/mouvement/creer)');
+            }
+        }
+        $result = $invoice->delete(DolibarrApiAccess::$user, 0, $idwarehouse);
+        if ($result == 0) {
+            throw new RestException(403, 'Invoice not erasable');
+        }
+        if ($result < 0) {
+            throw new RestException(409, $invoice->error ?: implode(', ', (array) $invoice->errors), array('status' => 'NOT_DELETABLE'));
+        }
+        return array('success' => array('code' => 200, 'message' => 'Correction deleted'));
+    }
+
+    /**
+     * @brief Ensure NBP rate
+     * @param  Facture $invoice
+     * @param  string  $pick     '', keep or exact
+     * @return void
+     * @throws RestException
+     */
+    private function ensureInvoiceNbpRate($invoice, $pick = '')
     {
         dol_include_once('/ksef/class/ksef_nbp_currency_rate.class.php');
         $invoice->fetch_optionals();
@@ -1338,15 +1715,34 @@ class KsefApi extends DolibarrApi
         if (!$nbp->invoiceNeedsNBPRate($invoice) || $nbp->invoiceHasNBPRate($invoice)) {
             return;
         }
-        if ($nbp->fetchAndStoreForInvoice($invoice, DolibarrApiAccess::$user, true) === false) {
-            throw new RestException(502, 'Could not obtain the NBP rate for this foreign-currency invoice: ' . ($nbp->error ?: 'NBP unavailable and no cached rate'));
+        $pick = in_array((string) $pick, array('keep', 'exact'), true) ? (string) $pick : '';
+        $choice = $nbp->correctionRateChoice($invoice);
+        if (!$choice) {
+            $pick = '';
+        } elseif ($pick === '') {
+            $src = new Facture($this->db);
+            $src->fetch((int) $invoice->fk_facture_source);
+            throw new RestException(409, 'NBP_RATE_CHOICE_REQUIRED: korekta ' . $invoice->ref . ' has no NBP rate and the stored NBP table of '
+                . $src->ref . ' does not fit its date. Resend with nbp_rate_pick "keep" (the rate of ' . $src->ref . ') or "exact" (correct it: NBP table '
+                . $choice['no'] . ' of ' . $choice['date'] . ', ' . $choice['rate'] . ' PLN); both keep the foreign amounts.',
+                array('status' => 'NBP_RATE_CHOICE_REQUIRED', 'keep_rate' => $src->multicurrency_tx > 0 ? round(1 / (float) $src->multicurrency_tx, 6) : null,
+                    'exact_rate' => (float) $choice['rate'], 'exact_date' => $choice['date'], 'exact_table' => $choice['no']));
+        }
+        if ($nbp->fetchAndStoreForInvoice($invoice, DolibarrApiAccess::$user, $pick) === false) {
+            if ($nbp->errorCode === 'RATE_CHANGE_SETTLED') {
+                throw new RestException(409, 'RATE_CHANGE_SETTLED: ' . $nbp->error, array('status' => 'RATE_CHANGE_SETTLED'));
+            }
+            if ($nbp->errorCode === 'RATE_CHANGE_BOOKED') {
+                throw new RestException(409, 'RATE_CHANGE_BOOKED: ' . $nbp->error, array('status' => 'RATE_CHANGE_BOOKED'));
+            }
+            throw new RestException(502, 'Could not obtain the NBP rate for this foreign-currency invoice: ' . ($nbp->error ?: 'NBP unavailable'));
         }
     }
 
     /**
-     * @brief Credit note settlement state
-     * @param  int $id  Credit note (facture) ID {@from path}
-     * @return array    Settlement state with keys: type (facture type), socid (third-party id), validated (bool), paye (bool), total_ttc (absolute total), buckets (per-VAT-rate breakdown), discount_rows (array of discount rows), refunded_ttc (amount refunded in cash), converted_ttc (amount converted to discounts), applied_ttc (amount applied to invoices), remaining_refundable (still refundable in cash), remaining_convertible (still convertible to discount), orphaned_conversion (bool, conversion exists while the note is not validated) and allowed_modes (array of permitted settlement operations)
+     * @brief Credit note state
+     * @param  int $id  Credit note id {@from path}
+     * @return array
      * @url GET /creditnotes/{id}/resolution-state
      * @throws RestException 403, 404, 409, 500
      */
@@ -1368,8 +1764,8 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Module health check
-     * @return array  Health data with keys: module_enabled (bool), version, environment, nip_configured (bool), auth_method, auth_configured (bool), offline_certificate_configured (bool), connectivity (ok|failed|error|unknown), connectivity_error (present when not ok) and incoming_sync (last_sync, hwm_date, is_running, is_rate_limited)
+     * @brief Health check
+     * @return array
      * @url GET /status
      * @throws RestException 403
      */
@@ -1379,8 +1775,8 @@ class KsefApi extends DolibarrApi
 
         global $conf;
 
-        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
-        $nip = getDolGlobalString('KSEF_COMPANY_NIP', '');
+        $environment = ksefGetEnvironment();
+        $nip = ksefSellerNip();
         $authMethod = getDolGlobalString('KSEF_AUTH_METHOD_' . $environment, 'token');
 
         $moduleVersion = '';
@@ -1414,7 +1810,7 @@ class KsefApi extends DolibarrApi
         $data['offline_certificate_configured'] = function_exists(
             'ksefIsOfflineCertificateConfigured'
         )
-            ? !empty(ksefIsOfflineCertificateConfigured($environment)['configured'])
+            ? !empty(ksefIsOfflineCertificateConfigured($environment)['valid'])
             : false;
 
         try {
@@ -1442,10 +1838,9 @@ class KsefApi extends DolibarrApi
         return $data;
     }
 
-
     /**
      * @brief Module configuration
-     * @return array  Configuration values with keys: environment, company_nip, auth_method, timeout, add_to_pdf, add_qr, qr_size, button_color, nbp_rate_mode, place_of_issue_mode, fa3_options (include_nrklienta, include_indeks, include_gtin, include_unit, include_bank_desc) and features (creditnote_discounts, creditnote_convert, creditnote_apply_line, creditnote_apply_payment, creditnote_refund, creditnote_state, correction_route)
+     * @return array
      * @url GET /config
      * @throws RestException 403
      */
@@ -1453,18 +1848,21 @@ class KsefApi extends DolibarrApi
     {
         $this->checkKsefReadPermission();
 
-        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+        $environment = ksefGetEnvironment();
 
         return array(
             'environment'       => $environment,
-            'company_nip'       => getDolGlobalString('KSEF_COMPANY_NIP', ''),
+            'company_nip'       => ksefSellerNip(),
             'auth_method'       => getDolGlobalString('KSEF_AUTH_METHOD_' . $environment, 'token'),
-            'timeout'           => getDolGlobalInt('KSEF_TIMEOUT', 30),
-            'add_to_pdf'        => getDolGlobalString('KSEF_ADD_TO_PDF', '1'),
+            'timeout'           => ksefGetTimeout(),
+            // deprecated, kept
+            'add_to_pdf'        => '1',
             'add_qr'            => getDolGlobalString('KSEF_ADD_QR', '1'),
             'qr_size'           => getDolGlobalString('KSEF_QR_SIZE', '25'),
-            'button_color'      => getDolGlobalString('KSEF_BUTTON_COLOR', '#dc3545'),
-            'nbp_rate_mode'     => getDolGlobalString('KSEF_NBP_RATE_MODE', 'keep_base'),
+            // deprecated, kept
+            'button_color'      => '#2f6db5',
+            'nbp_rate_mode'     => getDolGlobalString('KSEF_NBP_RATE_MODE', 'keep_foreign'),
+            'nbp_rate_date_method' => getDolGlobalString('KSEF_NBP_RATE_DATE_METHOD', 'vat'),
             'place_of_issue_mode' => getDolGlobalString(
                 'KSEF_FA3_PLACE_OF_ISSUE_MODE', 'disabled'
             ),
@@ -1497,10 +1895,9 @@ class KsefApi extends DolibarrApi
         );
     }
 
-
     /**
-     * @brief Test KSeF connectivity
-     * @return array  Test result with keys: success (bool), environment, api_url, error (null on success) and tested_at
+     * @brief Test connectivity
+     * @return array
      * @url POST /test-connection
      * @throws RestException 403
      */
@@ -1510,7 +1907,7 @@ class KsefApi extends DolibarrApi
 
         global $conf;
 
-        $environment = getDolGlobalString('KSEF_ENVIRONMENT', 'TEST');
+        $environment = ksefGetEnvironment();
 
         try {
             $client = new KsefClient($this->db, $environment);
@@ -1534,13 +1931,22 @@ class KsefApi extends DolibarrApi
         }
     }
 
+    /**
+     * @brief List page bounds
+     * @param int $limit 0 = default, max 500
+     * @param int $page 0-based
+     * @return array array(limit, offset)
+     */
+    private function listPage($limit, $page)
+    {
+        $limit = (int) $limit > 0 ? min((int) $limit, 500) : getDolGlobalInt('MAIN_SIZE_LISTE_LIMIT', 25);
+        return array($limit, $limit * max(0, (int) $page));
+    }
 
     /**
-     * @brief Check KSeF read permission
+     * @brief Check read permission
      * @return void
      * @throws RestException 403
-     * @called_by All public GET endpoints
-     * @calls loadKsefClasses()
      */
     private function checkKsefReadPermission()
     {
@@ -1551,13 +1957,13 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Run settle guard, map to RestException
-     * @param  array  $state   State output
-     * @param  string $op      Settle op
-     * @param  array|null $target  Target facts
-     * @param  float  $amount  Refund amount
+     * @brief Run settle guard
+     * @param  array  $state
+     * @param  string $op
+     * @param  array|null $target
+     * @param  float  $amount
      * @return void
-     * @throws RestException Guard HTTP code on violation
+     * @throws RestException
      */
     private function settleGuard($state, $op, $target = null, $amount = 0.0)
     {
@@ -1572,9 +1978,9 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief S1: build the settlement state of a credit note
-     * @param  int         $id  Credit note (facture) ID
-     * @return array|false      State array, or false on failure (see $this->creditNoteError / $this->creditNoteNotFound)
+     * @brief Credit note state
+     * @param  int         $id  Credit note id
+     * @return array|false
      */
     private function computeCreditNoteState($id)
     {
@@ -1592,7 +1998,6 @@ class KsefApi extends DolibarrApi
 
         $total_ttc = abs((float) $invoice->total_ttc);
 
-        // VAT buckets
         $ht = array();
         $tva = array();
         $ttc = array();
@@ -1610,7 +2015,7 @@ class KsefApi extends DolibarrApi
             $ttc[$rate] += (float) $line->total_ttc;
         }
         $buckets = array();
-        foreach ($ht as $rate => $sum) {
+        foreach (array_keys($ht) as $rate) {
             $buckets[] = array(
                 'tva_tx' => abs((float) $rate),
                 'ht'     => abs($ht[$rate]),
@@ -1622,13 +2027,14 @@ class KsefApi extends DolibarrApi
         $discount_rows = array();
         $converted_ttc = 0.0;
         $applied_ttc   = 0.0;
-        $sql = "SELECT rowid, tva_tx, amount_ht, amount_tva, amount_ttc, fk_facture, fk_facture_line";
+        $converted_cur = 0.0;
+        $sql = "SELECT rowid, tva_tx, amount_ht, amount_tva, amount_ttc, multicurrency_amount_ttc, fk_facture, fk_facture_line";
         $sql .= " FROM " . MAIN_DB_PREFIX . "societe_remise_except";
         $sql .= " WHERE fk_facture_source = " . $id;
         $sql .= " AND entity IN (" . getEntity('invoice') . ")";
         $resql = $this->db->query($sql);
         if (!$resql) {
-            $this->creditNoteError = 'Error querying discount rows: ' . $this->db->lasterror();
+            $this->creditNoteError = ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Error querying discount rows: ' . $this->db->lasterror());
             $this->creditNoteNotFound = false;
             return false;
         }
@@ -1636,6 +2042,7 @@ class KsefApi extends DolibarrApi
             $used = ($obj->fk_facture !== null || $obj->fk_facture_line !== null);
             $row_ttc = abs((float) $obj->amount_ttc);
             $converted_ttc += $row_ttc;
+            $converted_cur += abs((float) ($obj->multicurrency_amount_ttc ?? 0));
             if ($used) {
                 $applied_ttc += $row_ttc;
             }
@@ -1653,22 +2060,38 @@ class KsefApi extends DolibarrApi
         $this->db->free($resql);
 
         $refunded_ttc = 0.0;
-        $sql = "SELECT SUM(pf.amount) as total FROM " . MAIN_DB_PREFIX . "paiement_facture as pf";
-        // paiement_facture has no entity column; scope via the facture it settles (defense in depth).
+        $refunded_cur = 0.0;
+        $sql = "SELECT SUM(pf.amount) as total, SUM(pf.multicurrency_amount) as total_cur FROM " . MAIN_DB_PREFIX . "paiement_facture as pf";
+        // no entity column
         $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "facture as f ON f.rowid = pf.fk_facture";
         $sql .= " WHERE pf.fk_facture = " . $id;
         $sql .= " AND f.entity IN (" . getEntity('invoice') . ")";
         $resql = $this->db->query($sql);
         if (!$resql) {
-            $this->creditNoteError = 'Error querying payments: ' . $this->db->lasterror();
+            $this->creditNoteError = ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Error querying payments: ' . $this->db->lasterror());
             return false;
         }
         if ($obj = $this->db->fetch_object($resql)) {
             $refunded_ttc = abs((float) $obj->total);
+            $refunded_cur = abs((float) ($obj->total_cur ?? 0));
         }
         $this->db->free($resql);
 
+        global $conf;
+        $baseCurrency = (is_object($conf) && !empty($conf->currency)) ? (string) $conf->currency : getDolGlobalString('MAIN_MONNAIE', '');
+        $currency = (string) $invoice->multicurrency_code !== '' ? (string) $invoice->multicurrency_code : $baseCurrency;
+        if ($currency !== $baseCurrency && !isModEnabled('multicurrency')) {
+            $currency = $baseCurrency;
+        }
+        $foreign = $currency !== $baseCurrency;
+        $total_cur = $foreign ? abs((float) $invoice->multicurrency_total_ttc) : $total_ttc;
+        if (!$foreign) {
+            $refunded_cur = $refunded_ttc;
+            $converted_cur = $converted_ttc;
+        }
+
         $settled = $refunded_ttc + $converted_ttc;
+        $ownKorekta = ((int) $invoice->type === Facture::TYPE_CREDIT_NOTE) ? ksefNoteKorektaInForce($this->db, $id) : null;
 
         return array(
             'id'                   => $id,
@@ -1685,16 +2108,23 @@ class KsefApi extends DolibarrApi
             'remaining_refundable' => max(0.0, $total_ttc - $settled),
             'remaining_convertible' => ($converted_ttc > self::EPSILON) ? 0.0 : max(0.0, $total_ttc - $refunded_ttc),
             'orphaned_conversion' => (((int) $invoice->statut <= 0) && $converted_ttc > self::EPSILON),
+            'corrected_by'         => $ownKorekta ? (string) $ownKorekta->ref : '',
+            'currency'             => $currency,
+            'foreign'              => $foreign,
+            'total_ttc_currency'   => (float) price2num($total_cur, 'MT'),
+            'refunded_currency'    => (float) price2num($refunded_cur, 'MT'),
+            'converted_currency'   => (float) price2num($converted_cur, 'MT'),
+            'remaining_refundable_currency' => $foreign ? max(0.0, (float) price2num($total_cur - $refunded_cur - $converted_cur, 'MT')) : max(0.0, $total_ttc - $settled),
         );
     }
 
     /**
-     * @brief S2: assert an operation is allowed against a note's state (PURE)
-     * @param  array $state   Output of computeCreditNoteState()
-     * @param  string $op     One of the OP_* constants
-     * @param  array|null $target  For apply-* ops: {socid, type, paye, status, remaining}
-     * @param  float $amount  For OP_REFUND: the requested refund amount
-     * @return true           When allowed
+     * @brief Assert operation allowed
+     * @param  array $state
+     * @param  string $op     OP_* constant
+     * @param  array|null $target
+     * @param  float $amount
+     * @return true
      */
     private static function assertSettleable($state, $op, $target = null, $amount = 0.0)
     {
@@ -1703,6 +2133,10 @@ class KsefApi extends DolibarrApi
 
         if ((int) ($state['type'] ?? 0) !== 2) {
             throw new Exception('Only a credit note can be settled here', 409);
+        }
+
+        if (($op === self::OP_CONVERT || $op === self::OP_REFUND) && !empty($state['corrected_by'])) {
+            throw new Exception('Credit note is corrected by ' . $state['corrected_by'] . ', which settles its value; convert or refund is not possible on the credit note', 409);
         }
 
         if ($op === self::OP_CONVERT) {
@@ -1722,6 +2156,16 @@ class KsefApi extends DolibarrApi
             $remaining = (float) $state['remaining_refundable'];
             if ($amount <= 0.0) {
                 throw new Exception('Refund amount must be greater than 0', 400);
+            }
+            if (!empty($state['foreign'])) {
+                $remainingCur = (float) $state['remaining_refundable_currency'];
+                if (!empty($state['paye'])) {
+                    throw new Exception('Credit note is already paid; nothing left to refund', 409);
+                }
+                if ((float) price2num($amount, 'MT') > $remainingCur) {
+                    throw new Exception('Refund amount ' . $amount . ' ' . $state['currency'] . ' exceeds remaining refundable ' . $remainingCur . ' ' . $state['currency'], 409);
+                }
+                return true;
             }
             if ($amount > $remaining + self::EPSILON) {
                 throw new Exception('Refund amount ' . $amount . ' exceeds remaining refundable ' . $remaining, 409);
@@ -1743,7 +2187,6 @@ class KsefApi extends DolibarrApi
             if ((int) $target['socid'] !== (int) $state['socid']) {
                 throw new Exception('Target invoice belongs to a different customer', 409);
             }
-            // Allowed target types: standard(0), replacement(1), deposit(3).
             if (!in_array((int) $target['type'], array(0, 1, 3), true)) {
                 throw new Exception('Target invoice type ' . (int) $target['type'] . ' cannot receive credit', 409);
             }
@@ -1751,7 +2194,6 @@ class KsefApi extends DolibarrApi
                 throw new Exception('Target invoice is already paid', 409);
             }
             if ($op === self::OP_APPLY_LINE && (int) $target['status'] !== 0) {
-                // Appending a discount line is only valid on a draft (STATUS_DRAFT = 0).
                 throw new Exception('Target invoice is not a draft; cannot append a discount line', 405);
             }
             if ($op === self::OP_APPLY_PAYMENT && (int) $target['status'] !== 1) {
@@ -1768,14 +2210,13 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Which settlement operations are currently possible for a note (PURE)
-     * @param  array $state  computeCreditNoteState() output
-     * @return array         Subset of OP_* the note is eligible for right now
+     * @brief Allowed settle operations
+     * @param  array $state
+     * @return array         OP_* values
      */
     private static function allowedModes($state)
     {
         $modes = array();
-        // Money settlement is avoir-only (type 2 = credit note) and needs a validated note.
         if ((int) $state['type'] !== 2 || empty($state['validated'])) {
             return $modes;
         }
@@ -1783,10 +2224,12 @@ class KsefApi extends DolibarrApi
         $converted = (float) $state['converted_ttc'];
         $available = $converted - (float) $state['applied_ttc'];
 
-        if ($refunded <= self::EPSILON && $converted <= self::EPSILON) {
+        $corrected = !empty($state['corrected_by']);
+        if (!$corrected && $refunded <= self::EPSILON && $converted <= self::EPSILON) {
             $modes[] = self::OP_CONVERT;
         }
-        if ($converted <= self::EPSILON && (float) $state['remaining_refundable'] > self::EPSILON) {
+        $refundable = !empty($state['foreign']) ? (empty($state['paye']) && (float) $state['remaining_refundable_currency'] > 0) : (float) $state['remaining_refundable'] > self::EPSILON;
+        if (!$corrected && $converted <= self::EPSILON && $refundable) {
             $modes[] = self::OP_REFUND;
         }
         if ($available > self::EPSILON) {
@@ -1797,23 +2240,23 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Lock the credit-note facture row FOR UPDATE for a settlement transaction
-     * @param  int $id  Credit-note facture row id
+     * @brief Lock credit note
+     * @param  int $id  Credit note id
      * @return void
-     * @throws RestException 500 Lock failed
+     * @throws RestException
      */
     private function lockNoteForSettlement($id)
     {
         $this->db->begin();
         if (!$this->db->query("SELECT rowid FROM " . MAIN_DB_PREFIX . "facture WHERE rowid = " . (int) $id . " FOR UPDATE")) {
             $this->db->rollback();
-            throw new RestException(500, 'Could not lock the credit note: ' . $this->db->lasterror());
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not lock the credit note: ' . $this->db->lasterror()));
         }
     }
 
     /**
-     * @brief Lock several facture rows FOR UPDATE in one transaction
-     * @param array $ids Facture row ids to lock
+     * @brief Lock invoice rows
+     * @param array $ids Invoice ids
      * @return void
      */
     private function lockFacturesForSettlement($ids)
@@ -1833,14 +2276,14 @@ class KsefApi extends DolibarrApi
         $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "facture WHERE rowid IN (" . implode(',', $clean) . ") ORDER BY rowid FOR UPDATE";
         if (!$this->db->query($sql)) {
             $this->db->rollback();
-            throw new RestException(500, 'Could not lock invoices for settlement: ' . $this->db->lasterror());
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', 'Could not lock invoices for settlement: ' . $this->db->lasterror()));
         }
     }
 
     /**
-     * @brief Build target-facts array for guard
-     * @param  Facture $target  Destination invoice
-     * @return array            Target facts
+     * @brief Build guard target
+     * @param  Facture $target
+     * @return array
      */
     private function buildTargetInfo($target)
     {
@@ -1854,11 +2297,113 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Fetch invoice, enforce facture/lire access
-     * @param  int     $invoice_id  Invoice ID
-     * @return Facture              Access-checked invoice
-     * @throws RestException 403 Access denied
-     * @throws RestException 404 Not found
+     * @brief Refuse unsendable invoice
+     * @param KsefService $ksef
+     * @param Facture $invoice
+     * @return void
+     * @throws RestException
+     */
+    private function checkInvoiceSubmittable($ksef, $invoice)
+    {
+        $reason = $ksef->checkInvoiceSubmittable($invoice);
+        if ($reason !== '') {
+            throw new RestException(409, $reason, array('status' => $ksef->notSubmittableCode !== '' ? $ksef->notSubmittableCode : 'INVOICE_NOT_VALIDATED'));
+        }
+    }
+
+    /**
+     * @brief Map send result
+     * @param KsefService $ksef
+     * @param array|false $result
+     * @param string $fallback Default message
+     * @return array
+     * @throws RestException
+     */
+    private function mapSendResult($ksef, $result, $fallback)
+    {
+        if (!is_array($result)) {
+            throw new RestException(500, $ksef->error ?: $fallback);
+        }
+        $status = $result['status'] ?? '';
+        $msg = (string) ($result['error'] ?? $result['message'] ?? $ksef->error ?? '');
+        $msg = $msg !== '' ? $msg : $fallback;
+        $errorCode = (string) ($result['error_code'] ?? '');
+        if (isset($result['record_saved']) && $result['record_saved'] === false) {
+            throw new RestException(500, (string) ($result['warning'] ?? $msg), array('status' => 'ACCEPTED_NOT_RECORDED',
+                'ksef_number' => $result['ksef_number'] ?? null, 'submission_id' => $result['submission_id'] ?? null));
+        }
+        if (in_array($status, array('ACCEPTED', 'OFFLINE'), true)) {
+            if (!empty($ksef->warnings)) {
+                $result['warnings'] = $ksef->warnings;
+            }
+            return $result;
+        }
+        if (in_array($status, array('NEEDS_CONFIRMATION', 'NEEDS_OFFLINE_CONFIRMATION'), true)) {
+            throw new RestException(409, $msg, array('status' => $status, 'backdate_info' => $result['backdate_info'] ?? null, 'deadline' => $result['deadline'] ?? null));
+        }
+        if ($status === 'PENDING') {
+            throw new RestException(409, $msg, array('status' => 'PENDING', 'submission_id' => $result['submission_id'] ?? null));
+        }
+        if ($status === 'TIMEOUT') {
+            if (!empty($result['in_progress'])) {
+                throw new RestException(409, $msg, array('status' => 'TIMEOUT', 'submission_id' => $result['submission_id'] ?? null));
+            }
+            return $result;
+        }
+        if (in_array($errorCode, array('INVOICE_NOT_VALIDATED', 'CUSTOMER_EXCLUDED', 'ISSUED_IN_PRODUCTION', 'CORRECTION_NO_SOURCE', 'CORRECTION_SOURCE_OTHER_ENV'), true)) {
+            throw new RestException(409, $msg, array('status' => $errorCode));
+        }
+        if ($errorCode === 'DEPOSITS_ACK_REQUIRED') {
+            throw new RestException(409, $msg, array('status' => $errorCode, 'negative_rate' => (int) ($result['negative_rate'] ?? 0)));
+        }
+        if (in_array($errorCode, array('DEPOSIT_NOT_IN_KSEF', 'DEPOSIT_CURRENCY_MISMATCH', 'NEGATIVE_RATE_ACK_REQUIRED', 'CORRECTION_SOURCE_REJECTED', 'CORRECTION_SOURCE_AWAITING_NUMBER',
+            'CORRECTION_BEFORE_SOURCE_NUMBER', 'DEPOSIT_VAT_MISMATCH', 'SETTLEMENT_BELOW_ZERO'), true)) {
+            throw new RestException(409, $msg, array('status' => $errorCode));
+        }
+        if ($errorCode === 'NBP_RATE_STALE') {
+            throw new RestException(409, $msg, array('status' => 'NBP_RATE_STALE', 'rate_date' => $result['rate_date'] ?? null, 'reference_date' => $result['reference_date'] ?? null));
+        }
+        if ($errorCode === 'NBP_RATE_REQUIRED' || ($result['failure_kind'] ?? '') === 'local') {
+            throw new RestException(422, $msg, array('status' => 'FAILED', 'error_code' => $errorCode !== '' ? $errorCode : null));
+        }
+        if (!empty($result['record_failed'])) {
+            throw new RestException(500, ksefDbErrorForUser(DolibarrApiAccess::$user, 'KSEF_DbErrorGeneric', ''), array('status' => 'RECORD_FAILED'));
+        }
+        if (!empty($result['needs_certificate'])) {
+            throw new RestException(422, $msg, array('status' => 'NEEDS_CERTIFICATE', 'missing_items' => $result['missing_items'] ?? null));
+        }
+        if (($result['error_code'] ?? '') === 'OFFLINE_REFUSED') {
+            throw new RestException(409, $msg, array('status' => 'OFFLINE_REFUSED', 'reason' => $result['refusal'] ?? null));
+        }
+        if (!empty($result['rejected_offline'])) {
+            throw new RestException(422, $msg, array('status' => 'REJECTED', 'ksef_code' => ctype_digit($errorCode) ? (int) $errorCode : null,
+                'submission_id' => isset($result['submission_id']) ? (int) $result['submission_id'] : null, 'next' => 'technical_correction'));
+        }
+        if ($errorCode === 'NOT_RETRYABLE') {
+            throw new RestException(409, $msg, array('status' => 'NOT_RETRYABLE'));
+        }
+        if ($status === 'ERROR') {
+            if (($result['error_code'] ?? '') === 'NO_SUBMISSION') {
+                throw new RestException(404, 'No submission found for invoice');
+            }
+            throw new RestException(500, $msg);
+        }
+        // transport wins
+        if (($result['failure_kind'] ?? '') === 'transport') {
+            throw new RestException(503, $msg, array('status' => 'FAILED', 'ksef_code' => ctype_digit($errorCode) ? (int) $errorCode : null,
+                'submission_id' => isset($result['submission_id']) ? (int) $result['submission_id'] : null, 'can_use_offline' => !empty($result['can_use_offline'])));
+        }
+        if (ctype_digit($errorCode) || ($result['failure_kind'] ?? '') === 'local') {
+            throw new RestException(422, $msg, array('status' => 'FAILED', 'ksef_code' => ctype_digit($errorCode) ? (int) $errorCode : null, 'submission_id' => $result['submission_id'] ?? null));
+        }
+        throw new RestException(503, $msg, array('status' => 'FAILED', 'submission_id' => $result['submission_id'] ?? null));
+    }
+
+    /**
+     * @brief Fetch readable invoice
+     * @param  int     $invoice_id  Invoice id
+     * @return Facture
+     * @throws RestException
      */
     private function checkFactureAccess($invoice_id)
     {
@@ -1877,11 +2422,61 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Check KSeF write permission
+     * @brief Invoice read right
      * @return void
      * @throws RestException 403
-     * @called_by All public POST/DELETE endpoints
-     * @calls loadKsefClasses()
+     */
+    private function checkInvoiceReadRight()
+    {
+        if (!DolibarrApiAccess::$user->hasRight('facture', 'lire')) {
+            throw new RestException(403, 'Not enough permissions to read invoices (facture/lire)');
+        }
+    }
+
+    /**
+     * @brief Readable sales row
+     * @param int $id Sales row id
+     * @return KsefSales
+     * @throws RestException
+     */
+    private function fetchSalesForUser($id)
+    {
+        $this->checkKsefReadPermission();
+        $this->checkInvoiceReadRight();
+        dol_include_once('/ksef/class/ksef_sales.class.php');
+        $row = new KsefSales($this->db);
+        if ($row->fetch((int) $id) <= 0) {
+            throw new RestException(404, 'Sales invoice not found');
+        }
+        if (!ksefUserCanReadSales(DolibarrApiAccess::$user, $row)) {
+            throw new RestException(404, 'Sales invoice not found');
+        }
+        return $row;
+    }
+
+    /**
+     * @brief Format sales row
+     * @param KsefSales $row
+     * @return array
+     */
+    private function formatSales($row)
+    {
+        $data = $this->formatIncoming($row);
+        unset($data['fk_facture_fourn']);
+        $status = $row->import_status === KsefSales::STATUS_FETCH_ERROR ? KsefSales::STATUS_FETCH_ERROR
+            : ($row->import_status === KsefSales::STATUS_SKIPPED ? KsefSales::LINK_SKIPPED : ((string) $row->link_status !== '' ? $row->link_status : KsefSales::LINK_IMPORTABLE));
+        $data['fk_facture'] = $row->fk_facture ? (int) $row->fk_facture : null;
+        $data['invoice_hash'] = $row->invoice_hash;
+        $data['link_status'] = $status;
+        $data['link_candidate'] = $row->link_candidate ? (int) $row->link_candidate : null;
+        $data['link_note'] = $row->link_note;
+        return $data;
+    }
+
+    /**
+     * @brief Check write permission
+     * @return void
+     * @throws RestException 403
      */
     private function checkKsefWritePermission()
     {
@@ -1895,19 +2490,34 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Format submission for output
-     * @param $sub Submission object
-     * @param $full Include large blobs
-     * @return array Formatted data
-     * @called_by getSubmissions(), getSubmission(), getSubmissionByInvoice()
+     * @brief Check send right
+     * @return void
+     * @throws RestException 403
+     */
+    private function checkSendPermission()
+    {
+        $this->checkKsefWritePermission();
+        if (!ksefUserCan(DolibarrApiAccess::$user, 'send')) {
+            throw new RestException(403, 'Not enough permissions to send to KSeF (ksef write and facture creer)');
+        }
+    }
+
+    /**
+     * @brief Format submission
+     * @param $sub
+     * @param $full Include blobs
+     * @return array
      */
     private function formatSubmission($sub, $full = false)
     {
         $data = array(
             'id'                    => (int)$sub->rowid,
+            'invoice_id'            => (int)$sub->fk_facture,
             'fk_facture'            => (int)$sub->fk_facture,
             'ksef_reference'        => $sub->ksef_reference,
             'ksef_number'           => $sub->ksef_number,
+            'ksef_session_reference' => $sub->getSessionReference(),
+            'source'                => $sub->source,
             'invoice_hash'          => $sub->invoice_hash,
             'status'                => $sub->status,
             'environment'           => $sub->environment,
@@ -1924,6 +2534,12 @@ class KsefApi extends DolibarrApi
             'fa3_creation_date'     => $sub->fa3_creation_date,
             'can_retry'             => $sub->canRetry(),
         );
+        global $langs;
+        $langs->load('ksef@ksef');
+        $shown = (string) ksefDisplayStatus($sub);
+        $data['display_status'] = $shown;
+        $data['display_status_key'] = 'KSEF_STATUS_' . $shown;
+        $data['display_status_label'] = $langs->transnoentitiesnoconv('KSEF_STATUS_' . $shown);
 
         if (!$sub->canRetry()) {
             $data['no_retry_reason'] = $sub->getNoRetryReason();
@@ -1946,10 +2562,9 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief Format KsefIncoming for API output
-     * @param $inc Incoming invoice object
-     * @return array Formatted data
-     * @called_by getIncoming(), getIncomingById()
+     * @brief Format incoming
+     * @param $inc
+     * @return array
      */
     private function formatIncoming($inc)
     {
@@ -1991,11 +2606,10 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief GUS REGON lookup by NIP
-     * @param  string $nip  NIP to look up {@from path}
-     * @param  string $env  Environment, TEST or PROD; defaults to KSEF_GUS_ENV (TEST) when empty {@from query}
-     * @return array Company data from GUS REGON, including an env key (TEST or PROD)
-     *
+     * @brief GUS NIP lookup
+     * @param  string $nip  NIP {@from path}
+     * @param  string $env  TEST or PROD {@from query}
+     * @return array
      * @url GET /gus/{nip}
      * @throws RestException 400, 403, 404, 503
      */
@@ -2035,21 +2649,20 @@ class KsefApi extends DolibarrApi
     }
 
     /**
-     * @brief KSeF API URL for environment
-     * @param $environment Environment name
-     * @return string API URL
-     * @called_by testConnection()
+     * @brief KSeF API URL
+     * @param $environment
+     * @return string
      */
     private function getApiUrl($environment)
     {
         switch (strtoupper($environment)) {
             case 'PRODUCTION':
-                return KsefClient::API_PROD;
+                return ksefEndpointOverride('KSEF', KsefClient::API_PROD);
             case 'DEMO':
-                return KsefClient::API_DEMO;
+                return ksefEndpointOverride('KSEF', KsefClient::API_DEMO);
             case 'TEST':
             default:
-                return KsefClient::API_TEST;
+                return ksefEndpointOverride('KSEF', KsefClient::API_TEST);
         }
     }
 }

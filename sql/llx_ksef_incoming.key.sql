@@ -13,7 +13,6 @@
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
 -- Unique Constraints
 ALTER TABLE llx_ksef_incoming ADD UNIQUE INDEX uk_ksef_incoming_ksef_number (ksef_number);
 

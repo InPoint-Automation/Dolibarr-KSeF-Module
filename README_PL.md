@@ -13,21 +13,30 @@ Kompletna integracja e-fakturowania KSeF (Krajowy System e-Faktur) dla Dolibarr.
 ## Funkcje
 
 - Generowanie, podpisywanie i przesyłanie faktur FA(3) XML do KSeF (tryb online i offline)
-- Faktury korygujące (KOR) ze śledzeniem łańcucha korekt i rozliczeniem płatności
+- Faktury korygujące (KOR) do faktur VAT, zaliczkowych i rozliczeniowych, ze śledzeniem łańcucha korekt i rozliczeniem płatności
+- Faktury zaliczkowe i rozliczeniowe (końcowe), także z zamówień
 - Pobieranie, synchronizacja i import faktur przychodzących z dopasowaniem dostawców i produktów
 - Import zbiorczy z automatycznym tworzeniem dostawców i produktów
+- Synchronizacja faktur sprzedaży z KSeF, porównanie z Dolibarr i import brakujących
 - Monitoring systemu KSeF przez API Latarnia/Lighthouse z ostrzeżeniami o awariach
 - Integracja kursów walut NBP dla faktur walutowych
 - Wizualizacje PDF faktur w stylu KSeF dla faktur wychodzących i przychodzących
 - Automatyczny kod QR na fakturach PDF (online + offline)
 - Obsługa zwolnień podatkowych z konfigurowalną podstawą prawną
+- Oznaczenia grupy VAT (GV) i JST, z członkiem grupy jako podmiotem trzecim
 - Konfigurowalne notatki, pola dodatkowe oraz numery zamówień/umów w FA(3) XML
 - Uwierzytelnianie per środowisko (Test/Demo/Produkcja) tokenem lub certyfikatem
-- Wyszukiwanie firm w systemie GUS/REGON na podstawie numeru NIP (wymagany klucz API GUS – instrukcje w sekcji „Jak korzystać”)
+- Wyszukiwanie firm w systemie GUS/REGON na podstawie numeru NIP (wymagany klucz API GUS, instrukcje w sekcji „Jak używać”)
+- Import planu kont (CSV lub JPK_KR_PD) i księgowanie różnicy przy zamykaniu faktur opłaconych częściowo (np. opłata bankowa, różnica kursowa)
 - Endpointy REST API
 - Wykluczenie kontrahentów z KSeF (np. klienci B2C)
-- Wbudowana dokumentacja "Jak używać"
+- Wbudowana dokumentacja „Jak używać”, przewodniki krok po kroku i lista kontrolna konfiguracji
+- Kontrola bazy danych z naprawą na zakładce „O module”
 - Zaplanowane zadania do sprawdzania statusu, synchronizacji przychodzących, ponawiania offline i monitoringu KSeF
+
+<p align="center" width="100%">
+<img alt="Wysyłka faktury do KSeF" src="./img/readme/pl/SendLoop.webp" width="100%" />
+</p>
 
 ## Dokumentacja
 Pełna dokumentacja modułu znajduje się w zakładce "Jak używać". Przygotowaliśmy jednak również bardziej szczegółową dokumentację ze zrzutami ekranów, dostępną na naszej stronie internetowej w języku angielskim i polskim. Jeśli napotkasz problemy lub uważasz, że czegoś brakuje, daj nam znać, chętnie to uzupełnimy!
@@ -38,8 +47,8 @@ https://inpointautomation.com/pl/content/modul-ksef-dla-dolibarr/
 
 ### Wymagania systemowe
 
-- Dolibarr: Przetestowano i działa na v22 i nowszych
-- PHP: 7.4 lub nowsza
+- Dolibarr: 22.0 lub nowszy (przetestowano na v22 i nowszych)
+- PHP: 8.0 lub nowsza
 - Rozszerzenia PHP:
     - `OpenSSL`
     - `cURL`

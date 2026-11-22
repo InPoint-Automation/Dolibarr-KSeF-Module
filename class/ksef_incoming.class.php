@@ -18,18 +18,20 @@
 /**
  * \file    ksef/class/ksef_incoming.class.php
  * \ingroup ksef
- * \brief   KSeF Incoming Invoice DAO
+ * \brief   Incoming invoice DAO
  */
 
 require_once DOL_DOCUMENT_ROOT . '/core/class/commonobject.class.php';
 dol_include_once('/ksef/class/fa3_parser.class.php');
+dol_include_once('/ksef/lib/ksef.lib.php');
 
 class KsefIncoming extends CommonObject
 {
     public $element = 'ksef_incoming';
     public $table_element = 'ksef_incoming';
+    // core 22 lacks
+    public $warnings = array();
 
-    // Database fields
     public $rowid;
     public $ksef_number;
     public $seller_nip;
@@ -68,27 +70,56 @@ class KsefIncoming extends CommonObject
     public $import_status;
     public $import_date;
     public $import_error;
+    public $created_product_ref = '';
     public $entity;
     public $picto = 'supplier_invoice';
+    public $error_code = '';
+    public $kept_count = 0;
+    public $validated = false;
+    public $deposit_socid = 0;
+    public $korekta_cited = 0;
+    public $korekta_linked = array();
 
-    // Status
+    // KsefSales overrides these
+    protected $linkColumn = 'fk_facture_fourn';
+    protected $triggerPrefix = 'KSEF_INCOMING';
+    protected $productRefPrefix = 'KSEF-';
+    protected $cardPage = '/ksef/incoming_card.php';
+    protected $cardLabel = 'KSEF_IncomingInvoice';
+
     const STATUS_NEW = 'NEW';
     const STATUS_IMPORTED = 'IMPORTED';
     const STATUS_ERROR = 'ERROR';
+    const STATUS_SKIPPED = 'SKIPPED';
+    const STATUS_FETCH_ERROR = 'FETCH_ERROR';
+    const UNSUPPORTED_FORM_PREFIX = 'unsupported_form:';
+    // translated on display
+    const FETCH_ERROR_MISSING_FILE = 'Listed in the package metadata but no XML file in the package';
+    const FETCH_ERROR_DAMAGED_FILE = 'XML file damaged or empty in the package';
+    const FETCH_ERROR_NOT_STORED = 'KSEF_NOT_STORED';
 
+    // REST sort whitelist
+    const SORT_FIELDS = array(
+        'i.invoice_number', 'i.invoice_type', 'i.seller_name', 'i.seller_nip',
+        'i.import_status', 'i.invoice_date', 'i.total_gross', 'i.fetch_date', 'i.rowid', 'i.ksef_number',
+    );
+
+    /**
+     * @brief Constructor
+     * @param DoliDB $db Database handler
+     */
     public function __construct($db)
     {
         $this->db = $db;
         $this->import_status = self::STATUS_NEW;
     }
 
-
     /**
      * @brief Safe strtotime
-     * @param string $dateStr Date string
-     * @return int|null Unix timestamp or null
+     * @param string $dateStr
+     * @return int|null
      */
-    private static function safeStrtotime($dateStr)
+    protected static function safeStrtotime($dateStr)
     {
         if (empty($dateStr)) return null;
         $ts = strtotime($dateStr);
@@ -99,13 +130,61 @@ class KsefIncoming extends CommonObject
         return $ts;
     }
 
+    /**
+     * @brief Earliest due date
+     * @param string $rawXml FA(3) XML
+     * @return int|null
+     */
+    public static function earliestDueDate($rawXml)
+    {
+        if (empty($rawXml)) {
+            return null;
+        }
+        $dom = new DOMDocument();
+        $prev = libxml_use_internal_errors(true);
+        $loaded = $dom->loadXML($rawXml, LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($prev);
+        if (!$loaded) {
+            return null;
+        }
+        $xpath = new DOMXPath($dom);
+        $nodes = $xpath->query("/*[local-name()='Faktura']/*[local-name()='Fa']/*[local-name()='Platnosc']"
+            . "/*[local-name()='TerminPlatnosci']/*[local-name()='Termin']");
+        $earliest = null;
+        foreach ($nodes ?: array() as $node) {
+            $ts = self::safeStrtotime(trim($node->textContent));
+            if ($ts !== null && ($earliest === null || $ts < $earliest)) {
+                $earliest = $ts;
+            }
+        }
+        return $earliest;
+    }
 
     /**
-     * @brief Create new incoming invoice record
+     * @brief Subclass extra columns
+     * @return array Escaped values by column
+     */
+    protected function insertExtraColumns()
+    {
+        return array();
+    }
+
+    /**
+     * @brief Read subclass columns
+     * @param object $obj DB row
+     * @return void
+     */
+    protected function fetchExtraColumns($obj)
+    {
+    }
+
+    /**
+     * @brief Create record
      * @param $user User object
-     * @param $notrigger Skip triggers flag
-     * @return int Record ID or negative on error
-     * @called_by createFromParsed()
+     * @param $notrigger
+     * @param $notransaction Caller owns transaction
+     * @return int Id, <0 on error
      */
     public function create($user, $notrigger = 0, $notransaction = false)
     {
@@ -159,6 +238,11 @@ class KsefIncoming extends CommonObject
         $sql .= "fetch_date,";
         $sql .= "environment,";
         $sql .= "import_status,";
+        $sql .= "import_error,";
+        $extra = $this->insertExtraColumns();
+        foreach ($extra as $col => $val) {
+            $sql .= $col . ",";
+        }
         $sql .= "entity";
         $sql .= ")";
         $sql .= " VALUES (";
@@ -195,10 +279,15 @@ class KsefIncoming extends CommonObject
         $sql .= " " . (int)$this->fetch_date . ",";
         $sql .= " " . ($this->environment ? "'" . $this->db->escape($this->environment) . "'" : "'TEST'") . ",";
         $sql .= " '" . $this->db->escape($this->import_status ?: self::STATUS_NEW) . "',";
+        $sql .= " " . ($this->import_error ? "'" . $this->db->escape($this->import_error) . "'" : "NULL") . ",";
+        foreach ($extra as $col => $val) {
+            $sql .= " " . $val . ",";
+        }
         $sql .= " " . (int)$this->entity;
         $sql .= ")";
 
         dol_syslog("KsefIncoming::create", LOG_DEBUG);
+        $savepoint = ksefDbWriteSavepoint($this->db, 'ksef_incoming_write');
         $resql = $this->db->query($sql);
 
         if (!$resql) {
@@ -210,9 +299,21 @@ class KsefIncoming extends CommonObject
         if (!$error) {
             $this->rowid = $this->db->last_insert_id(MAIN_DB_PREFIX . $this->table_element);
             $this->id = $this->rowid;
+            $cut = ksefDbRejectTruncated($this->db, $savepoint, get_class($this) . '::create ' . $this->ksef_number);
+            if ($cut !== '') {
+                $error++;
+                $this->errors[] = $cut;
+                if ($savepoint === '') {
+                    $this->db->query("DELETE FROM " . MAIN_DB_PREFIX . $this->table_element . " WHERE rowid = " . (int) $this->rowid);
+                }
+                $this->rowid = 0;
+                $this->id = 0;
+            }
+        }
 
+        if (!$error) {
             if (!$notrigger) {
-                $result = $this->call_trigger('KSEF_INCOMING_CREATE', $user);
+                $result = $this->call_trigger($this->triggerPrefix . '_CREATE', $user);
                 if ($result < 0) {
                     $error++;
                 }
@@ -236,13 +337,62 @@ class KsefIncoming extends CommonObject
         }
     }
 
+    /**
+     * @brief Hydrate from row
+     * @param object $obj SELECT * row
+     * @return void
+     */
+    protected function setFromRow($obj)
+    {
+        $this->rowid = $obj->rowid;
+        $this->id = $obj->rowid;
+        $this->ksef_number = $obj->ksef_number;
+        $this->seller_nip = $obj->seller_nip;
+        $this->seller_vat_id = $obj->seller_vat_id ?? null;
+        $this->seller_name = $obj->seller_name;
+        $this->seller_country = $obj->seller_country;
+        $this->seller_address = $obj->seller_address;
+        $this->buyer_nip = $obj->buyer_nip;
+        $this->buyer_name = $obj->buyer_name;
+        $this->invoice_number = $obj->invoice_number;
+        $this->invoice_type = $obj->invoice_type;
+        $this->invoice_date = $obj->invoice_date;
+        $this->sale_date = $obj->sale_date;
+        $this->currency = $obj->currency;
+        $this->total_net = $obj->total_net;
+        $this->total_vat = $obj->total_vat;
+        $this->total_gross = $obj->total_gross;
+        $this->vat_summary = $obj->vat_summary;
+        $this->line_items = $obj->line_items;
+        $this->payment_due_date = $obj->payment_due_date;
+        $this->payment_method = $obj->payment_method;
+        $this->bank_account = $obj->bank_account;
+        $this->payment_status = $obj->payment_status ?? null;
+        $this->payment_date = $obj->payment_date ?? null;
+        $this->corrected_ksef_number = $obj->corrected_ksef_number;
+        $this->corrected_invoice_number = $obj->corrected_invoice_number;
+        $this->corrected_invoice_date = $obj->corrected_invoice_date;
+        $this->correction_data = $obj->correction_data;
+        $this->fa3_xml = $obj->fa3_xml;
+        $this->fa3_creation_date = $obj->fa3_creation_date;
+        $this->fa3_system_info = $obj->fa3_system_info;
+        $this->fetch_date = $obj->fetch_date;
+        $this->environment = $obj->environment;
+        $link = $this->linkColumn;
+        $this->$link = $obj->$link;
+        $this->fk_credit_note = $obj->fk_credit_note ?? null;
+        $this->import_status = $obj->import_status;
+        $this->import_date = $obj->import_date;
+        $this->import_error = $obj->import_error;
+        $this->entity = $obj->entity;
+        $this->fetchExtraColumns($obj);
+    }
 
     /**
-     * @brief Fetch record by ID
-     * @param $id Record ID
-     * @param $ksef_number fetch by KSeF number
-     * @return int Positive if success, negative if error, 0 if not found
-     * @called_by fetchAll(), incoming_card.php
+     * @brief Fetch by id/number
+     * @param $id
+     * @param $ksef_number
+     * @return int 1 found, 0 none, -1 error
      */
     public function fetch($id, $ksef_number = '')
     {
@@ -262,48 +412,7 @@ class KsefIncoming extends CommonObject
 
         if ($resql) {
             if ($this->db->num_rows($resql) > 0) {
-                $obj = $this->db->fetch_object($resql);
-
-                $this->rowid = $obj->rowid;
-                $this->id = $obj->rowid;
-                $this->ksef_number = $obj->ksef_number;
-                $this->seller_nip = $obj->seller_nip;
-                $this->seller_vat_id = $obj->seller_vat_id ?? null;
-                $this->seller_name = $obj->seller_name;
-                $this->seller_country = $obj->seller_country;
-                $this->seller_address = $obj->seller_address;
-                $this->buyer_nip = $obj->buyer_nip;
-                $this->buyer_name = $obj->buyer_name;
-                $this->invoice_number = $obj->invoice_number;
-                $this->invoice_type = $obj->invoice_type;
-                $this->invoice_date = $obj->invoice_date;
-                $this->sale_date = $obj->sale_date;
-                $this->currency = $obj->currency;
-                $this->total_net = $obj->total_net;
-                $this->total_vat = $obj->total_vat;
-                $this->total_gross = $obj->total_gross;
-                $this->vat_summary = $obj->vat_summary;
-                $this->line_items = $obj->line_items;
-                $this->payment_due_date = $obj->payment_due_date;
-                $this->payment_method = $obj->payment_method;
-                $this->bank_account = $obj->bank_account;
-                $this->payment_status = $obj->payment_status ?? null;
-                $this->payment_date = $obj->payment_date ?? null;
-                $this->corrected_ksef_number = $obj->corrected_ksef_number;
-                $this->corrected_invoice_number = $obj->corrected_invoice_number;
-                $this->corrected_invoice_date = $obj->corrected_invoice_date;
-                $this->correction_data = $obj->correction_data;
-                $this->fa3_xml = $obj->fa3_xml;
-                $this->fa3_creation_date = $obj->fa3_creation_date;
-                $this->fa3_system_info = $obj->fa3_system_info;
-                $this->fetch_date = $obj->fetch_date;
-                $this->environment = $obj->environment;
-                $this->fk_facture_fourn = $obj->fk_facture_fourn;
-                $this->fk_credit_note = $obj->fk_credit_note ?? null;
-                $this->import_status = $obj->import_status;
-                $this->import_date = $obj->import_date;
-                $this->import_error = $obj->import_error;
-                $this->entity = $obj->entity;
+                $this->setFromRow($this->db->fetch_object($resql));
 
                 $this->db->free($resql);
                 return 1;
@@ -317,13 +426,11 @@ class KsefIncoming extends CommonObject
         }
     }
 
-
     /**
      * @brief Update record
      * @param $user User object
-     * @param $notrigger Skip triggers flag
-     * @return int Positive if success, negative if error
-     * @called_by incoming_card.php import action
+     * @param $notrigger
+     * @return int <0 on error
      */
     public function update($user, $notrigger = 0)
     {
@@ -335,20 +442,32 @@ class KsefIncoming extends CommonObject
         $sql .= "import_status = '" . $this->db->escape($this->import_status) . "',";
         $sql .= "import_date = " . ($this->import_date ? (int)$this->import_date : "NULL") . ",";
         $sql .= "import_error = " . ($this->import_error ? "'" . $this->db->escape($this->import_error) . "'" : "NULL") . ",";
-        $sql .= "fk_facture_fourn = " . ($this->fk_facture_fourn ? (int)$this->fk_facture_fourn : "NULL") . ",";
+        $link = $this->linkColumn;
+        $sql .= $link . " = " . ($this->$link ? (int)$this->$link : "NULL") . ",";
         $sql .= "fk_credit_note = " . ($this->fk_credit_note ? (int)$this->fk_credit_note : "NULL");
+        foreach ($this->insertExtraColumns() as $col => $val) {
+            $sql .= ", " . $col . " = " . $val;
+        }
         $sql .= " WHERE rowid = " . (int)$this->rowid;
 
         dol_syslog("KsefIncoming::update", LOG_DEBUG);
+        $savepoint = ksefDbWriteSavepoint($this->db, 'ksef_incoming_write');
         $resql = $this->db->query($sql);
 
         if (!$resql) {
             $error++;
             $this->errors[] = "Error " . $this->db->lasterror();
+        } else {
+            $cut = ksefDbRejectTruncated($this->db, $savepoint, get_class($this) . '::update row ' . (int) $this->rowid);
+            if ($cut !== '') {
+                $error++;
+                $this->errors[] = $cut;
+                $this->error = $cut;
+            }
         }
 
         if (!$error && !$notrigger) {
-            $result = $this->call_trigger('KSEF_INCOMING_MODIFY', $user);
+            $result = $this->call_trigger($this->triggerPrefix . '_MODIFY', $user);
             if ($result < 0) {
                 $error++;
             }
@@ -363,22 +482,68 @@ class KsefIncoming extends CommonObject
         }
     }
 
+    /**
+     * @brief Check deletable
+     * @return bool
+     */
+    public function canDelete()
+    {
+        global $langs;
+
+        if ($this->import_status === self::STATUS_IMPORTED || $this->linkedSupplierDocumentExists()) {
+            $langs->load('ksef@ksef');
+            $this->error = $langs->trans('KSEF_ErrorDeleteImportedIncoming');
+            return false;
+        }
+        return true;
+    }
 
     /**
-     * @brief Delete record
+     * @brief Linked document exists
+     * @return bool
+     */
+    protected function linkedSupplierDocumentExists()
+    {
+        if ($this->linkColumn !== 'fk_facture_fourn') {
+            return false;
+        }
+        $ids = array();
+        foreach (array('fk_facture_fourn', 'fk_credit_note') as $col) {
+            if (!empty($this->$col) && (int) $this->$col > 0) {
+                $ids[] = (int) $this->$col;
+            }
+        }
+        if (!$ids) {
+            return false;
+        }
+        $sql = "SELECT COUNT(*) AS n FROM " . MAIN_DB_PREFIX . "facture_fourn WHERE rowid IN (" . implode(',', $ids) . ")";
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            // keep the row
+            return true;
+        }
+        $obj = $this->db->fetch_object($resql);
+        return $obj && (int) $obj->n > 0;
+    }
+
+    /**
+     * @brief Delete if allowed
      * @param $user User object
-     * @param $notrigger Skip triggers flag
-     * @return int Positive if success, negative if error
-     * @called_by incoming_card.php delete action
+     * @param $notrigger
+     * @return int -2 refused, <0 error
      */
     public function delete($user, $notrigger = 0)
     {
+        if (!$this->canDelete()) {
+            return -2;
+        }
+
         $error = 0;
 
         $this->db->begin();
 
         if (!$notrigger) {
-            $result = $this->call_trigger('KSEF_INCOMING_DELETE', $user);
+            $result = $this->call_trigger($this->triggerPrefix . '_DELETE', $user);
             if ($result < 0) {
                 $error++;
             }
@@ -406,26 +571,36 @@ class KsefIncoming extends CommonObject
         }
     }
 
-
     /**
-     * @brief Delete all records
+     * @brief Delete all deletable
      * @param $user User object
-     * @param $environment Optional: only delete for specific environment
-     * @return int Number of deleted records or -1 on error
-     * @called_by incoming_list.php mass action
+     * @param $environment Filter
+     * @return int Deleted count, -1 error
      */
     public function deleteAll($user, $environment = '')
     {
         global $conf;
 
+        $this->kept_count = 0;
         $this->db->begin();
 
-        $sql = "DELETE FROM " . MAIN_DB_PREFIX . $this->table_element;
-        $sql .= " WHERE entity IN (" . getEntity($this->element) . ")";
-
+        $where = " WHERE entity IN (" . getEntity($this->element) . ")";
         if (!empty($environment)) {
-            $sql .= " AND environment = '" . $this->db->escape($environment) . "'";
+            $where .= " AND environment = '" . $this->db->escape($environment) . "'";
         }
+        if ($this->linkColumn === 'fk_facture_fourn') {
+            $live = "SELECT ff.rowid FROM " . MAIN_DB_PREFIX . "facture_fourn AS ff";
+            $where .= " AND import_status <> '" . self::STATUS_IMPORTED . "'";
+            $where .= " AND (fk_facture_fourn IS NULL OR fk_facture_fourn NOT IN (" . $live . "))";
+            $where .= " AND (fk_credit_note IS NULL OR fk_credit_note NOT IN (" . $live . "))";
+            $resql = $this->db->query("SELECT COUNT(*) AS n FROM " . MAIN_DB_PREFIX . $this->table_element . " WHERE entity IN (" . getEntity($this->element) . ")"
+                . (!empty($environment) ? " AND environment = '" . $this->db->escape($environment) . "'" : ''));
+            if ($resql && ($o = $this->db->fetch_object($resql))) {
+                $this->kept_count = (int) $o->n;
+            }
+        }
+
+        $sql = "DELETE FROM " . MAIN_DB_PREFIX . $this->table_element . $where;
 
         dol_syslog("KsefIncoming::deleteAll", LOG_DEBUG);
         $resql = $this->db->query($sql);
@@ -437,18 +612,17 @@ class KsefIncoming extends CommonObject
         }
 
         $deleted = $this->db->affected_rows($resql);
+        $this->kept_count = max(0, $this->kept_count - $deleted);
         $this->db->commit();
 
-        dol_syslog("KsefIncoming::deleteAll deleted $deleted records", LOG_INFO);
+        dol_syslog("KsefIncoming::deleteAll deleted $deleted records, kept " . $this->kept_count, LOG_INFO);
         return $deleted;
     }
 
-
     /**
-     * @brief Check if record exists by KSeF number
-     * @param $ksef_number KsefService number
-     * @return bool True if exists
-     * @called_by KSEF::syncIncomingInvoices()
+     * @brief Exists by number
+     * @param $ksef_number
+     * @return bool
      */
     public function existsByKsefNumber($ksef_number)
     {
@@ -465,64 +639,63 @@ class KsefIncoming extends CommonObject
         return false;
     }
 
-
     /**
-     * @brief which KSeF numbers already in the database
-     * @param array $ksefNumbers Array of KSeF number strings to check
-     * @param string $environment Environment (TEST/DEMO/PRODUCTION)
-     * @return array Array of KSeF number strings that already exist
+     * @brief Stored environments
+     * @param array $ksefNumbers
+     * @return array ksef_number => environment
      */
-    public function getExistingKsefNumbers(array $ksefNumbers, $environment)
+    public function getStoredEnvironments($ksefNumbers)
     {
+        $out = array();
         if (empty($ksefNumbers)) {
-            return array();
+            return $out;
         }
-
         $escaped = array();
         foreach ($ksefNumbers as $num) {
             $escaped[] = "'" . $this->db->escape($num) . "'";
         }
-
-        $sql = "SELECT ksef_number FROM " . MAIN_DB_PREFIX . $this->table_element;
+        $sql = "SELECT ksef_number, environment FROM " . MAIN_DB_PREFIX . $this->table_element;
         $sql .= " WHERE ksef_number IN (" . implode(',', $escaped) . ")";
-        $sql .= " AND environment = '" . $this->db->escape($environment) . "'";
-        $sql .= " AND entity IN (" . getEntity($this->element) . ")";
-
         $resql = $this->db->query($sql);
         if ($resql) {
-            $existing = array();
             while ($obj = $this->db->fetch_object($resql)) {
-                $existing[] = $obj->ksef_number;
+                $out[$obj->ksef_number] = (string) $obj->environment;
             }
             $this->db->free($resql);
-            return $existing;
         }
-        return array();
+        return $out;
     }
 
-
     /**
-     * @brief Create from parsed FA(3) data
-     * @param $parsedData Parsed data from FA3Parser
-     * @param $rawXml Raw XML string
-     * @param $ksefNumber KsefService reference number
-     * @param $environment Environment (TEST/DEMO/PRODUCTION)
+     * @brief Create from parsed
+     * @param $parsedData FA3Parser output
+     * @param $rawXml
+     * @param $ksefNumber
+     * @param $environment TEST/DEMO/PRODUCTION
      * @param $user User object
-     * @return int Record ID or negative on error
-     * @called_by KSEF::syncIncomingInvoices()
-     * @calls create()
+     * @param $notransaction Caller owns transaction
+     * @return int Id, <0 on error
      */
     public function createFromParsed($parsedData, $rawXml, $ksefNumber, $environment, $user, $notransaction = false)
     {
         $this->ksef_number = $ksefNumber;
+        $this->assignParsed($parsedData, $rawXml);
+        $this->fetch_date = dol_now();
+        $this->environment = $environment;
+        $this->import_status = self::STATUS_NEW;
+
+        return $this->create($user, 0, $notransaction);
+    }
+
+    /**
+     * @brief Fill from parsed
+     * @param array $parsedData FA3Parser output
+     * @param string $rawXml
+     * @return void
+     */
+    protected function assignParsed($parsedData, $rawXml)
+    {
         $this->seller_nip = $parsedData['seller']['nip'] ?? '';
-        if (!empty($parsedData['seller']['kod_ue']) && !empty($parsedData['seller']['nr_vat_ue'])) {
-            $this->seller_vat_id = $parsedData['seller']['kod_ue'] . $parsedData['seller']['nr_vat_ue'];
-        }
-        // use VAT ID as seller_nip for matching when no NIP present
-        if (empty($this->seller_nip) && !empty($this->seller_vat_id)) {
-            $this->seller_nip = $this->seller_vat_id;
-        }
         $this->seller_name = $parsedData['seller']['name'] ?? '';
         $this->seller_country = $parsedData['seller']['country'] ?? 'PL';
         $this->seller_address = $parsedData['seller']['address'] ?? '';
@@ -539,33 +712,12 @@ class KsefIncoming extends CommonObject
         if (!empty($parsedData['vat_summary'])) {
             $this->vat_summary = json_encode($parsedData['vat_summary']);
         }
-        if (!empty($parsedData['lines'])) {
-            $linesToStore = $parsedData['lines'];
-            // For KOR invoices with before/after states, compute difference lines
-            if (!empty($parsedData['lines_before'])) {
-                $beforeMap = array();
-                foreach ($parsedData['lines_before'] as $bLine) {
-                    $beforeMap[$bLine['line_num']] = $bLine;
-                }
-                foreach ($linesToStore as &$diffLine) {
-                    $lineNum = $diffLine['line_num'];
-                    if (isset($beforeMap[$lineNum])) {
-                        $before = $beforeMap[$lineNum];
-                        $diffLine['net_amount'] = round(($diffLine['net_amount'] ?? 0) - ($before['net_amount'] ?? 0), 2);
-                        $diffLine['unit_price_net'] = round(($diffLine['unit_price_net'] ?? 0) - ($before['unit_price_net'] ?? 0), 4);
-                        if (!is_null($diffLine['gross_amount'] ?? null) && !is_null($before['gross_amount'] ?? null)) {
-                            $diffLine['gross_amount'] = round($diffLine['gross_amount'] - $before['gross_amount'], 2);
-                        }
-                        if (!is_null($diffLine['unit_price_gross'] ?? null) && !is_null($before['unit_price_gross'] ?? null)) {
-                            $diffLine['unit_price_gross'] = round($diffLine['unit_price_gross'] - $before['unit_price_gross'], 4);
-                        }
-                    }
-                }
-                unset($diffLine);
-            }
+        $linesToStore = self::storedLineItems($parsedData);
+        if ($linesToStore !== null) {
             $this->line_items = json_encode($linesToStore);
         }
-        $this->payment_due_date = self::safeStrtotime($parsedData['payment']['due_date'] ?? '');
+        $earliestDue = self::earliestDueDate($rawXml);
+        $this->payment_due_date = $earliestDue !== null ? $earliestDue : self::safeStrtotime($parsedData['payment']['due_date'] ?? '');
         $this->payment_method = $parsedData['payment']['method'] ?? null;
         $this->bank_account = $parsedData['payment']['bank_account'] ?? null;
         $this->payment_status = $parsedData['payment']['status'] ?? null;
@@ -580,29 +732,121 @@ class KsefIncoming extends CommonObject
         $this->fa3_xml = $rawXml;
         $this->fa3_creation_date = self::safeStrtotime($parsedData['header']['creation_date'] ?? '');
         $this->fa3_system_info = $parsedData['header']['system_info'] ?? '';
-        $this->fetch_date = dol_now();
-        $this->environment = $environment;
-        $this->import_status = self::STATUS_NEW;
-
-        return $this->create($user, 0, $notransaction);
     }
 
+    /**
+     * @brief Store FETCH_ERROR row
+     * @param string $ksefNumber
+     * @param string|null $rawXml Null if missing
+     * @param string $environment
+     * @param string $message Reason
+     * @param array $meta Package metadata
+     * @param User $user
+     * @return int Id, 0 exists, <0 error
+     */
+    public function createFailed($ksefNumber, $rawXml, $environment, $message, $meta, $user)
+    {
+        $meta = is_array($meta) ? $meta : array();
+        $this->ksef_number = $ksefNumber;
+        $this->seller_nip = (string) ($meta['seller']['nip'] ?? '');
+        $this->seller_name = (string) ($meta['seller']['name'] ?? '');
+        $this->buyer_nip = (string) ($meta['buyer']['identifier']['value'] ?? '');
+        $this->buyer_name = (string) ($meta['buyer']['name'] ?? '');
+        $this->invoice_number = (string) ($meta['invoiceNumber'] ?? '');
+        $types = array('Vat' => 'VAT', 'Kor' => 'KOR', 'Zal' => 'ZAL', 'Roz' => 'ROZ', 'Upr' => 'UPR', 'KorZal' => 'KOR_ZAL', 'KorRoz' => 'KOR_ROZ', 'VatPef' => 'PEF', 'VatPefSp' => 'PEF', 'KorPef' => 'KOR_PEF');
+        $type = (string) ($meta['invoiceType'] ?? '');
+        $this->invoice_type = isset($types[$type]) ? $types[$type] : (strlen($type) <= 10 && $type !== '' ? $type : '');
+        $this->invoice_date = self::safeStrtotime($meta['issueDate'] ?? '');
+        $this->currency = (string) ($meta['currency'] ?? '') ?: 'PLN';
+        $this->total_net = isset($meta['netAmount']) ? (float) $meta['netAmount'] : null;
+        $this->total_vat = isset($meta['vatAmount']) ? (float) $meta['vatAmount'] : null;
+        $this->total_gross = isset($meta['grossAmount']) ? (float) $meta['grossAmount'] : null;
+        $this->fa3_xml = is_string($rawXml) ? $rawXml : null;
+        $this->fetch_date = dol_now();
+        $this->environment = $environment;
+        $this->import_status = self::STATUS_FETCH_ERROR;
+        $this->import_error = dol_trunc((string) $message, 2000, 'right', 'UTF-8', 1);
+
+        // unique across environments
+        if ($this->existsByKsefNumber($ksefNumber)) {
+            return 0;
+        }
+        $res = $this->create($user, 0, false);
+        if ($res < 0 && $this->db->lasterrno() === 'DB_ERROR_RECORD_ALREADY_EXISTS') {
+            // concurrent worker won
+            return 0;
+        }
+        if ($res < 0) {
+            // 1.4.5 widths
+            dol_syslog(get_class($this) . '::createFailed ' . $ksefNumber . ' stored without XML: ' . $this->db->lasterror(), LOG_WARNING);
+            $widths = array('seller_nip' => 20, 'seller_name' => 255, 'buyer_nip' => 50, 'buyer_name' => 255, 'invoice_number' => 100, 'currency' => 3, 'import_error' => 2000);
+            foreach ($widths as $field => $width) {
+                $this->$field = self::bareText($this->$field, $width);
+            }
+            $this->import_error = self::FETCH_ERROR_NOT_STORED;
+            $this->fa3_xml = null;
+            $this->errors = array();
+            $res = $this->create($user, 0, false);
+            if ($res < 0 && $this->db->lasterrno() === 'DB_ERROR_RECORD_ALREADY_EXISTS') {
+                return 0;
+            }
+        }
+        return $res;
+    }
 
     /**
-     * @brief Check if an invoice type is a correction type
-     * @param string $type Invoice type code
-     * @return bool True for KOR, KOR_ZAL, KOR_ROZ
+     * @brief Bare row text
+     * @param string $text
+     * @param int $width Characters
+     * @return string Valid UTF-8, no 4-byte chars
+     */
+    private static function bareText($text, $width)
+    {
+        $text = (string) preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', mb_convert_encoding((string) $text, 'UTF-8', 'UTF-8'));
+        return dol_trunc($text, $width, 'right', 'UTF-8', 1);
+    }
+
+    /**
+     * @brief Fetch error text
+     * @return string Not escaped
+     */
+    public function getFetchErrorText()
+    {
+        global $langs;
+        $langs->load("ksef@ksef");
+        $err = (string) $this->import_error;
+        if (strpos($err, self::UNSUPPORTED_FORM_PREFIX) === 0) {
+            return $langs->transnoentitiesnoconv('KSEF_FetchErrorUnsupportedForm', substr($err, strlen(self::UNSUPPORTED_FORM_PREFIX)));
+        }
+        if ($err === self::FETCH_ERROR_MISSING_FILE) {
+            return $langs->transnoentitiesnoconv('KSEF_FetchErrorMissingFile');
+        }
+        if ($err === self::FETCH_ERROR_NOT_STORED) {
+            return $langs->transnoentitiesnoconv('KSEF_FetchErrorNotStored');
+        }
+        if ($err === self::FETCH_ERROR_DAMAGED_FILE) {
+            return $langs->transnoentitiesnoconv('KSEF_FetchErrorDamagedFile');
+        }
+        if (strpos($err, 'Failed to parse XML') === 0) {
+            $detail = trim(substr($err, strlen('Failed to parse XML')), ": \t");
+            return $langs->transnoentitiesnoconv('KSEF_FetchErrorParse') . ($detail !== '' ? ': ' . $detail : '');
+        }
+        return $err;
+    }
+
+    /**
+     * @brief Is correction type
+     * @param string $type
+     * @return bool
      */
     public static function isCorrectionType($type)
     {
         return in_array($type, array('KOR', 'KOR_ZAL', 'KOR_ROZ'));
     }
 
-
     /**
-     * @brief matching incoming records and supplier invoices
-     * @return array Array of ['invoice_number', 'invoice_date', 'ksef_number', 'incoming' => KsefIncoming|null, 'supplier_invoice' => FactureFournisseur|null]
-     * @called_by incoming_card.php, incoming_import.php, importToDolibarr()
+     * @brief Resolve cited invoices
+     * @return array
      */
     public function resolveCorrectedInvoices()
     {
@@ -644,7 +888,7 @@ class KsefIncoming extends CommonObject
                 $found = ($lookup->fetch(0, $corrInv['ksef_number']) > 0);
             }
             if (!$found && !empty($corrInv['invoice_number']) && !empty($this->seller_nip)) {
-                $found = ($lookup->fetchBySellerAndInvoice($this->seller_nip, $corrInv['invoice_number']) > 0);
+                $found = ($lookup->fetchBySellerAndInvoice($this->seller_nip, $corrInv['invoice_number'], $this->environment) > 0);
             }
             if ($found) {
                 $entry['incoming'] = $lookup;
@@ -664,8 +908,9 @@ class KsefIncoming extends CommonObject
                 $sql = "SELECT f.rowid FROM " . MAIN_DB_PREFIX . "facture_fourn f";
                 $sql .= " INNER JOIN " . MAIN_DB_PREFIX . "societe s ON f.fk_soc = s.rowid";
                 $sql .= " WHERE f.ref_supplier = '" . $this->db->escape($corrInv['invoice_number']) . "'";
-                $sql .= " AND s.fournisseur = 1";
+                // supplier flag optional
                 $sql .= " AND s.entity IN (" . getEntity('societe') . ")";
+                $sql .= " AND f.entity IN (" . getEntity('supplier_invoice') . ")";
                 $sql .= " AND (" . $matchWhere . ")";
                 $sql .= " LIMIT 1";
                 $resql = $this->db->query($sql);
@@ -683,11 +928,59 @@ class KsefIncoming extends CommonObject
         return $resolved;
     }
 
+    /**
+     * @brief Batch correction source
+     * @param array $batchIds Same-batch rows
+     * @return array
+     */
+    public function checkBatchCorrectionSource($batchIds = array())
+    {
+        global $langs;
+        $out = array('blocked' => false, 'found' => false, 'issues' => array(), 'messages' => array());
+        if (!self::isCorrectionType($this->invoice_type)) {
+            return $out;
+        }
+        $resolved = $this->resolveCorrectedInvoices();
+        if (empty($resolved)) {
+            $out['issues'][] = 'KSEF_BatchCorrectionNoReference';
+        }
+        $batchIds = array_map('intval', (array) $batchIds);
+        $pending = false;
+        foreach ($resolved as $rc) {
+            if (!empty($rc['ksef_number']) && $rc['ksef_number'] === $this->ksef_number) {
+                $out['issues'][] = 'KSEF_BatchCorrectionSelfReference';
+            } elseif (!empty($rc['supplier_invoice'])) {
+                $out['found'] = true;
+            } elseif ($rc['incoming'] && $rc['incoming']->fk_facture_fourn <= 0 && in_array((int) $rc['incoming']->id, $batchIds, true)) {
+                $pending = true;
+            } elseif ($rc['incoming'] && $rc['incoming']->fk_facture_fourn <= 0) {
+                $out['issues'][] = 'KSEF_BatchCorrectionOriginalNotImported';
+            } elseif (!empty($rc['ksef_number']) && !$rc['incoming']) {
+                $out['issues'][] = 'KSEF_BatchCorrectionOriginalNotInSystem';
+            }
+        }
+        if (!$out['found'] && !$pending && empty($out['issues'])) {
+            $byHand = true;
+            foreach ($resolved as $rc) {
+                $byHand = $byHand && empty($rc['ksef_number']) && !$rc['incoming'];
+            }
+            $out['issues'][] = $byHand ? 'KSEF_BatchCorrectionOriginalByHand' : 'KSEF_BatchCorrectionOriginalNotImported';
+        }
+        $why = '';
+        if (empty($out['issues']) && $out['found'] && !is_object($why = $this->resolveKorektaSource())) {
+            $out['issues'][] = 'KSEF_BatchKorektaNotReady';
+        }
+        $out['issues'] = array_values(array_unique($out['issues']));
+        foreach ($out['issues'] as $key) {
+            $out['messages'][] = ($key === 'KSEF_BatchKorektaNotReady' && is_string($why) && $why !== '') ? $why : $langs->transnoentitiesnoconv($key);
+        }
+        $out['blocked'] = !empty($out['issues']);
+        return $out;
+    }
 
     /**
-     * @brief Get correction data as decoded array
-     * @return array|null Correction data with 'reason', 'type', 'corrected_invoices' array, or null
-     * @called_by incoming_card.php
+     * @brief Decoded correction data
+     * @return array|null
      */
     public function getCorrectionData()
     {
@@ -699,19 +992,21 @@ class KsefIncoming extends CommonObject
         return $decoded;
     }
 
-
     /**
-     * @brief Fetch an incoming invoice by seller NIP and invoice number
-     * @param string $sellerNip Seller NIP
-     * @param string $invoiceNumber Invoice number (P_2)
-     * @return int 1 if found, 0 if not, -1 on error
-     * @called_by incoming_card.php
+     * @brief Fetch by seller
+     * @param string $sellerNip
+     * @param string $invoiceNumber P_2
+     * @param string $environment Empty: any
+     * @return int 1 found, 0 none, -1 error
      */
-    public function fetchBySellerAndInvoice($sellerNip, $invoiceNumber)
+    public function fetchBySellerAndInvoice($sellerNip, $invoiceNumber, $environment = '')
     {
         $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . $this->table_element
             . " WHERE seller_nip = '" . $this->db->escape($sellerNip) . "'"
             . " AND invoice_number = '" . $this->db->escape($invoiceNumber) . "'"
+            . " AND entity IN (" . getEntity($this->element) . ")"
+            . ($environment !== '' ? " AND environment = '" . $this->db->escape($environment) . "'" : "")
+            . " ORDER BY rowid DESC"
             . " LIMIT 1";
 
         $resql = $this->db->query($sql);
@@ -727,12 +1022,10 @@ class KsefIncoming extends CommonObject
         return -1;
     }
 
-
     /**
-     * @brief Fetch incoming invoice linked to a supplier invoice
-     * @param int $fk_facture_fourn Supplier invoice ID
-     * @return int >0 if found, 0 if not found, -1 on error
-     * @called_by ActionsKSEF
+     * @brief Fetch by supplier
+     * @param int $fk_facture_fourn
+     * @return int >0 found, 0 none, -1 error
      */
     public function fetchBySupplierInvoice($fk_facture_fourn)
     {
@@ -754,9 +1047,24 @@ class KsefIncoming extends CommonObject
     }
 
     /**
-     * @brief Get line items as array
-     * @return array Line items
-     * @called_by incoming_card.php
+     * @brief Fetch by note
+     * @param int $fkCreditNote
+     * @return int 1 found, 0 none, -1 error
+     */
+    public function fetchByCreditNote($fkCreditNote)
+    {
+        $resql = $this->db->query("SELECT rowid FROM " . MAIN_DB_PREFIX . $this->table_element . " WHERE fk_credit_note = " . (int) $fkCreditNote . " LIMIT 1");
+        if (!$resql) {
+            return -1;
+        }
+        $obj = $this->db->fetch_object($resql);
+        $this->db->free($resql);
+        return $obj ? $this->fetch($obj->rowid) : 0;
+    }
+
+    /**
+     * @brief Decoded line items
+     * @return array
      */
     public function getLineItems()
     {
@@ -766,7 +1074,6 @@ class KsefIncoming extends CommonObject
         $decoded = json_decode($this->line_items, true);
         if (!is_array($decoded)) return array();
 
-        // Calculate unit prices
         foreach ($decoded as &$line) {
             if ($this->isNullOrBlank($line['unit_price_net'] ?? null) && !$this->isNullOrBlank($line['net_amount'] ?? null) && !$this->isNullOrBlank($line['quantity'] ?? null) && $line['quantity'] != 0) {
                 $line['unit_price_net'] = round($line['net_amount'] / $line['quantity'], 4);
@@ -775,7 +1082,6 @@ class KsefIncoming extends CommonObject
                 $line['unit_price_gross'] = round($line['gross_amount'] / $line['quantity'], 4);
             }
 
-            // calculate net from gross
             $vatRate = isset($line['vat_rate']) && is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
             $vatMultiplier = 1 + $vatRate / 100;
             if ($this->isNullOrBlank($line['net_amount'] ?? null) && !$this->isNullOrBlank($line['gross_amount'] ?? null) && $vatMultiplier > 0) {
@@ -784,7 +1090,6 @@ class KsefIncoming extends CommonObject
             if ($this->isNullOrBlank($line['unit_price_net'] ?? null) && !$this->isNullOrBlank($line['unit_price_gross'] ?? null) && $vatMultiplier > 0) {
                 $line['unit_price_net'] = round($line['unit_price_gross'] / $vatMultiplier, 4);
             }
-            // calculate gross from net
             if ($this->isNullOrBlank($line['gross_amount'] ?? null) && !$this->isNullOrBlank($line['net_amount'] ?? null)) {
                 $line['gross_amount'] = round($line['net_amount'] * $vatMultiplier, 2);
             }
@@ -796,11 +1101,233 @@ class KsefIncoming extends CommonObject
         return $decoded;
     }
 
+    /**
+     * @brief Resolve line amount
+     * @param array $line
+     * @return array qty, pu, price_base_type
+     */
+    public static function resolveLineAmount($line)
+    {
+        $declared = isset($line['declared']) && is_array($line['declared']) ? $line['declared'] : null;
+        $has = function ($el, $key) use ($line, $declared) {
+            if ($declared !== null) {
+                return in_array($el, $declared, true) && isset($line[$key]) && $line[$key] !== '';
+            }
+            return isset($line[$key]) && $line[$key] !== null && $line[$key] !== '';
+        };
+        $qty = $has('P_8B', 'quantity') ? (float) $line['quantity'] : 0.0;
+        if ($has('P_11', 'net_amount')) {
+            $amount = (float) $line['net_amount'];
+            $base = 'HT';
+        } elseif ($has('P_11A', 'gross_amount')) {
+            $amount = (float) $line['gross_amount'];
+            $base = 'TTC';
+        } else {
+            $amount = null;
+            $base = 'HT';
+        }
+        if ($amount !== null) {
+            if ($qty != 0) {
+                return array('qty' => $qty, 'pu' => $amount / $qty, 'price_base_type' => $base);
+            }
+            return array('qty' => 1.0, 'pu' => $amount, 'price_base_type' => $base);
+        }
+        if ($has('P_9A', 'unit_price_net')) {
+            return array('qty' => $qty != 0 ? $qty : 1.0, 'pu' => (float) $line['unit_price_net'], 'price_base_type' => 'HT');
+        }
+        if ($has('P_9B', 'unit_price_gross')) {
+            return array('qty' => $qty != 0 ? $qty : 1.0, 'pu' => (float) $line['unit_price_gross'], 'price_base_type' => 'TTC');
+        }
+        return array('qty' => $qty != 0 ? $qty : 1.0, 'pu' => 0.0, 'price_base_type' => 'HT');
+    }
 
     /**
-     * @brief Get VAT summary as array
-     * @return array VAT summary by rate
-     * @called_by incoming_card.php
+     * @brief Diff correction line
+     * @param array $after
+     * @param array $before StanPrzed line
+     * @return array
+     */
+    public static function diffCorrectionLine($after, $before)
+    {
+        $a = self::resolveLineAmount($after);
+        $b = self::resolveLineAmount($before);
+        $vatRate = isset($after['vat_rate']) && is_numeric($after['vat_rate']) ? (float) $after['vat_rate'] : 0.0;
+        $mult = 1 + $vatRate / 100;
+        $aNet = $a['qty'] * $a['pu'] / ($a['price_base_type'] === 'TTC' ? $mult : 1);
+        $bNet = $b['qty'] * $b['pu'] / ($b['price_base_type'] === 'TTC' ? $mult : 1);
+        $netDelta = round($aNet - $bNet, 2);
+        $qtyDelta = (float) ($after['quantity'] ?? 0) - (float) ($before['quantity'] ?? 0);
+        $line = $after;
+        $line['net_amount'] = $netDelta;
+        $line['gross_amount'] = round($netDelta * $mult, 2);
+        $line['price_only'] = !($qtyDelta != 0 && $netDelta != 0 && (($qtyDelta > 0) === ($netDelta > 0)));
+        $line['quantity'] = $line['price_only'] ? 1.0 : $qtyDelta;
+        $line['unit_price_net'] = $line['quantity'] != 0 ? $netDelta / $line['quantity'] : 0.0;
+        $line['unit_price_gross'] = $line['quantity'] != 0 ? $line['gross_amount'] / $line['quantity'] : 0.0;
+        $line['declared'] = array('P_8B', 'P_11');
+        return $line;
+    }
+
+    /**
+     * @brief Pair correction rows
+     * @param array $lines
+     * @param array $linesBefore StanPrzed lines
+     * @return array after => before
+     */
+    public static function pairCorrectionRows($lines, $linesBefore)
+    {
+        $pairs = array();
+        $usedBefore = array();
+        $take = function ($i, $j) use (&$pairs, &$usedBefore) {
+            $pairs[$i] = $j;
+            $usedBefore[$j] = true;
+        };
+        foreach ($linesBefore as $j => $b) {
+            if ((string) ($b['uuid'] ?? '') === '') {
+                continue;
+            }
+            foreach ($lines as $i => $a) {
+                if (!isset($pairs[$i]) && (string) ($a['uuid'] ?? '') === (string) $b['uuid']) {
+                    $take($i, $j);
+                    break;
+                }
+            }
+        }
+        $afterNums = array();
+        foreach ($lines as $a) {
+            $afterNums[(int) ($a['line_num'] ?? 0)] = true;
+        }
+        $shared = false;
+        foreach ($linesBefore as $b) {
+            if (isset($afterNums[(int) ($b['line_num'] ?? 0)])) {
+                $shared = true;
+                break;
+            }
+        }
+        if ($shared) {
+            foreach ($linesBefore as $j => $b) {
+                if (isset($usedBefore[$j])) {
+                    continue;
+                }
+                foreach ($lines as $i => $a) {
+                    if (!isset($pairs[$i]) && (int) ($a['line_num'] ?? 0) === (int) ($b['line_num'] ?? 0)) {
+                        $take($i, $j);
+                        break;
+                    }
+                }
+            }
+            return $pairs;
+        }
+        $key = function ($l) {
+            return trim((string) ($l['description'] ?? '')) . "\n" . trim((string) ($l['indeks'] ?? ''));
+        };
+        foreach ($linesBefore as $j => $b) {
+            if (isset($usedBefore[$j])) {
+                continue;
+            }
+            foreach ($lines as $i => $a) {
+                if (!isset($pairs[$i]) && $key($a) === $key($b)) {
+                    $take($i, $j);
+                    break;
+                }
+            }
+        }
+        $byNum = function ($rows, $skip) {
+            $left = array();
+            foreach ($rows as $k => $r) {
+                if (!isset($skip[$k])) {
+                    $left[$k] = (int) ($r['line_num'] ?? 0);
+                }
+            }
+            asort($left);
+            return array_keys($left);
+        };
+        $leftA = $byNum($lines, $pairs);
+        $leftB = $byNum($linesBefore, $usedBefore);
+        $n = min(count($leftA), count($leftB));
+        for ($k = 0; $k < $n; $k++) {
+            $take($leftA[$k], $leftB[$k]);
+        }
+        return $pairs;
+    }
+
+    /**
+     * @brief Mark rebate row
+     * @param array $line
+     * @return array
+     */
+    private static function markRebateRow($line)
+    {
+        if ((float) ($line['quantity'] ?? 0) != 0 && self::resolveLineAmount($line)['pu'] < 0) {
+            $line['price_only'] = true;
+        }
+        return $line;
+    }
+
+    /**
+     * @brief Apply correction diff
+     * @param array $lines
+     * @param array $linesBefore StanPrzed lines
+     * @return array
+     */
+    public static function applyCorrectionDiff($lines, $linesBefore)
+    {
+        $lines = array_values($lines);
+        $linesBefore = array_values((array) $linesBefore);
+        $pairs = empty($linesBefore) ? array() : self::pairCorrectionRows($lines, $linesBefore);
+        $out = array();
+        foreach ($lines as $i => $line) {
+            if (isset($pairs[$i])) {
+                $out[] = self::diffCorrectionLine($line, $linesBefore[$pairs[$i]]);
+                continue;
+            }
+            $out[] = self::markRebateRow($line);
+        }
+        if (empty($linesBefore)) {
+            return $out;
+        }
+        $paired = array_flip($pairs);
+        foreach ($linesBefore as $j => $bLine) {
+            if (isset($paired[$j])) {
+                continue;
+            }
+            $zero = $bLine;
+            $zero['quantity'] = 0.0;
+            $zero['net_amount'] = 0.0;
+            $zero['gross_amount'] = 0.0;
+            $zero['declared'] = array('P_8B', 'P_11');
+            $removed = self::diffCorrectionLine($zero, $bLine);
+            $removed['correction_removed'] = true;
+            $out[] = $removed;
+        }
+        // stable since PHP8
+        usort($out, function ($x, $y) {
+            return (int) ($x['line_num'] ?? 0) <=> (int) ($y['line_num'] ?? 0);
+        });
+        return $out;
+    }
+
+    /**
+     * @brief Lines to store
+     * @param array $parsed Parser result
+     * @return array|null Null if none
+     */
+    public static function storedLineItems($parsed)
+    {
+        $lines = isset($parsed['lines']) && is_array($parsed['lines']) ? $parsed['lines'] : array();
+        $before = isset($parsed['lines_before']) && is_array($parsed['lines_before']) ? $parsed['lines_before'] : array();
+        if (empty($lines) && empty($before)) {
+            return null;
+        }
+        if (empty($before) && !self::isCorrectionType((string) ($parsed['invoice']['type'] ?? ''))) {
+            return $lines;
+        }
+        return self::applyCorrectionDiff($lines, $before);
+    }
+
+    /**
+     * @brief VAT by rate
+     * @return array
      */
     public function getVatSummary()
     {
@@ -811,10 +1338,9 @@ class KsefIncoming extends CommonObject
         return is_array($decoded) ? $decoded : array();
     }
 
-
     /**
-     * @brief Get exchange rate from parsed XML data
-     * @return float Exchange rate or 0 if not available
+     * @brief PLN per unit
+     * @return float 0 if unknown
      */
     public function getExchangeRate()
     {
@@ -823,44 +1349,102 @@ class KsefIncoming extends CommonObject
         }
         $parser = new FA3Parser($this->db);
         $parsed = $parser->parse($this->fa3_xml);
-        if ($parsed && !empty($parsed['exchange_rate']['rate'])) {
-            return (float)$parsed['exchange_rate']['rate'];
+        if (ksefParsedKurs($parsed) > 0) {
+            return ksefParsedKurs($parsed);
         }
-        return 0;
+        $pln = 0.0;
+        $vat = 0.0;
+        foreach ((array) ($parsed['vat_summary'] ?? array()) as $r) {
+            if (isset($r['vat_pln']) && $r['vat_pln'] !== null && (float) $r['vat'] != 0) {
+                $pln += (float) $r['vat_pln'];
+                $vat += (float) $r['vat'];
+            }
+        }
+        // reproduces P_14_xW
+        return $vat != 0 ? round($pln / $vat, 6) : 0;
     }
 
+    /**
+     * @brief Check import currency
+     * @param CommonInvoice|null $facture Null: check only
+     * @return string '' if ok
+     */
+    public function importCurrencyRefusal($facture = null)
+    {
+        global $langs;
+        $code = strtoupper((string) $this->currency);
+        // keeps source currency
+        if ($code === '' || $code === 'PLN' || self::isCorrectionType($this->invoice_type)) {
+            return '';
+        }
+        $langs->load('ksef@ksef');
+        if (!isModEnabled('multicurrency')) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportCurrencyModuleOff', $code);
+        }
+        require_once DOL_DOCUMENT_ROOT . '/multicurrency/class/multicurrency.class.php';
+        if (MultiCurrency::getIdFromCode($this->db, $code) <= 0) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportCurrencyNotSetUp', $code, $code);
+        }
+        if ($facture) {
+            $facture->multicurrency_code = $code;
+            $rate = $this->getExchangeRate();
+            if ($rate > 0) {
+                // tx is inverse
+                $facture->multicurrency_tx = 1 / $rate;
+            }
+            $kursText = ksefIncomingKursText(ksefIncomingKursState($this, 0.0, is_numeric($facture->date ?? '') ? (int) $facture->date : (int) strtotime((string) ($facture->date ?? ''))), $code);
+            if ($kursText !== '') {
+                $this->warnings[] = $kursText;
+            }
+        }
+        return '';
+    }
 
     /**
-     * @brief Check if a value is null or blank string
-     * @param mixed $val Value to check
-     * @return bool True if null or empty string
+     * @brief Store import error
+     * @return int 0 not NEW/ERROR, -1 error
+     */
+    public function recordImportError()
+    {
+        $err = dol_trunc((string) $this->error, 2000, 'right', 'UTF-8', 1);
+        $sql = "UPDATE " . MAIN_DB_PREFIX . $this->table_element . " SET import_status = '" . self::STATUS_ERROR . "', import_error = '" . $this->db->escape($err) . "'";
+        $sql .= " WHERE rowid = " . (int) $this->id . " AND import_status IN ('" . self::STATUS_NEW . "', '" . self::STATUS_ERROR . "')";
+        $res = $this->db->query($sql);
+        if (!$res) {
+            return -1;
+        }
+        if ((int) $this->db->affected_rows($res) !== 1) {
+            return 0;
+        }
+        $this->import_status = self::STATUS_ERROR;
+        $this->import_error = $err;
+        return 1;
+    }
+
+    /**
+     * @brief Null or blank
+     * @param mixed $val
+     * @return bool
      */
     private function isNullOrBlank($val)
     {
         return $val === null || $val === '';
     }
 
-
     /**
-     * @brief Fetch all records with filters
-     * @param $filters Filter conditions array
-     * @param $sortfield Sort field
-     * @param $sortorder Sort order (ASC/DESC)
-     * @param $limit Limit
-     * @param $offset Offset
-     * @return array|int Array of objects or -1 on error
-     * @called_by incoming_list.php
-     * @calls fetch()
+     * @brief Fetch filtered records
+     * @param $filters
+     * @param $sortfield
+     * @param $sortorder ASC/DESC
+     * @param $limit
+     * @param $offset
+     * @return array|int -1 on error
      */
     public function fetchAll($filters = array(), $sortfield = 'i.invoice_date', $sortorder = 'DESC', $limit = 0, $offset = 0)
     {
         global $conf;
 
-        $allowedSortFields = array(
-            'i.invoice_number', 'i.invoice_type', 'i.seller_name', 'i.seller_nip',
-            'i.import_status', 'i.invoice_date', 'i.total_gross',
-        );
-        if (!in_array($sortfield, $allowedSortFields)) {
+        if (!in_array($sortfield, self::SORT_FIELDS, true)) {
             $sortfield = 'i.invoice_date';
         }
         $sortorder = strtoupper($sortorder);
@@ -870,23 +1454,27 @@ class KsefIncoming extends CommonObject
 
         $results = array();
 
-        $sql = "SELECT i.rowid FROM " . MAIN_DB_PREFIX . $this->table_element . " as i";
+        $sql = "SELECT i.* FROM " . MAIN_DB_PREFIX . $this->table_element . " as i";
         $sql .= " WHERE i.entity IN (" . getEntity($this->element) . ")";
 
+        if (!empty($filters['ids'])) {
+            $sql .= " AND i.rowid IN (" . implode(',', array_map('intval', (array) $filters['ids'])) . ")";
+        }
+
         if (!empty($filters['seller_nip'])) {
-            $sql .= " AND i.seller_nip LIKE '%" . $this->db->escape($filters['seller_nip']) . "%'";
+            $sql .= " AND i.seller_nip LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['seller_nip'])) . "%'";
         }
         if (!empty($filters['seller_name'])) {
-            $sql .= " AND i.seller_name LIKE '%" . $this->db->escape($filters['seller_name']) . "%'";
+            $sql .= " AND i.seller_name LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['seller_name'])) . "%'";
         }
         if (!empty($filters['invoice_number'])) {
-            $sql .= " AND i.invoice_number LIKE '%" . $this->db->escape($filters['invoice_number']) . "%'";
+            $sql .= " AND i.invoice_number LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['invoice_number'])) . "%'";
         }
         if (!empty($filters['ksef_number'])) {
-            $sql .= " AND i.ksef_number LIKE '%" . $this->db->escape($filters['ksef_number']) . "%'";
+            $sql .= " AND i.ksef_number LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['ksef_number'])) . "%'";
         }
         if (!empty($filters['import_status'])) {
-            $sql .= " AND i.import_status = '" . $this->db->escape($filters['import_status']) . "'";
+            $sql .= $this->statusFilterSql($filters['import_status']);
         }
         if (!empty($filters['environment'])) {
             $sql .= " AND i.environment = '" . $this->db->escape($filters['environment']) . "'";
@@ -898,7 +1486,7 @@ class KsefIncoming extends CommonObject
             $sql .= " AND i.invoice_date <= " . (int)$filters['invoice_date_end'];
         }
 
-        $sql .= " ORDER BY " . $sortfield . " " . $sortorder;
+        $sql .= " ORDER BY " . $sortfield . " " . $sortorder . ($sortfield !== 'i.rowid' ? ", i.rowid " . $sortorder : '');
 
         if ($limit > 0) {
             $sql .= " LIMIT " . (int)$limit;
@@ -912,10 +1500,10 @@ class KsefIncoming extends CommonObject
 
         if ($resql) {
             while ($obj = $this->db->fetch_object($resql)) {
-                $record = new KsefIncoming($this->db);
-                if ($record->fetch($obj->rowid) > 0) {
-                    $results[] = $record;
-                }
+                // KsefSales reuses
+                $record = new static($this->db);
+                $record->setFromRow($obj);
+                $results[] = $record;
             }
             $this->db->free($resql);
             return $results;
@@ -925,33 +1513,30 @@ class KsefIncoming extends CommonObject
         }
     }
 
-
     /**
-     * @brief Count records with filters
-     * @param $filters Filter conditions array
-     * @return int Count or -1 on error
-     * @called_by incoming_list.php
+     * @brief Count filtered records
+     * @param $filters
+     * @return int -1 on error
      */
     public function countAll($filters = array())
     {
         $sql = "SELECT COUNT(*) as total FROM " . MAIN_DB_PREFIX . $this->table_element . " as i";
         $sql .= " WHERE i.entity IN (" . getEntity($this->element) . ")";
 
-        // Apply same filters as fetchAll
         if (!empty($filters['seller_nip'])) {
-            $sql .= " AND i.seller_nip LIKE '%" . $this->db->escape($filters['seller_nip']) . "%'";
+            $sql .= " AND i.seller_nip LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['seller_nip'])) . "%'";
         }
         if (!empty($filters['seller_name'])) {
-            $sql .= " AND i.seller_name LIKE '%" . $this->db->escape($filters['seller_name']) . "%'";
+            $sql .= " AND i.seller_name LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['seller_name'])) . "%'";
         }
         if (!empty($filters['invoice_number'])) {
-            $sql .= " AND i.invoice_number LIKE '%" . $this->db->escape($filters['invoice_number']) . "%'";
+            $sql .= " AND i.invoice_number LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['invoice_number'])) . "%'";
         }
         if (!empty($filters['ksef_number'])) {
-            $sql .= " AND i.ksef_number LIKE '%" . $this->db->escape($filters['ksef_number']) . "%'";
+            $sql .= " AND i.ksef_number LIKE '%" . $this->db->escape($this->db->escapeforlike($filters['ksef_number'])) . "%'";
         }
         if (!empty($filters['import_status'])) {
-            $sql .= " AND i.import_status = '" . $this->db->escape($filters['import_status']) . "'";
+            $sql .= $this->statusFilterSql($filters['import_status']);
         }
         if (!empty($filters['environment'])) {
             $sql .= " AND i.environment = '" . $this->db->escape($filters['environment']) . "'";
@@ -972,20 +1557,76 @@ class KsefIncoming extends CommonObject
         return -1;
     }
 
+    /**
+     * @brief Status filter SQL
+     * @param string $status
+     * @return string
+     */
+    private function statusFilterSql($status)
+    {
+        $unsupported = "i.import_error LIKE '" . $this->db->escape(self::UNSUPPORTED_FORM_PREFIX) . "%'";
+        if ($status === self::STATUS_FETCH_ERROR) {
+            return " AND i.import_status = '" . self::STATUS_FETCH_ERROR . "' AND (i.import_error IS NULL OR NOT " . $unsupported . ")";
+        }
+        if ($status === 'FETCH_ERROR_UNSUPPORTED') {
+            return " AND i.import_status = '" . self::STATUS_FETCH_ERROR . "' AND " . $unsupported;
+        }
+        return " AND i.import_status = '" . $this->db->escape($status) . "'";
+    }
 
     /**
-     * @brief Get statistics for incoming invoices
-     * @param $days Number of days to look back
-     * @return array Statistics array with total, new, imported, error counts
-     * @called_by KSEF::getIncomingStatistics()
+     * @brief Status counts
+     * @param string $environment
+     * @return array Counts by status
      */
-    public function getStatistics($days = 30)
+    public function countForStats($environment)
+    {
+        $out = array('total' => 0);
+        $base = "SELECT COUNT(*) as n FROM " . MAIN_DB_PREFIX . $this->table_element . " as i WHERE i.entity IN (" . getEntity($this->element) . ")"
+            . " AND i.environment = '" . $this->db->escape($environment) . "'";
+        foreach (array('total' => '', self::STATUS_NEW => self::STATUS_NEW, self::STATUS_IMPORTED => self::STATUS_IMPORTED, self::STATUS_SKIPPED => self::STATUS_SKIPPED,
+            self::STATUS_ERROR => self::STATUS_ERROR, self::STATUS_FETCH_ERROR => self::STATUS_FETCH_ERROR) as $key => $status) {
+            $resql = $this->db->query($base . ($status !== '' ? $this->statusFilterSql($status) : ''));
+            $obj = $resql ? $this->db->fetch_object($resql) : null;
+            $out[$key] = $obj ? (int) $obj->n : 0;
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Count fetch errors
+     * @param string $environment
+     * @return int
+     */
+    public function countFetchErrors($environment)
+    {
+        $sql = "SELECT COUNT(*) as total FROM " . MAIN_DB_PREFIX . $this->table_element . " as i";
+        $sql .= " WHERE i.entity IN (" . getEntity($this->element) . ")";
+        $sql .= " AND i.environment = '" . $this->db->escape($environment) . "'";
+        $sql .= $this->statusFilterSql(self::STATUS_FETCH_ERROR);
+        $resql = $this->db->query($sql);
+        if ($resql) {
+            $obj = $this->db->fetch_object($resql);
+            $this->db->free($resql);
+            return (int) $obj->total;
+        }
+        return 0;
+    }
+
+    /**
+     * @brief Recent statistics
+     * @param $days Lookback days
+     * @param string $environment '' for all
+     * @return array
+     */
+    public function getStatistics($days = 30, $environment = '')
     {
         $stats = array(
             'total' => 0,
             'new' => 0,
             'imported' => 0,
             'error' => 0,
+            'fetch_error' => 0,
         );
 
         $since = dol_now() - ($days * 86400);
@@ -993,18 +1634,24 @@ class KsefIncoming extends CommonObject
         $sql = "SELECT import_status, COUNT(*) as count FROM " . MAIN_DB_PREFIX . $this->table_element;
         $sql .= " WHERE fetch_date > " . (int)$since;
         $sql .= " AND entity IN (" . getEntity($this->element) . ")";
+        if ((string) $environment !== '') {
+            $sql .= " AND environment = '" . $this->db->escape($environment) . "'";
+        }
         $sql .= " GROUP BY import_status";
 
         $resql = $this->db->query($sql);
         if ($resql) {
             while ($obj = $this->db->fetch_object($resql)) {
-                $stats['total'] += $obj->count;
+                $count = (int) $obj->count;
+                $stats['total'] += $count;
                 if ($obj->import_status == self::STATUS_NEW) {
-                    $stats['new'] = $obj->count;
+                    $stats['new'] = $count;
                 } elseif ($obj->import_status == self::STATUS_IMPORTED) {
-                    $stats['imported'] = $obj->count;
+                    $stats['imported'] = $count;
                 } elseif ($obj->import_status == self::STATUS_ERROR) {
-                    $stats['error'] = $obj->count;
+                    $stats['error'] = $count;
+                } elseif ($obj->import_status == self::STATUS_FETCH_ERROR) {
+                    $stats['fetch_error'] = $count;
                 }
             }
             $this->db->free($resql);
@@ -1013,48 +1660,14 @@ class KsefIncoming extends CommonObject
         return $stats;
     }
 
-
     /**
-     * @brief Get list of IDs for mass operations
-     * @param $filters Filter conditions array
-     * @return array Array of rowids
-     * @called_by incoming_list.php mass actions
-     */
-    public function getIds($filters = array())
-    {
-        $ids = array();
-
-        $sql = "SELECT i.rowid FROM " . MAIN_DB_PREFIX . $this->table_element . " as i";
-        $sql .= " WHERE i.entity IN (" . getEntity($this->element) . ")";
-
-        if (!empty($filters['import_status'])) {
-            $sql .= " AND i.import_status = '" . $this->db->escape($filters['import_status']) . "'";
-        }
-        if (!empty($filters['environment'])) {
-            $sql .= " AND i.environment = '" . $this->db->escape($filters['environment']) . "'";
-        }
-
-        $resql = $this->db->query($sql);
-        if ($resql) {
-            while ($obj = $this->db->fetch_object($resql)) {
-                $ids[] = $obj->rowid;
-            }
-            $this->db->free($resql);
-        }
-
-        return $ids;
-    }
-
-
-    /**
-     * @brief Return clickable link of object (with eventually picto)
-     * @param $withpicto Add picto into link
-     * @param $option Options
-     * @param $notooltip 1=Disable tooltip
-     * @param $morecss Add more css on link
-     * @param $save_lastsearch_value -1=Auto, 0=No save, 1=Save lastsearch_values
-     * @return string String with URL
-     * @called_by Various display pages
+     * @brief Record link
+     * @param $withpicto
+     * @param $option
+     * @param $notooltip
+     * @param $morecss
+     * @param $save_lastsearch_value -1 auto
+     * @return string HTML
      */
     public function getNomUrl($withpicto = 0, $option = '', $notooltip = 0, $morecss = '', $save_lastsearch_value = -1)
     {
@@ -1066,7 +1679,7 @@ class KsefIncoming extends CommonObject
 
         $result = '';
 
-        $label = img_picto('', $this->picto) . ' <u class="paddingrightonly">' . $langs->trans("KSEF_IncomingInvoice") . '</u>';
+        $label = img_picto('', $this->picto) . ' <u class="paddingrightonly">' . $langs->trans($this->cardLabel) . '</u>';
         if (isset($this->import_status)) {
             $label .= ' ' . $this->getLibStatut(5);
         }
@@ -1075,14 +1688,15 @@ class KsefIncoming extends CommonObject
         if (!empty($this->invoice_number)) {
             $label .= '<br><b>' . $langs->trans('RefSupplierBill') . ':</b> ' . $this->invoice_number;
         }
-        if (!empty($this->seller_name)) {
-            $label .= '<br><b>' . $langs->trans('Supplier') . ':</b> ' . $this->seller_name;
+        $partyName = $this->cardPage === '/ksef/sales_card.php' ? $this->buyer_name : $this->seller_name;
+        if (!empty($partyName)) {
+            $label .= '<br><b>' . $langs->trans($this->cardPage === '/ksef/sales_card.php' ? 'Customer' : 'Supplier') . ':</b> ' . $partyName;
         }
         if (!empty($this->total_gross)) {
             $label .= '<br><b>' . $langs->trans('AmountTTC') . ':</b> ' . price($this->total_gross, 0, $langs, 1, -1, -1, $this->currency);
         }
 
-        $url = dol_buildpath('/ksef/incoming_card.php', 1) . '?id=' . $this->id;
+        $url = dol_buildpath($this->cardPage, 1) . '?id=' . $this->id;
 
         if ($option != 'nolink') {
             $add_save_lastsearch_values = ($save_lastsearch_value == 1 ? 1 : 0);
@@ -1097,7 +1711,7 @@ class KsefIncoming extends CommonObject
         $linkclose = '';
         if (empty($notooltip)) {
             if (getDolGlobalString('MAIN_OPTIMIZEFORTEXTBROWSER')) {
-                $label = $langs->trans("ShowKsefIncoming");
+                $label = $langs->trans("KSEF_ShowKsefIncoming");
                 $linkclose .= ' alt="' . dol_escape_htmltag($label, 1) . '"';
             }
             $linkclose .= ' title="' . dol_escape_htmltag($label, 1) . '"';
@@ -1135,26 +1749,21 @@ class KsefIncoming extends CommonObject
         return $result;
     }
 
-
     /**
-     * @brief Return the label of the status
-     * @param $mode 0=long label, 1=short label, 2=Picto + short label, 3=Picto, 4=Picto + long label, 5=Short label + Picto, 6=Long label + Picto
-     * @return string Label of status
-     * @called_by getNomUrl()
-     * @calls LibStatut()
+     * @brief Status label
+     * @param $mode Label mode 0-6
+     * @return string
      */
     public function getLibStatut($mode = 0)
     {
         return $this->LibStatut($this->import_status, $mode);
     }
 
-
     /**
-     * @brief Return the label of a given status
-     * @param $status Status to get label for
-     * @param $mode 0=long label, 1=short label, 2=Picto + short label, 3=Picto, 4=Picto + long label, 5=Short label + Picto, 6=Long label + Picto
-     * @return string Label of status
-     * @called_by getLibStatut()
+     * @brief Label for status
+     * @param $status
+     * @param $mode Label mode 0-6
+     * @return string
      */
     public function LibStatut($status, $mode = 0)
     {
@@ -1164,37 +1773,25 @@ class KsefIncoming extends CommonObject
         $statusType = 'status0';
         $statusLabel = $status;
         $statusLabelShort = $status;
-
-        if ($status == self::STATUS_NEW || $status == 'NEW') {
-            $statusType = 'status1';
-            $statusLabel = $langs->transnoentitiesnoconv('KSEF_ImportStatusNEW');
-            $statusLabelShort = $langs->transnoentitiesnoconv('KSEF_ImportStatusNEW');
-        } elseif ($status == self::STATUS_IMPORTED || $status == 'IMPORTED') {
-            $statusType = 'status4';
-            $statusLabel = $langs->transnoentitiesnoconv('KSEF_ImportStatusIMPORTED');
-            $statusLabelShort = $langs->transnoentitiesnoconv('KSEF_ImportStatusIMPORTED');
-        } elseif ($status == 'SKIPPED') {
-            $statusType = 'status6';
-            $statusLabel = $langs->transnoentitiesnoconv('KSEF_ImportStatusSKIPPED');
-            $statusLabelShort = $langs->transnoentitiesnoconv('KSEF_ImportStatusSKIPPED');
-        } elseif ($status == self::STATUS_ERROR || $status == 'ERROR') {
-            $statusType = 'status8';
-            $statusLabel = $langs->transnoentitiesnoconv('KSEF_ImportStatusERROR');
-            $statusLabelShort = $langs->transnoentitiesnoconv('KSEF_ImportStatusERROR');
+        $params = array();
+        $map = ksefIncomingStatusMap();
+        if (isset($map[$status])) {
+            $statusType = $map[$status][0];
+            $statusLabel = $statusLabelShort = $langs->transnoentitiesnoconv($map[$status][1]);
+            $params = array('badgeParams' => array('css' => ksefToneClass($map[$status][2])));
         }
 
-        return dolGetStatus($statusLabel, $statusLabelShort, '', $statusType, $mode);
+        return dolGetStatus($statusLabel, $statusLabelShort, '', $statusType, $mode, '', $params);
     }
 
-
     /**
-     * @brief Build WHERE conditions for matching a third party by NIP and/or VAT ID
-     * @param string $nip Polish NIP (digits only)
-     * @param string $vatId Full EU VAT ID (e.g. "PL1234567890")
-     * @param string $alias Table alias (default 's')
-     * @return string SQL WHERE conditions (without leading AND)
+     * @brief Party match WHERE
+     * @param string $nip NIP digits
+     * @param string $vatId EU VAT ID
+     * @param string $alias
+     * @return string No leading AND
      */
-    private function buildThirdPartyMatchWhere($nip, $vatId, $alias = 's')
+    protected function buildThirdPartyMatchWhere($nip, $vatId, $alias = 's')
     {
         $vatDigits = !empty($vatId) ? preg_replace('/[^0-9]/', '', $vatId) : '';
         $nipField = ksefGetFieldName('NIP');
@@ -1221,21 +1818,22 @@ class KsefIncoming extends CommonObject
         return implode(" OR ", $conditions);
     }
 
-
     /**
-     * @brief Build full SQL for matching a third party by NIP and/or VAT ID
-     * @param string $nip Polish NIP (digits only)
-     * @param string $vatId Full EU VAT ID (e.g. "PL1234567890")
-     * @return string SQL query returning rowid, ordered by match priority
+     * @brief Party match SQL
+     * @param string $nip NIP digits
+     * @param string $vatId EU VAT ID
+     * @param string $roleSql Role condition
+     * @param string $preferSql Extra ORDER BY
+     * @return string
      */
-    private function buildThirdPartyMatchSQL($nip, $vatId)
+    protected function buildThirdPartyMatchSQL($nip, $vatId, $roleSql = '1 = 1', $preferSql = '')
     {
         $vatDigits = !empty($vatId) ? preg_replace('/[^0-9]/', '', $vatId) : '';
         $nipField = ksefGetFieldName('NIP');
         $nipColumn = ksefFieldToColumn($nipField);
 
         $sql = "SELECT s.rowid FROM " . MAIN_DB_PREFIX . "societe s";
-        $sql .= " WHERE s.fournisseur = 1";
+        $sql .= " WHERE " . $roleSql;
         $sql .= " AND s.entity IN (" . getEntity('societe') . ")";
         $sql .= " AND (" . $this->buildThirdPartyMatchWhere($nip, $vatId) . ")";
 
@@ -1270,17 +1868,48 @@ class KsefIncoming extends CommonObject
         }
         $orderCases[] = "ELSE 9 END";
 
-        $sql .= " ORDER BY " . implode(" ", $orderCases) . ", s.rowid ASC";
+        $sql .= " ORDER BY " . ($preferSql !== '' ? $preferSql . ", " : '') . implode(" ", $orderCases) . ", s.rowid ASC";
         $sql .= " LIMIT 1";
 
         return $sql;
     }
 
+    /**
+     * @brief Party identifiers
+     * @return array NIP digits, VAT ID
+     */
+    public function partyIdentifiers()
+    {
+        return array(preg_replace('/[^0-9]/', '', (string) $this->seller_nip), (string) ($this->seller_vat_id ?? ''));
+    }
 
     /**
-     * @brief Find matching third party (supplier) by seller NIP
-     * @return int socid if found, 0 if not found
-     * @called_by incoming_import.php
+     * @brief Party identity state
+     * @param int $socid
+     * @return string match, mismatch, no_id, n/a
+     */
+    public function partyIdentityState($socid)
+    {
+        list($nip, $vatId) = $this->partyIdentifiers();
+        if ((int) $socid <= 0 || ($nip === '' && $vatId === '')) {
+            return 'n/a';
+        }
+        $where = $this->buildThirdPartyMatchWhere($nip, $vatId, 's');
+        $res = $this->db->query("SELECT s.rowid FROM " . MAIN_DB_PREFIX . "societe s WHERE s.rowid = " . (int) $socid . ($where !== '' ? " AND (" . $where . ")" : ''));
+        if ($res && $this->db->num_rows($res) > 0) {
+            return 'match';
+        }
+        $soc = new Societe($this->db);
+        if ($soc->fetch((int) $socid) <= 0) {
+            return 'n/a';
+        }
+        $own = trim((string) ksefGetIdentifierField($soc, 'NIP')) . trim((string) $soc->tva_intra);
+        return $own === '' ? 'no_id' : 'mismatch';
+    }
+
+    /**
+     * @brief Find seller party
+     * @return int 0 if none
      */
     public function findMatchingThirdParty()
     {
@@ -1295,7 +1924,7 @@ class KsefIncoming extends CommonObject
             return 0;
         }
 
-        $sql = $this->buildThirdPartyMatchSQL($nip, $vatId);
+        $sql = $this->buildThirdPartyMatchSQL($nip, $vatId, '1 = 1', 's.fournisseur DESC');
 
         dol_syslog("KsefIncoming::findMatchingThirdParty nip=" . $nip . " vatId=" . $vatId, LOG_DEBUG);
         $resql = $this->db->query($sql);
@@ -1312,14 +1941,13 @@ class KsefIncoming extends CommonObject
         return 0;
     }
 
-
     /**
-     * @brief Auto-match line items to products by ref, supplier ref, or barcode
-     * @param array $lines Line items from getLineItems()
-     * @return array array of line_num => array('product_id' => int, 'match_method' => string, 'product_ref' => string, 'product_label' => string) for matched lines
-     * @called_by incoming_import.php, incoming_list.php
+     * @brief Auto-match line products
+     * @param array $lines
+     * @param int $socid Supplier, 0 skips
+     * @return array Matches by line_num
      */
-    public function autoMatchLineProducts($lines)
+    public function autoMatchLineProducts($lines, $socid = 0)
     {
         $matches = array();
 
@@ -1329,7 +1957,7 @@ class KsefIncoming extends CommonObject
 
         foreach ($lines as $line) {
             $lineNum = $line['line_num'] ?? null;
-            if ($lineNum === null) {
+            if ($lineNum === null || !self::isProductLine($line)) {
                 continue;
             }
 
@@ -1337,6 +1965,32 @@ class KsefIncoming extends CommonObject
             $gtin = !empty($line['gtin']) ? trim($line['gtin']) : '';
 
             if (!empty($indeks)) {
+                // supplier ref first
+                $resql = false;
+                if ((int) $socid > 0) {
+                    $sql = "SELECT pfp.fk_product, pfp.ref_fourn, p.ref, p.label FROM " . MAIN_DB_PREFIX . "product_fournisseur_price as pfp";
+                    $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . "product as p ON p.rowid = pfp.fk_product";
+                    $sql .= " WHERE pfp.ref_fourn = '" . $this->db->escape($indeks) . "'";
+                    $sql .= " AND pfp.fk_soc = " . (int) $socid;
+                    $sql .= " AND pfp.entity IN (" . getEntity('product') . ")";
+                    $sql .= " LIMIT 1";
+                    $resql = $this->db->query($sql);
+                }
+                if ($resql && $this->db->num_rows($resql) > 0) {
+                    $obj = $this->db->fetch_object($resql);
+                    $matches[$lineNum] = array(
+                        'product_id' => (int)$obj->fk_product,
+                        'match_method' => 'supplier_ref',
+                        'product_ref' => $obj->ref,
+                        'product_label' => $obj->label,
+                    );
+                    $this->db->free($resql);
+                    continue;
+                }
+                if ($resql) {
+                    $this->db->free($resql);
+                }
+
                 $sql = "SELECT rowid, ref, label FROM " . MAIN_DB_PREFIX . "product";
                 $sql .= " WHERE ref = '" . $this->db->escape($indeks) . "'";
                 $sql .= " AND entity IN (" . getEntity('product') . ")";
@@ -1348,28 +2002,6 @@ class KsefIncoming extends CommonObject
                     $matches[$lineNum] = array(
                         'product_id' => (int)$obj->rowid,
                         'match_method' => 'product_ref',
-                        'product_ref' => $obj->ref,
-                        'product_label' => $obj->label,
-                    );
-                    $this->db->free($resql);
-                    continue;
-                }
-                if ($resql) {
-                    $this->db->free($resql);
-                }
-
-                $sql = "SELECT pfp.fk_product, pfp.ref_fourn, p.ref, p.label FROM " . MAIN_DB_PREFIX . "product_fournisseur_price as pfp";
-                $sql .= " LEFT JOIN " . MAIN_DB_PREFIX . "product as p ON p.rowid = pfp.fk_product";
-                $sql .= " WHERE pfp.ref_fourn = '" . $this->db->escape($indeks) . "'";
-                $sql .= " AND pfp.entity IN (" . getEntity('product') . ")";
-                $sql .= " LIMIT 1";
-
-                $resql = $this->db->query($sql);
-                if ($resql && $this->db->num_rows($resql) > 0) {
-                    $obj = $this->db->fetch_object($resql);
-                    $matches[$lineNum] = array(
-                        'product_id' => (int)$obj->fk_product,
-                        'match_method' => 'supplier_ref',
                         'product_ref' => $obj->ref,
                         'product_label' => $obj->label,
                     );
@@ -1408,18 +2040,29 @@ class KsefIncoming extends CommonObject
         return $matches;
     }
 
-
     /**
-     * @brief Import incoming invoice as a Dolibarr FactureFournisseur
-     * @param User $user User performing the import
-     * @param int $socid Supplier (societe) ID
-     * @param array $lineProductMap Associative array of line_num => fk_product
-     * @return int FactureFournisseur ID on success, negative on error
-     * @called_by incoming_import.php
+     * @brief Import supplier invoice
+     * @param User $user
+     * @param int $socid Supplier id
+     * @param array $lineProductMap line_num => fk_product
+     * @param int $correctionSourceId Cited invoice id
+     * @param string $upwardMode Ignored
+     * @param array $options warehouse_id
+     * @return int Invoice id, <0 on error
      */
-    public function importToDolibarr($user, $socid, $lineProductMap = array(), $correctionSourceId = 0, $upwardMode = '')
+    public function importToDolibarr($user, $socid, $lineProductMap = array(), $correctionSourceId = 0, $upwardMode = '', $options = array())
     {
         global $conf, $langs;
+
+        $this->warnings = array();
+        $this->validated = false;
+        $this->error = '';
+        $this->errors = array();
+
+        if (!ksefUserCan($user, 'create_supplier_invoice')) {
+            $this->error = $langs->trans('NotEnoughPermissions');
+            return -1;
+        }
 
         if ($socid <= 0) {
             $this->error = $langs->trans('KSEF_ImportErrorNoSupplier');
@@ -1431,8 +2074,34 @@ class KsefIncoming extends CommonObject
             return -2;
         }
 
+        if ($this->import_status === self::STATUS_FETCH_ERROR) {
+            $this->error = $langs->trans('KSEF_FetchErrorNotImportable');
+            return -1;
+        }
+        if ($this->import_status === self::STATUS_SKIPPED) {
+            $this->error = $langs->trans('KSEF_InvoiceSkipped');
+            return -1;
+        }
+
         require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
         require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+
+        // security: validate ids
+        $soc = ksefVisibleSociete($this->db, $socid);
+        if (!$soc) {
+            $this->error = $langs->trans('KSEF_ImportErrorNoSupplier');
+            return -1;
+        }
+        if ((int) $soc->fournisseur !== 1) {
+            if ($this->partyIdentityState($soc->id) !== 'match') {
+                $this->error = $langs->trans('KSEF_ImportErrorNotASupplier', $soc->name);
+                return -1;
+            }
+            // outside import transaction
+            $this->ensureSupplierRole($user, $soc);
+        }
+        $lineProductMap = $this->knownProducts($lineProductMap);
 
         $this->db->begin();
 
@@ -1446,186 +2115,42 @@ class KsefIncoming extends CommonObject
                 $this->db->rollback();
                 return -2;
             }
+            if ($lockObj && $lockObj->import_status === self::STATUS_FETCH_ERROR) {
+                $this->error = $langs->trans('KSEF_FetchErrorNotImportable');
+                $this->db->rollback();
+                return -1;
+            }
+            if ($lockObj && $lockObj->import_status === self::STATUS_SKIPPED) {
+                $this->error = $langs->trans('KSEF_InvoiceSkipped');
+                $this->db->rollback();
+                return -1;
+            }
         }
 
-        $isUpwardCorrection = (self::isCorrectionType($this->invoice_type) && (float)$this->total_gross > 0);
+        $korektaSource = null;
 
         $facture = new FactureFournisseur($this->db);
         $facture->fk_soc = $socid;
         $facture->socid = $socid;
         $facture->ref_supplier = $this->invoice_number;
         $facture->date = $this->invoice_date ? $this->invoice_date : dol_now();
-        $facture->date_echeance = $this->payment_due_date ? $this->payment_due_date : null;
+        // old rows: first
+        $earliestDue = self::earliestDueDate($this->fa3_xml);
+        $dueDate = $earliestDue !== null ? $earliestDue : $this->payment_due_date;
+        $facture->date_echeance = $dueDate ? $dueDate : null;
         $facture->note_public = 'KSeF: ' . $this->ksef_number;
 
-        // Track the source invoice ID resolved from corrections (used for both linking and replace mode)
-        $resolvedSourceId = 0;
-
         if (self::isCorrectionType($this->invoice_type)) {
-            // For upward corrections: TYPE_STANDARD (difference mode) or handled specially (replace mode)
-            // For downward corrections: TYPE_CREDIT_NOTE
-            if ($isUpwardCorrection && $upwardMode !== 'replace') {
-                $facture->type = FactureFournisseur::TYPE_STANDARD;
-            } else {
-                $facture->type = FactureFournisseur::TYPE_CREDIT_NOTE;
+            $korektaSource = $this->resolveKorektaSource($correctionSourceId, $socid);
+            if (!is_object($korektaSource)) {
+                $this->error = $korektaSource;
+                $this->import_status = self::STATUS_ERROR;
+                $this->import_error = $this->error;
+                $this->db->rollback();
+                return -6;
             }
-
-            $resolvedCorrections = $this->resolveCorrectedInvoices();
-            $correctedCount = count($resolvedCorrections);
-
-            // Build ref list for note_public (used in multiple branches)
-            $refList = array();
-            foreach ($resolvedCorrections as $rc) {
-                $ref = '';
-                if (!empty($rc['invoice_number'])) {
-                    $ref .= $rc['invoice_number'];
-                }
-                if (!empty($rc['ksef_number'])) {
-                    $ref .= ($ref ? ' / ' : '') . $rc['ksef_number'];
-                }
-                if ($ref) {
-                    $refList[] = $ref;
-                }
-            }
-
-            if ($correctedCount > 1 && $correctionSourceId != 0) {
-                // Multi-correction with explicit user choice
-                if ($correctionSourceId == -1) {
-                    // Standalone mode: no fk_facture_source, put refs in note_public
-                    $facture->note_public .= "\n" . $langs->trans('KSEF_CorrectionStandaloneNoteText', implode(', ', $refList));
-                } elseif ($correctionSourceId > 0) {
-                    // Link to a specific chosen invoice
-                    $facture->fk_facture_source = $correctionSourceId;
-                    $resolvedSourceId = $correctionSourceId;
-                    $facture->note_public .= "\n" . $langs->trans('KSEF_CorrectionStandaloneNoteText', implode(', ', $refList));
-                }
-            } else {
-                // Single correction or legacy behavior ($correctionSourceId == 0)
-                $sourceInvoiceId = 0;
-                $firstCorrectedRef = '';
-                foreach ($resolvedCorrections as $rc) {
-                    if (empty($firstCorrectedRef)) {
-                        $firstCorrectedRef = $rc['invoice_number'];
-                    }
-                    if ($rc['supplier_invoice']) {
-                        $sourceInvoiceId = $rc['supplier_invoice']->id;
-                        break;
-                    }
-                }
-                if ($sourceInvoiceId > 0) {
-                    $facture->fk_facture_source = $sourceInvoiceId;
-                    $resolvedSourceId = $sourceInvoiceId;
-                } elseif ($isUpwardCorrection && $upwardMode !== 'replace') {
-                    // Upward + difference: original not required, proceed without fk_facture_source
-                    $facture->note_public .= "\n" . $langs->trans('KSEF_CorrectionStandaloneNoteText', implode(', ', $refList));
-                } else {
-                    if (empty($resolvedCorrections)) {
-                        $this->error = $langs->trans('KSEF_ImportErrorNoCorrectionsReference');
-                    } else {
-                        $this->error = $langs->trans('KSEF_ImportErrorOriginalNotImported', $firstCorrectedRef ?: $this->corrected_invoice_number);
-                    }
-                    $this->import_status = self::STATUS_ERROR;
-                    $this->import_error = $this->error;
-                    $this->db->rollback();
-                    return -6;
-                }
-            }
-
-            // Backend guard: replace mode is only valid for single corrections
-            if ($isUpwardCorrection && $upwardMode === 'replace' && $correctedCount > 1) {
-                $upwardMode = 'difference';
-                $facture->type = FactureFournisseur::TYPE_STANDARD;
-            }
-
-            // For upward correction in "replace" mode: we need the original to zero out
-            // The main $facture will be the replacement standard invoice (with corrected totals)
-            // We first create a credit note to cancel the original
-            if ($isUpwardCorrection && $upwardMode === 'replace' && $resolvedSourceId > 0) {
-                $originalInv = new FactureFournisseur($this->db);
-                if ($originalInv->fetch($resolvedSourceId) > 0) {
-                    $originalInv->fetch_lines();
-
-                    // Create credit note zeroing out the original
-                    $creditNote = new FactureFournisseur($this->db);
-                    $creditNote->fk_soc = $socid;
-                    $creditNote->socid = $socid;
-                    $creditNote->ref_supplier = $originalInv->ref_supplier . ' [auto-zero]';
-                    $creditNote->date = $this->invoice_date ? $this->invoice_date : dol_now();
-                    $creditNote->type = FactureFournisseur::TYPE_CREDIT_NOTE;
-                    $creditNote->fk_facture_source = $resolvedSourceId;
-                    $creditNote->note_public = $langs->trans('KSEF_UpwardCorrectionCreditNoteRef', $originalInv->ref, $this->ksef_number);
-
-                    // Use the original invoice's multicurrency settings, not the KOR's,
-                    // since the credit note must mirror the original's amounts and rate
-                    if (!empty($originalInv->multicurrency_code) && $originalInv->multicurrency_code !== 'PLN') {
-                        $creditNote->multicurrency_code = $originalInv->multicurrency_code;
-                        if ($originalInv->multicurrency_tx > 0) {
-                            $creditNote->multicurrency_tx = $originalInv->multicurrency_tx;
-                        }
-                    }
-
-                    $cnId = $creditNote->create($user);
-                    if ($cnId <= 0) {
-                        $this->error = $creditNote->error;
-                        $this->errors = $creditNote->errors;
-                        $this->import_status = self::STATUS_ERROR;
-                        $this->import_error = $creditNote->error;
-                        $this->db->rollback();
-                        return -7;
-                    }
-
-                    // Re-fetch to get the Dolibarr-assigned ref
-                    $creditNote->fetch($cnId);
-
-                    // Copy lines from original invoice to the credit note
-                    $cnIsMulticurrency = (!empty($originalInv->multicurrency_code) && $originalInv->multicurrency_code !== 'PLN');
-                    foreach ($originalInv->lines as $origLine) {
-                        if ($cnIsMulticurrency) {
-                            $cnPu = 0;
-                            $cnPuDevise = abs($origLine->multicurrency_subprice);
-                        } else {
-                            $cnPu = abs($origLine->subprice);
-                            $cnPuDevise = 0;
-                        }
-                        $result = $creditNote->addline(
-                            $origLine->desc,
-                            $cnPu,
-                            $origLine->tva_tx,
-                            $origLine->localtax1_tx,
-                            $origLine->localtax2_tx,
-                            $origLine->qty,
-                            $origLine->fk_product,
-                            $origLine->remise_percent,
-                            0, 0, 0, 0,
-                            'HT',
-                            $origLine->product_type,
-                            -1, 0, array(), null, 0,
-                            $cnPuDevise,
-                            $origLine->ref_supplier
-                        );
-                        if ($result <= 0) {
-                            $this->error = $creditNote->error;
-                            $this->errors = $creditNote->errors;
-                            $this->import_status = self::STATUS_ERROR;
-                            $this->import_error = $creditNote->error;
-                            $this->db->rollback();
-                            return -8;
-                        }
-                    }
-
-                    // Store the credit note ID for display purposes
-                    $this->fk_credit_note = $cnId;
-
-                    // Now reconfigure $facture as the replacement standard invoice
-                    // with the corrected totals (re-parsed from the XML "after" state)
-                    $facture->type = FactureFournisseur::TYPE_STANDARD;
-                    // Standard invoices don't use fk_facture_source, corrected refs go in note_public
-                    $facture->fk_facture_source = null;
-                    $facture->note_public .= "\n" . $langs->trans('KSEF_CorrectionStandaloneNoteText', implode(', ', $refList));
-                    // Reference the zeroing credit note so it can be found from the replacement
-                    $facture->note_public .= "\n" . $langs->trans('KSEF_UpwardCorrectionCreditNoteRef', $creditNote->ref, $this->ksef_number);
-                }
-            }
+            $facture->type = FactureFournisseur::TYPE_REPLACEMENT;
+            $facture->fk_facture_source = $korektaSource->id;
         } elseif ($this->invoice_type === 'ZAL') {
             $facture->type = FactureFournisseur::TYPE_DEPOSIT;
             $facture->cond_reglement_id = 1;
@@ -1634,15 +2159,42 @@ class KsefIncoming extends CommonObject
         }
 
         $isMulticurrency = (!empty($this->currency) && $this->currency !== 'PLN');
-        if ($isMulticurrency) {
-            $facture->multicurrency_code = $this->currency;
-            $exchangeRate = $this->getExchangeRate();
-            if ($exchangeRate > 0) {
-                $facture->multicurrency_tx = $exchangeRate;
+        $currencyRefusal = $this->importCurrencyRefusal($facture);
+        if ($currencyRefusal !== '') {
+            $this->error = $currencyRefusal;
+            $this->import_status = self::STATUS_ERROR;
+            $this->import_error = $this->error;
+            $this->db->rollback();
+            return -1;
+        }
+
+        if ($korektaSource) {
+            $facture->multicurrency_code = $korektaSource->multicurrency_code;
+            $facture->multicurrency_tx = $korektaSource->multicurrency_tx;
+            $isMulticurrency = !empty($korektaSource->multicurrency_code) && $korektaSource->multicurrency_code !== $conf->currency;
+            // art. 31b: deposit
+            $srcRate = (float) $korektaSource->multicurrency_tx > 0 ? 1 / (float) $korektaSource->multicurrency_tx : 0;
+            if ($this->invoice_type === 'KOR_ZAL' && $isMulticurrency && $srcRate > 0) {
+                $parsedRate = (new FA3Parser($this->db))->parse((string) $this->fa3_xml);
+                $rate = ksefParsedKurs($parsedRate);
+                $differs = $rate > 0 && abs($rate - $srcRate) >= 0.00005;
+                $before = (float) ($parsedRate['exchange_rate']['before_rate'] ?? 0);
+                if (!$differs && $before > 0 && abs($before - $srcRate) >= 0.00005) {
+                    $differs = true;
+                    $rate = $before;
+                }
+                // rounded: unusable rate
+                foreach ($rate > 0 ? array() : (array) ($parsedRate['vat_summary'] ?? array()) as $r) {
+                    if (isset($r['vat_pln']) && $r['vat_pln'] !== null && (float) $r['vat'] != 0 && abs((float) $r['vat_pln'] - round((float) $r['vat'] * $srcRate, 2)) > 0.015) {
+                        $differs = true;
+                    }
+                }
+                if ($differs) {
+                    $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_ImportKorZalRateDiffers', price($rate > 0 ? $rate : $this->getExchangeRate(), 0, $langs, 0, -1, 4), $korektaSource->ref, price($srcRate, 0, $langs, 0, -1, 4));
+                }
             }
         }
 
-        // payment method from XML
         if (!empty($this->payment_method)) {
             $facture->mode_reglement_id = $this->mapKsefPaymentMethod($this->payment_method);
         }
@@ -1650,228 +2202,82 @@ class KsefIncoming extends CommonObject
         $factureId = $facture->create($user);
         if ($factureId <= 0) {
             $this->error = $facture->error;
+            if ($this->db->errno() == 'DB_ERROR_RECORD_ALREADY_EXISTS' || $facture->error === $langs->trans('ErrorRefAlreadyExists')) {
+                $this->error = $langs->transnoentitiesnoconv('KSEF_ImportErrorDuplicateRefSupplier', $facture->ref_supplier);
+            }
             $this->errors = $facture->errors;
             $this->import_status = self::STATUS_ERROR;
-            $this->import_error = $facture->error;
+            $this->import_error = $this->error;
             $this->db->rollback();
             return -3;
         }
 
-        // For correction invoices, re-parse the XML to compute correct line items.
-        // - Replace mode: use after-state lines (full corrected amounts)
-        // - Difference mode: compute before/after diff lines (delta amounts)
-        // Re-parsing ensures correctness even if stored line_items lack the diff.
         $reParsedVatSummary = null;
-        if (self::isCorrectionType($this->invoice_type) && !empty($this->fa3_xml)) {
-            $parser = new FA3Parser($this->db);
-            $parsed = $parser->parse($this->fa3_xml);
-            if ($parsed && !empty($parsed['lines'])) {
-                $lines = $parsed['lines'];
-                if (!empty($parsed['vat_summary'])) {
-                    $reParsedVatSummary = $parsed['vat_summary'];
-                }
-
-                // For difference mode (not replace): compute before/after diff
-                if ($upwardMode !== 'replace' && !empty($parsed['lines_before'])) {
-                    $beforeMap = array();
-                    foreach ($parsed['lines_before'] as $bLine) {
-                        $beforeMap[$bLine['line_num']] = $bLine;
-                    }
-                    foreach ($lines as &$diffLine) {
-                        $lineNum = $diffLine['line_num'];
-                        if (isset($beforeMap[$lineNum])) {
-                            $before = $beforeMap[$lineNum];
-                            $diffLine['net_amount'] = round(($diffLine['net_amount'] ?? 0) - ($before['net_amount'] ?? 0), 2);
-                            $diffLine['unit_price_net'] = round(($diffLine['unit_price_net'] ?? 0) - ($before['unit_price_net'] ?? 0), 4);
-                            if (!is_null($diffLine['gross_amount'] ?? null) && !is_null($before['gross_amount'] ?? null)) {
-                                $diffLine['gross_amount'] = round($diffLine['gross_amount'] - $before['gross_amount'], 2);
-                            }
-                            if (!is_null($diffLine['unit_price_gross'] ?? null) && !is_null($before['unit_price_gross'] ?? null)) {
-                                $diffLine['unit_price_gross'] = round($diffLine['unit_price_gross'] - $before['unit_price_gross'], 4);
-                            }
-                            $diffNet = (float)($diffLine['net_amount'] ?? 0);
-                            $diffQty = (float)($diffLine['quantity'] ?? 0);
-                            if ($diffLine['unit_price_net'] == 0 && $diffNet != 0 && $diffQty != 0) {
-                                $diffLine['unit_price_net'] = round($diffNet / $diffQty, 4);
-                            }
-                            if (($diffLine['unit_price_gross'] ?? 0) == 0 && ($diffLine['gross_amount'] ?? 0) != 0 && $diffQty != 0) {
-                                $diffLine['unit_price_gross'] = round($diffLine['gross_amount'] / $diffQty, 4);
-                            }
-                        }
-                    }
-                    unset($diffLine);
-                }
-
-                // Apply the same unit price calculations as getLineItems()
-                foreach ($lines as &$rLine) {
-                    if ($this->isNullOrBlank($rLine['unit_price_net'] ?? null) && !$this->isNullOrBlank($rLine['net_amount'] ?? null) && !$this->isNullOrBlank($rLine['quantity'] ?? null) && $rLine['quantity'] != 0) {
-                        $rLine['unit_price_net'] = round($rLine['net_amount'] / $rLine['quantity'], 4);
-                    }
-                    $vatRate = isset($rLine['vat_rate']) && is_numeric($rLine['vat_rate']) ? (float)$rLine['vat_rate'] : 0;
-                    $vatMultiplier = 1 + $vatRate / 100;
-                    if ($this->isNullOrBlank($rLine['net_amount'] ?? null) && !$this->isNullOrBlank($rLine['gross_amount'] ?? null) && $vatMultiplier > 0) {
-                        $rLine['net_amount'] = round($rLine['gross_amount'] / $vatMultiplier, 2);
-                    }
-                    if ($this->isNullOrBlank($rLine['unit_price_net'] ?? null) && !$this->isNullOrBlank($rLine['unit_price_gross'] ?? null) && $vatMultiplier > 0) {
-                        $rLine['unit_price_net'] = round($rLine['unit_price_gross'] / $vatMultiplier, 4);
-                    }
-                }
-                unset($rLine);
-            } else {
-                $lines = $this->getLineItems();
-            }
-        } else {
-            $lines = $this->getLineItems();
+        $this->deposit_socid = (int) $socid;
+        $lines = $this->loadImportLines(false, $reParsedVatSummary);
+        $prepared = $this->prepareImportLines($lines, $lineProductMap, false, $isMulticurrency, $reParsedVatSummary, 'STOCK_CALCULATE_ON_SUPPLIER_BILL');
+        if ($prepared === false) {
+            $this->import_status = self::STATUS_ERROR;
+            $this->import_error = $this->error;
+            $this->db->rollback();
+            return -4;
         }
         $error = 0;
 
-        // For credit notes, Dolibarr's addline() forces -abs() on all amounts, making it impossible
-        // to have mixed-sign lines. Detect this and fall back to VAT summary lines when needed.
-        $useSummaryLines = false;
-        if ($facture->type === FactureFournisseur::TYPE_CREDIT_NOTE && !empty($lines)) {
-            foreach ($lines as $line) {
-                $lineNet = isset($line['net_amount']) ? (float)$line['net_amount'] : 0;
-                if ($lineNet > 0) {
-                    $useSummaryLines = true;
-                    break;
-                }
+        foreach ($prepared as $pl) {
+            $result = $facture->addline(
+                $pl['desc'],
+                $pl['pu'],
+                $pl['txtva'],
+                0,
+                0,
+                $pl['qty'],
+                $pl['fk_product'],
+                0,
+                0,
+                0,
+                0,
+                0,
+                $pl['price_base'],
+                $pl['type'],
+                -1,
+                0,
+                array(),
+                null,
+                0,
+                $pl['pu_devise'],
+                $pl['ref']
+            );
+
+            if ($result <= 0) {
+                $error++;
+                $this->error = $facture->error;
+                $this->errors = $facture->errors;
+                break;
             }
         }
 
-        if ($useSummaryLines) {
-            // Mixed-sign lines detected on a credit note - Dolibarr forces -abs() on amounts
-            // so we can't use the XML lines directly. Instead:
-            // 1) Add each XML line item as a zero-value descriptive line showing what was corrected
-            // 2) Add the actual correction amount per VAT rate from the invoice totals
+        if (!$error && $this->invoice_type === 'ROZ' && $this->linkSupplierDeposits($user, $facture, $socid) < 0) {
+            $error++;
+        }
+        if (!$error && $this->invoice_type === 'ZAL' && $this->coverEarlierSettlements($facture->id, $socid) < 0) {
+            $error++;
+        }
 
-            // Add descriptive lines for each XML line item (price=0, purely informational)
-            foreach ($lines as $line) {
-                $lineDesc = $line['description'] ?? '';
-                $lineNet = isset($line['net_amount']) ? (float)$line['net_amount'] : 0;
-                $lineQty = isset($line['quantity']) ? (float)$line['quantity'] : 0;
-                $lineUnit = $line['unit'] ?? '';
-                $lineRef = $line['indeks'] ?? '';
-
-                // Build a descriptive text showing the item and its correction delta
-                $deltaSign = $lineNet >= 0 ? '+' : '';
-                $desc = $lineDesc;
-                $desc .= ' (' . $langs->trans('KSEF_CorrectionItemDetail', $deltaSign . price($lineNet, 0, $langs, 0, -1, -1, $this->currency), $lineQty, $lineUnit) . ')';
-
-                $result = $facture->addline(
-                    $desc, 0, 0,
-                    0, 0,           // localtax1, localtax2
-                    0,              // qty = 0 (informational only)
-                    0,              // fk_product
-                    0, 0, 0, 0, 0, // remise, date_start, date_end, ventilation, info_bits
-                    'HT',
-                    1,              // type = service
-                    -1, 0, array(), null, 0,
-                    0, $lineRef
-                );
-
-                if ($result <= 0) {
-                    $error++;
-                    $this->error = $facture->error;
-                    $this->errors = $facture->errors;
-                    break;
-                }
-            }
-
-            // Add the actual correction amounts per VAT rate
-            $vatSummary = $reParsedVatSummary ?: $this->getVatSummary();
-            foreach ($vatSummary as $rate => $amounts) {
-                $netAmount = abs((float)($amounts['net'] ?? 0));
-                if ($netAmount == 0) continue;
-
-                $desc = $langs->trans('KSEF_CorrectionSummaryLine', $rate . '%');
-                $txtva = is_numeric($rate) ? (float)$rate : 0;
-
-                if ($isMulticurrency) {
-                    $pu = 0;
-                    $pu_devise = $netAmount;
-                } else {
-                    $pu = $netAmount;
-                    $pu_devise = 0;
-                }
-
-                $result = $facture->addline(
-                    $desc, $pu, $txtva,
-                    0, 0,           // localtax1, localtax2
-                    1,              // qty
-                    0,              // fk_product
-                    0, 0, 0, 0, 0, // remise, date_start, date_end, ventilation, info_bits
-                    'HT',
-                    1,              // type = service
-                    -1, 0, array(), null, 0,
-                    $pu_devise, ''
-                );
-
-                if ($result <= 0) {
-                    $error++;
-                    $this->error = $facture->error;
-                    $this->errors = $facture->errors;
-                    break;
-                }
-            }
-        } else {
-            // Normal path: one Dolibarr line per XML line item
-            foreach ($lines as $line) {
-                $lineNum = $line['line_num'] ?? 0;
-                $fk_product = isset($lineProductMap[$lineNum]) ? (int)$lineProductMap[$lineNum] : 0;
-
-                $type = 0;
-                if ($fk_product > 0) {
-                    $product = new Product($this->db);
-                    if ($product->fetch($fk_product) > 0) {
-                        $type = $product->type;
-                    }
-                }
-
-                $desc = $line['description'] ?? '';
-                $xmlPrice = isset($line['unit_price_net']) ? (float)$line['unit_price_net'] : 0;
-                $txtva = isset($line['vat_rate']) && is_numeric($line['vat_rate']) ? (float)$line['vat_rate'] : 0;
-                $qty = isset($line['quantity']) ? (float)$line['quantity'] : 1;
-                $ref_supplier = $line['indeks'] ?? '';
-
-                if ($isMulticurrency) {
-                    $pu = 0;
-                    $pu_devise = $xmlPrice;
-                } else {
-                    $pu = $xmlPrice;
-                    $pu_devise = 0;
-                }
-
-                $result = $facture->addline(
-                    $desc,          // description
-                    $pu,            // unit price HT
-                    $txtva,         // VAT rate
-                    0,              // localtax1
-                    0,              // localtax2
-                    $qty,           // quantity
-                    $fk_product,    // product id
-                    0,              // remise_percent
-                    0,              // date_start
-                    0,              // date_end
-                    0,              // fk_code_ventilation
-                    0,              // info_bits
-                    'HT',           // price_base_type
-                    $type,          // type (product/service)
-                    -1,             // rang
-                    0,              // notrigger
-                    array(),        // array_options
-                    null,           // fk_unit
-                    0,              // origin_id
-                    $pu_devise,     // pu_devise
-                    $ref_supplier   // ref_supplier
-                );
-
-                if ($result <= 0) {
-                    $error++;
-                    $this->error = $facture->error;
-                    $this->errors = $facture->errors;
-                    break;
-                }
-            }
+        if (!$error && $korektaSource && $this->rebuildKorektaLines($facture, $korektaSource, $lineProductMap, $isMulticurrency) < 0) {
+            $error++;
+        }
+        $below = !$error && $korektaSource && $this->invoice_type === 'KOR_ZAL' ? ksefDepositKorektaBelowZero($this->db, (int) $facture->id, 'invoice_supplier') : null;
+        if ($below) {
+            $this->error = $langs->transnoentitiesnoconv('KSEF_ImportErrorKorZalBelowZero', $below['ref'], $below['label']);
+            $error++;
+        }
+        if (!$error && $korektaSource && $this->linkCitedInvoices($facture) < 0) {
+            $error++;
+        }
+        if (!$error && $korektaSource && $isMulticurrency && $reParsedVatSummary && ksefKorektaPlnFromXml($this->db, $facture, $reParsedVatSummary) < 0) {
+            $this->error = ksefDbErrorForUser($user, 'KSEF_DbErrorGeneric', $this->db->lasterror());
+            $error++;
         }
 
         if ($error) {
@@ -1881,14 +2287,73 @@ class KsefIncoming extends CommonObject
             return -4;
         }
 
+        // before totals check
+        if ($isMulticurrency && !$korektaSource && ksefDepositLinesAtInvoiceRate($this->db, (int) $facture->id, 'invoice_supplier') < 0) {
+            $this->error = ksefDbErrorForUser($user, 'KSEF_DbErrorGeneric', $this->db->lasterror());
+            $this->import_status = self::STATUS_ERROR;
+            $this->import_error = $this->error;
+            $this->db->rollback();
+            return -4;
+        }
+
+        $check = new FactureFournisseur($this->db);
+        $check->fetch($facture->id);
+        $settled = ksefApplyIncomingVatRounding($this, $check);
+        if ($settled['error'] !== '') {
+            $this->error = ksefDbErrorForUser($user, 'KSEF_DbErrorGeneric', $settled['error']);
+            $this->import_status = self::STATUS_ERROR;
+            $this->import_error = $this->error;
+            $this->db->rollback();
+            return -4;
+        }
+        if ($settled['note'] !== '') {
+            $this->warnings[] = $settled['note'];
+        }
+        if (ksefSyncBaseMulticurrencyTotals($this->db, $check) > 0) {
+            $check->fetch($facture->id);
+        }
+        $plnSet = ksefIncomingPlnFromXml($this->db, $check, $this);
+        if ($plnSet['result'] < 0) {
+            $this->error = ksefDbErrorForUser($user, 'KSEF_DbErrorGeneric', $plnSet['error']);
+            $this->import_status = self::STATUS_ERROR;
+            $this->import_error = $this->error;
+            $this->db->rollback();
+            return -4;
+        }
+        if ($plnSet['result'] > 0) {
+            $check->fetch($facture->id);
+        }
+        $sellerPln = ksefIncomingSellerPlnText(ksefIncomingSellerPlnCheck($this), strtoupper((string) $this->currency));
+        if ($sellerPln !== '') {
+            $this->warnings[] = $sellerPln;
+        }
+        $cmp = ksefCompareIncomingTotals($this, $check, true);
+        if (!$cmp['ok'] && !$cmp['skipped']) {
+            $this->warnings[] = ksefIncomingTotalsWarning($cmp);
+        }
+        if ($this->partyIdentityState($socid) === 'mismatch') {
+            $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_PartyIdMismatch');
+        }
+        $stated = $this->statedBeforeCheck((int) $facture->id);
+        if ($stated !== '') {
+            $this->warnings[] = $stated;
+        }
+
         $facture->array_options['options_ksef_number'] = $this->ksef_number;
         $facture->array_options['options_ksef_status'] = 'ACCEPTED';
         $facture->array_options['options_ksef_submission_date'] = $this->fa3_creation_date;
         $facture->array_options['options_ksef_sale_date'] = $this->sale_date;
-        $facture->insertExtraFields();
+        if ($facture->insertExtraFields() < 0) {
+            $this->error = $facture->error ?: implode(', ', (array) $facture->errors);
+            $this->db->rollback();
+            return -5;
+        }
 
-        // Attach generated KSeF PDF visualization to the supplier invoice
-        $this->attachPdfToSupplierInvoice($facture);
+        $plnOnly = !empty($cmp['pln']) && empty($cmp['other_differs']) && empty($cmp['oss_differs']);
+        // no deposit realign
+        $GLOBALS['ksef_importing_purchase_pln'] = $plnSet['kurs'] > 0 ? (int) $facture->id : 0;
+        $this->validateImported($user, $facture, $check, !$cmp['ok'] && !$cmp['skipped'] && !$plnOnly, (int) ($options['warehouse_id'] ?? 0));
+        $GLOBALS['ksef_importing_purchase_pln'] = 0;
 
         $this->import_status = self::STATUS_IMPORTED;
         $this->import_date = dol_now();
@@ -1902,15 +2367,1016 @@ class KsefIncoming extends CommonObject
         }
 
         $this->db->commit();
+        $this->attachPdfToSupplierInvoice($facture);
         return $facture->id;
     }
 
+    /**
+     * @brief Validate imported draft
+     * @param User $user
+     * @param FactureFournisseur $facture Imported draft
+     * @param FactureFournisseur $check Same, with lines
+     * @param bool $totalsDiffer
+     * @param int $warehouse 0: none
+     * @return void
+     */
+    private function validateImported($user, $facture, $check, $totalsDiffer, $warehouse)
+    {
+        global $langs;
+
+        if ($totalsDiffer) {
+            $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_ImportDraftTotals');
+            return;
+        }
+        if ($warehouse > 0 && !ksefUserCan($user, 'stock_movement')) {
+            $warehouse = 0;
+            $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_SalesNoStockRight');
+        }
+        if ($warehouse <= 0 && ksefSupplierPayNeedsWarehouse($check)) {
+            $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_ImportDraftNoWarehouse');
+            return;
+        }
+
+        // nested rollback: savepoint
+        $level = (int) $this->db->transaction_opened;
+        $this->db->query("SAVEPOINT ksef_import_validate");
+        $facture->fetch($facture->id);
+        $GLOBALS['ksef_import_no_stock'] = $warehouse > 0 ? 0 : 1;
+        $res = $facture->validate($user, '', $warehouse > 0 ? $warehouse : 0);
+        unset($GLOBALS['ksef_import_no_stock']);
+        if ($res > 0) {
+            $this->db->query("RELEASE SAVEPOINT ksef_import_validate");
+            $this->validated = true;
+            return;
+        }
+        while ((int) $this->db->transaction_opened > $level) {
+            $this->db->rollback();
+        }
+        $this->db->query("ROLLBACK TO SAVEPOINT ksef_import_validate");
+        $err = $facture->error ? $facture->error : implode(', ', (array) $facture->errors);
+        $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_ImportDraftValidateFailed', ksefTranslateError($err));
+        $facture->fetch($facture->id);
+    }
 
     /**
-     * @brief Attach KSeF PDF visualization to a supplier invoice's document area
-     * @param FactureFournisseur $facture The supplier invoice to attach the PDF to
-     * @return bool True on success, false on error (non-fatal, logged only)
-     * @called_by importToDolibarr()
+     * @brief Cited invoices
+     * @return array
+     */
+    public function citedInvoices()
+    {
+        $out = array();
+        foreach ($this->resolveCorrectedInvoices() as $rc) {
+            $out[] = array('label' => $rc['invoice_number'] !== '' ? $rc['invoice_number'] : $rc['ksef_number'],
+                'key' => $rc['ksef_number'] !== '' ? $rc['ksef_number'] : $rc['invoice_number'], 'ksef' => $rc['ksef_number'], 'number' => $rc['invoice_number'],
+                'date' => $rc['invoice_date'], 'invoice' => $rc['supplier_invoice'], 'record' => $rc['incoming']);
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Resolve korekta source
+     * @param int $correctionSourceId 0: first found
+     * @param int $socid 0: no check
+     * @return FactureFournisseur|Facture|string Invoice, or refusal
+     */
+    public function resolveKorektaSource($correctionSourceId = 0, $socid = 0)
+    {
+        global $conf, $langs;
+        $langs->load('ksef@ksef');
+        dol_include_once('/ksef/lib/ksef.lib.php');
+        $this->korekta_cited = 0;
+        $this->korekta_linked = array();
+        $cited = $this->citedInvoices();
+        if (empty($cited)) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportErrorNoCorrectionsReference');
+        }
+        $found = array();
+        $keys = array();
+        foreach ($cited as $c) {
+            if ($c['invoice']) {
+                $found[(int) $c['invoice']->id] = $c['invoice'];
+                $keys['i' . (int) $c['invoice']->id] = true;
+            } else {
+                $keys['c' . $c['key']] = true;
+            }
+        }
+        $this->korekta_cited = count($keys);
+        if (empty($found)) {
+            $byHand = true;
+            $absent = true;
+            foreach ($cited as $c) {
+                $byHand = $byHand && $c['ksef'] === '' && empty($c['record']);
+                $absent = $absent && empty($c['record']) && ($c['ksef'] === '' || !empty($_SESSION['ksef_original_absent'][$c['ksef']]));
+            }
+            $key = $byHand ? 'KSEF_ImportErrorOriginalByHand' : ($absent ? 'KSEF_ImportErrorOriginalAbsent' : 'KSEF_ImportErrorOriginalNotImported');
+            return $langs->transnoentitiesnoconv($key, $cited[0]['label'] ?: $this->corrected_invoice_number);
+        }
+        if ((int) $correctionSourceId > 0 && !isset($found[(int) $correctionSourceId])) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportErrorBadCorrectionSource');
+        }
+        $src = (int) $correctionSourceId > 0 ? $found[(int) $correctionSourceId] : reset($found);
+        $kind = ksefInvoiceKind($src);
+        if ($this->korekta_cited > 1) {
+            $deposit = in_array($this->invoice_type, array('KOR_ZAL', 'KOR_ROZ'), true);
+            foreach ($found as $inv) {
+                $deposit = $deposit || ksefDepositRootId($this->db, $inv->id, $kind['element']) > 0;
+            }
+            if ($deposit) {
+                return $langs->transnoentitiesnoconv('KSEF_ImportErrorKorektaCollectiveDeposit');
+            }
+        }
+        $korCurrency = ksefNormCurrency($this->currency ?: 'PLN');
+        require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+        foreach ($found as $inv) {
+            if ((int) $socid > 0 && (int) $inv->socid !== (int) $socid) {
+                $theirs = new Societe($this->db);
+                $ours = new Societe($this->db);
+                $theirs->fetch((int) $inv->socid);
+                $ours->fetch((int) $socid);
+                return $langs->transnoentitiesnoconv('KSEF_ImportErrorKorektaOtherParty', $inv->ref, $theirs->name, $ours->name);
+            }
+            $invCurrency = ksefNormCurrency($inv->multicurrency_code ?: $conf->currency);
+            if ($invCurrency !== $korCurrency) {
+                return $langs->transnoentitiesnoconv('KSEF_ImportErrorKorektaCurrency', $korCurrency, $inv->ref, $invCurrency);
+            }
+        }
+        $chain = ksefBuildCorrectionChain($src, $this->db, 20, $this->correctsCitedNote($src));
+        $tip = end($chain);
+        $st = (int) (isset($tip->status) ? $tip->status : $tip->statut);
+        if ($st === Facture::STATUS_DRAFT) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportErrorKorektaSourceDraft', $tip->ref);
+        }
+        if ($st === Facture::STATUS_ABANDONED && (string) $tip->close_code !== Facture::CLOSECODE_REPLACED) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportErrorKorektaAbandoned', $tip->ref);
+        }
+        $waiting = ksefFindReplacementOf($this->db, (int) $tip->id, Facture::STATUS_DRAFT . ',' . Facture::STATUS_ABANDONED, 0, false, $kind['element']);
+        if ($waiting) {
+            return $langs->transnoentitiesnoconv('KSEF_ImportErrorKorektaWaiting', $tip->ref, $waiting->ref);
+        }
+        unset($found[(int) $src->id]);
+        $this->korekta_linked = $found;
+        return $tip;
+    }
+
+    /**
+     * @brief Corrects cited note
+     * @param FactureFournisseur|Facture $src Cited invoice
+     * @return bool
+     */
+    protected function correctsCitedNote($src)
+    {
+        return false;
+    }
+
+    /**
+     * @brief Link cited invoices
+     * @param CommonInvoice $facture Korekta
+     * @return int -1 on error
+     */
+    protected function linkCitedInvoices($facture)
+    {
+        foreach ($this->korekta_linked as $inv) {
+            if ($facture->add_object_linked($inv->element, (int) $inv->id) <= 0) {
+                $this->error = $facture->error ?: $this->db->lasterror();
+                return -1;
+            }
+        }
+        return 1;
+    }
+
+    /**
+     * @brief Rebuild korekta lines
+     * @param FactureFournisseur $facture Korekta draft
+     * @param FactureFournisseur $source Corrected invoice
+     * @param array $lineProductMap line_num => product id
+     * @param bool $isMulticurrency
+     * @return int -1 on error
+     */
+    private function rebuildKorektaLines($facture, $source, $lineProductMap, $isMulticurrency)
+    {
+        $facture->fetch($facture->id);
+        $have = (float) ($isMulticurrency ? $facture->multicurrency_total_ht : $facture->total_ht);
+        $want = (float) ($isMulticurrency ? $source->multicurrency_total_ht : $source->total_ht) + (float) $this->total_net;
+        if ($this->korekta_cited <= 1 && abs($have - $want) < 0.015) {
+            return 1;
+        }
+        foreach ($facture->lines as $l) {
+            if ($facture->deleteLine($l->id) < 0) {
+                $this->error = $facture->error;
+                return -1;
+            }
+        }
+        if (empty($source->lines)) {
+            $source->fetch_lines();
+        }
+        foreach ($source->lines as $l) {
+            $pu = ksefLineExactUnitPrice($l, $isMulticurrency);
+            $r = $facture->addline($l->desc, $isMulticurrency ? 0 : $pu, $l->tva_tx, $l->localtax1_tx, $l->localtax2_tx, $l->qty, $l->fk_product,
+                $l->remise_percent, $l->date_start, $l->date_end, 0, $l->info_bits, 'HT', $l->product_type, -1, 0, array(), $l->fk_unit, 0,
+                $isMulticurrency ? $pu : 0, $l->ref_supplier);
+            if ($r <= 0) {
+                $this->error = $facture->error;
+                return -1;
+            }
+        }
+        $vs = null;
+        $diff = $this->prepareImportLines($this->loadImportLines(true, $vs), $lineProductMap, false, $isMulticurrency, $vs, 'STOCK_CALCULATE_ON_SUPPLIER_BILL');
+        foreach ($diff as $pl) {
+            $r = $facture->addline($pl['desc'], $pl['pu'], $pl['txtva'], 0, 0, $pl['qty'], $pl['fk_product'], 0, 0, 0, 0, 0, $pl['price_base'], $pl['type'],
+                -1, 0, array(), null, 0, $pl['pu_devise'], $pl['ref']);
+            if ($r <= 0) {
+                $this->error = $facture->error;
+                return -1;
+            }
+        }
+        return 1;
+    }
+
+    /**
+     * @brief Preview import lines
+     * @return array
+     */
+    public function previewImportLines()
+    {
+        $vs = null;
+        return $this->loadImportLines(true, $vs);
+    }
+
+    /**
+     * @brief Line takes product
+     * @param array $line
+     * @return bool
+     */
+    public static function isProductLine($line)
+    {
+        return empty($line['deposit_line']) && empty($line['deposit_settlement']);
+    }
+
+    /**
+     * @brief Load import lines
+     * @param bool $difference Difference lines
+     * @param array|null $vatSummary Out: VAT summary
+     * @return array
+     */
+    public function loadImportLines($difference, &$vatSummary)
+    {
+        $vatSummary = null;
+        $lines = null;
+        $parsed = null;
+        if (!empty($this->fa3_xml)) {
+            $parser = new FA3Parser($this->db);
+            $parsed = $parser->parse($this->fa3_xml);
+            if ($parsed && (!empty($parsed['lines']) || (self::isCorrectionType($this->invoice_type) && !empty($parsed['lines_before'])))) {
+                $lines = (array) ($parsed['lines'] ?? array());
+                if (self::isCorrectionType($this->invoice_type)) {
+                    if (!empty($parsed['vat_summary'])) {
+                        $vatSummary = $parsed['vat_summary'];
+                    }
+                    if ($difference) {
+                        $lines = self::applyCorrectionDiff($lines, $parsed['lines_before'] ?? array());
+                    } else {
+                        $lines = array_values($lines);
+                        $pairs = empty($parsed['lines_before']) ? array() : self::pairCorrectionRows($lines, array_values($parsed['lines_before']));
+                        foreach ($lines as $i => $line) {
+                            $lines[$i] = isset($pairs[$i]) ? $line : self::markRebateRow($line);
+                        }
+                    }
+                }
+            }
+        }
+        if ($lines === null) {
+            $lines = $this->getLineItems();
+        }
+        if (!empty($parsed)) {
+            $lines = $this->depositImportLines($lines, $parsed, $difference);
+        }
+        return $lines;
+    }
+
+    /**
+     * @brief Add deposit lines
+     * @param array $lines
+     * @param array $parsed Parser result
+     * @param bool $difference Difference lines
+     * @return array
+     */
+    private function depositImportLines($lines, $parsed, $difference = false)
+    {
+        global $langs;
+        $langs->load('ksef@ksef');
+        $type = (string) ($parsed['invoice']['type'] ?? $this->invoice_type);
+        $summary = (array) ($parsed['vat_summary'] ?? array());
+        if (in_array($type, array('ZAL', 'KOR_ZAL'), true) && ($parsed['lines_source'] ?? '') === 'order') {
+            $out = array();
+            $n = 1;
+            foreach ($summary as $rate => $amt) {
+                if ($rate === 'marza' || (float) ($amt['net'] ?? 0) == 0) {
+                    continue;
+                }
+                $out[] = array('line_num' => $n++, 'description' => $langs->transnoentitiesnoconv('KSEF_DepositImportLine', is_numeric($rate) ? $rate . '%' : $rate),
+                    'quantity' => 1.0, 'unit_price_net' => (float) $amt['net'], 'net_amount' => (float) $amt['net'], 'vat_rate' => (string) $rate,
+                    'declared' => array('P_8B', 'P_9A', 'P_11'), 'unit' => null, 'indeks' => null, 'gtin' => null, 'deposit_line' => true);
+            }
+            return $out ?: $lines;
+        }
+        $korRoz = $type === 'KOR_ROZ' && $difference && !$this->isOutgoingRecord();
+        if ($type !== 'ROZ' && !$korRoz) {
+            return $lines;
+        }
+        $sums = $this->rozLineSums($lines);
+        foreach ($korRoz ? array_keys($summary) : array() as $rate) {
+            if ($rate !== 'marza') {
+                $sums[(string) $rate] = $sums[(string) $rate] ?? 0;
+            }
+        }
+        $refs = array();
+        $linked = array();
+        $allRefs = array();
+        foreach ((array) ($parsed['deposits'] ?? array()) as $d) {
+            $allRefs[] = $d['ksef_number'] !== '' ? $d['ksef_number'] : $d['number'];
+        }
+        if (!$this->isOutgoingRecord()) {
+            foreach ($this->supplierDeposits($this->deposit_socid, $parsed) as $d) {
+                if ($d['reason'] === '') {
+                    foreach ($d['rates'] as $rate => $net) {
+                        $linked[$rate] = ($linked[$rate] ?? 0) + $net;
+                    }
+                    continue;
+                }
+                $refs[] = $d['label'] . ($d['ref'] !== '' ? ' (' . $d['ref'] . ')' : '');
+            }
+        }
+        if (!$refs) {
+            $refs = $allRefs ?: array((string) $this->corrected_invoice_number);
+        }
+        $max = 0;
+        foreach ($lines as $line) {
+            $max = max($max, (int) ($line['line_num'] ?? 0));
+        }
+        foreach ($linked as $rate => $net) {
+            $sums[$rate] = $sums[$rate] ?? 0;
+        }
+        foreach ($sums as $rate => $net) {
+            $diff = round((float) ($summary[$rate]['net'] ?? 0) - $net + (float) ($linked[$rate] ?? 0), 2);
+            if (abs($diff) < 0.005) {
+                continue;
+            }
+            $lines[] = array('line_num' => ++$max, 'description' => $langs->transnoentitiesnoconv('KSEF_DepositSettledLine', implode(', ', $refs)),
+                'quantity' => 1.0, 'unit_price_net' => $diff, 'net_amount' => $diff, 'vat_rate' => (string) $rate,
+                'declared' => array('P_8B', 'P_9A', 'P_11'), 'unit' => null, 'indeks' => null, 'gtin' => null, 'deposit_settlement' => true, 'price_only' => true);
+        }
+        return $lines;
+    }
+
+    /**
+     * @brief Cited supplier deposits
+     * @param int $socid 0: any
+     * @param array|null $parsed null: from fa3_xml
+     * @return array
+     */
+    public function supplierDeposits($socid = 0, $parsed = null)
+    {
+        global $conf;
+        $out = array();
+        if ($this->isOutgoingRecord()) {
+            return $out;
+        }
+        if ($parsed === null) {
+            if (empty($this->fa3_xml)) {
+                return $out;
+            }
+            $parsed = (new FA3Parser($this->db))->parse($this->fa3_xml);
+        }
+        if (empty($parsed['deposits']) || ($parsed['invoice']['type'] ?? $this->invoice_type) !== 'ROZ') {
+            return $out;
+        }
+        require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
+        $keys = array();
+        $norm = array('22' => '23', '7' => '8');
+        foreach ((array) ($parsed['lines'] ?? array()) as $l) {
+            $k = (string) ($l['vat_rate'] ?? '');
+            $keys[] = isset($norm[$k]) ? $norm[$k] : $k;
+        }
+        $keys = array_merge($keys, array_map('strval', array_keys((array) ($parsed['vat_summary'] ?? array()))));
+        $byDoli = array();
+        foreach ($keys as $k) {
+            $v = ksefVatKeyToDolibarr($k);
+            $byDoli[is_string($v) ? $v : (string) (float) $v] = $k;
+        }
+        $keys = $byDoli;
+        $foreign = !empty($this->currency) && $this->currency !== $conf->currency;
+        foreach ((array) $parsed['deposits'] as $d) {
+            $row = array('label' => $d['ksef_number'] !== '' ? $d['ksef_number'] : $d['number'], 'ksef_number' => (string) $d['ksef_number'],
+                'number' => (string) $d['number'], 'id' => 0, 'ref' => '', 'reason' => 'missing', 'rates' => array(), 'value' => array(), 'part' => null, 'discounts' => array());
+            $sql = '';
+            if ($d['ksef_number'] !== '') {
+                $sql = "SELECT ff.rowid FROM " . MAIN_DB_PREFIX . "ksef_incoming AS i INNER JOIN " . MAIN_DB_PREFIX . "facture_fourn AS ff ON ff.rowid = i.fk_facture_fourn"
+                    . " WHERE i.ksef_number = '" . $this->db->escape($d['ksef_number']) . "' AND ff.type = " . FactureFournisseur::TYPE_DEPOSIT
+                    . " AND ff.entity IN (" . getEntity('supplier_invoice') . ") ORDER BY i.rowid DESC LIMIT 1";
+            } elseif ($d['number'] !== '' && $socid > 0) {
+                $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "facture_fourn WHERE ref_supplier = '" . $this->db->escape($d['number']) . "'"
+                    . " AND fk_soc = " . (int) $socid . " AND type = " . FactureFournisseur::TYPE_DEPOSIT . " AND entity IN (" . getEntity('supplier_invoice') . ") LIMIT 1";
+            }
+            $res = $sql !== '' ? $this->db->query($sql) : false;
+            $o = $res ? $this->db->fetch_object($res) : null;
+            $dep = new FactureFournisseur($this->db);
+            if (!$o || $dep->fetch((int) $o->rowid) <= 0) {
+                $out[] = $row;
+                continue;
+            }
+            $row['id'] = (int) $dep->id;
+            $row['ref'] = (string) $dep->ref;
+            $depForeign = !empty($dep->multicurrency_code) && $dep->multicurrency_code !== $conf->currency;
+            if ((int) $dep->status === FactureFournisseur::STATUS_DRAFT) {
+                $row['reason'] = 'draft';
+            } elseif ($socid > 0 && (int) $dep->socid !== (int) $socid) {
+                $row['reason'] = 'supplier';
+            } elseif ($foreign ? $dep->multicurrency_code !== $this->currency : $depForeign) {
+                $row['reason'] = 'currency';
+            } else {
+                $row['reason'] = '';
+                $discounts = ksefDepositDiscounts($this->db, $dep);
+                $row['discounts'] = is_array($discounts) ? $discounts : array();
+                $own = (int) $this->fk_facture_fourn;
+                $imported = $own > 0 && in_array($own, array_column($row['discounts'], 'used_by'), true);
+                $t = ksefDepositCreditTarget($this->db, $dep->id, 0, 0, 'invoice_supplier');
+                $col = $foreign ? 'mht' : 'ht';
+                foreach (($t ? $t['rates'] : array()) as $rk => $r) {
+                    if (abs($r[$col]) >= 0.005 && isset($keys[$rk])) {
+                        $row['value'][$keys[$rk]] = ($row['value'][$keys[$rk]] ?? 0) + $r[$col];
+                    }
+                }
+                $linked = array();
+                if ($imported) {
+                    foreach ($row['discounts'] as $disc) {
+                        if ($disc['used_by'] === $own) {
+                            $linked[] = array('rate' => $disc['rate'], 'net' => abs($disc[$col]), 'gross' => abs($disc[$foreign ? 'mttc' : 'ttc']));
+                        }
+                    }
+                } else {
+                    foreach ($row['discounts'] as $disc) {
+                        if ($disc['used_by'] > 0 && $disc['used_by'] !== $own) {
+                            $row['reason'] = 'used';
+                        }
+                    }
+                    $cov = ksefDepositCovers($this->db, $dep->id, $own);
+                    foreach (($t ? $t['target']['rates'] : array()) as $rk => $r) {
+                        $net = abs($r[$col]) - (float) ($cov[$rk][$col] ?? 0);
+                        if ($net >= 0.005) {
+                            $linked[] = array('rate' => $rk, 'net' => $net, 'gross' => abs($r[$t['key']]) - (float) ($cov[$rk][$t['key']] ?? 0));
+                        } elseif (abs($r[$col]) >= 0.005) {
+                            $row['reason'] = $row['reason'] ?: 'used';
+                        }
+                    }
+                }
+                $gross = 0.0;
+                foreach ($linked as $l) {
+                    if (!isset($keys[$l['rate']])) {
+                        $row['reason'] = $row['reason'] ?: 'rate';
+                        continue;
+                    }
+                    $k = $keys[$l['rate']];
+                    $row['rates'][$k] = ($row['rates'][$k] ?? 0) + $l['net'];
+                    $gross += $l['gross'];
+                }
+                if ($t && abs((float) $t[$t['key']]) < 0.005) {
+                    $row['reason'] = $row['reason'] ?: 'zero';
+                } elseif (!$t || !$t['rates']) {
+                    $row['reason'] = 'rate';
+                } elseif (!$linked) {
+                    $row['reason'] = $row['reason'] ?: 'unpaid';
+                }
+                $coveredElsewhere = $t ? array_sum(array_column(ksefDepositCovers($this->db, $dep->id, $own), $t['key'])) : 0;
+                if ($t && $linked && $gross + $coveredElsewhere < $t[$t['key']] - 0.005) {
+                    $row['part'] = array((float) price2num($gross, 'MT'), (float) $t[$t['key']]);
+                }
+                if ($row['reason'] === '' && $this->import_status === self::STATUS_IMPORTED && !$imported) {
+                    $row['reason'] = 'summary';
+                }
+            }
+            $out[] = $row;
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Deposit preview rows
+     * @return array
+     */
+    public function depositPreviewLines()
+    {
+        global $langs;
+        $out = array();
+        if ($this->invoice_type !== 'ROZ') {
+            return $out;
+        }
+        $langs->load('ksef@ksef');
+        foreach ($this->supplierDeposits($this->deposit_socid) as $d) {
+            if ($d['reason'] !== '') {
+                continue;
+            }
+            $dep = new FactureFournisseur($this->db);
+            $dep->fetch($d['id']);
+            $label = dol_escape_htmltag($langs->trans('KSEF_IncomingDepositRow')) . ' ' . $dep->getNomUrl(1)
+                . ($d['ksef_number'] !== '' ? ' <span class="opacitymedium small">' . dol_escape_htmltag($d['ksef_number']) . '</span>' : '');
+            foreach ($d['rates'] as $rate => $net) {
+                $out[] = array('line_num' => '', 'description' => '', 'description_html' => $label, 'quantity' => 1, 'unit' => '',
+                    'unit_price_net' => -$net, 'vat_rate' => (string) $rate, 'net_amount' => -$net, 'deposit_settlement' => 1);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Link supplier deposits
+     * @param User $user
+     * @param FactureFournisseur $facture Draft settlement
+     * @param int $socid Supplier
+     * @return int Count, <0 on error
+     */
+    private function linkSupplierDeposits($user, $facture, $socid)
+    {
+        global $langs, $conf;
+        $linked = 0;
+        $foreign = !empty($this->currency) && $this->currency !== $conf->currency;
+        $cols = array('ht', 'tva', 'ttc', 'mht', 'mtva', 'mttc');
+        $parsed = (new FA3Parser($this->db))->parse((string) $this->fa3_xml);
+        $check = $this->depositDeductionCheck($socid, $parsed);
+        foreach ($this->supplierDeposits($socid, $parsed) as $d) {
+            if (!in_array($d['reason'], array('', 'unpaid', 'draft'), true)) {
+                if (!in_array($d['reason'], array('missing', 'zero'), true)) {
+                    $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_DepositNotLinked', $d['ref'], $langs->transnoentitiesnoconv('KSEF_DepositReason_' . $d['reason']));
+                }
+                continue;
+            }
+            $rs = $d['reason'] === '' ? ksefDepositRestate($this->db, $user, $d['id'], 0, 'open', 0, 'invoice_supplier') : array('result' => 0);
+            if ($rs['result'] < 0) {
+                $this->error = $rs['error'];
+                return -1;
+            }
+            $used = array();
+            foreach ($d['reason'] === '' ? ksefDepositRows($this->db, $d['id'], 'invoice_supplier') : array() as $r) {
+                if ($r['inv'] > 0 || $r[$foreign ? 'mttc' : 'ttc'] < 0.005) {
+                    continue;
+                }
+                if ($facture->insert_discount($r['id']) <= 0) {
+                    $this->error = $facture->error ? $facture->error : implode(', ', (array) $facture->errors);
+                    return -1;
+                }
+                $used[$r['key']] = $r;
+            }
+            $t = ksefDepositCreditTarget($this->db, $d['id'], 0, 0, 'invoice_supplier');
+            $covered = ksefDepositCovers($this->db, $d['id'], $facture->id);
+            $rem = array();
+            foreach (($t ? $t['rates'] : array()) as $rk => $v) {
+                $c = array('tva_tx' => $v['tva_tx'], 'code' => $v['code']);
+                foreach ($cols as $col) {
+                    $c[$col] = (float) price2num($v[$col] - (isset($used[$rk]) ? $used[$rk][$col] : 0) - (float) ($covered[$rk][$col] ?? 0), 'MT');
+                }
+                if ($c[$t['key']] > 0.005) {
+                    $rem[$rk] = $c;
+                }
+            }
+            $cover = $rem ? $this->settlementCover($parsed, $facture->id, $d['id'], $rem, $t['key'] === 'mttc') : array();
+            if ($cover === false) {
+                return -1;
+            }
+            if ($cover && !ksefDepositCoverSet($this->db, $d['id'], $facture->id, $cover)) {
+                $this->error = $this->db->lasterror();
+                return -1;
+            }
+            if ($d['reason'] !== '') {
+                $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_DepositNotLinked', $d['ref'], $langs->transnoentitiesnoconv('KSEF_DepositReason_' . $d['reason']));
+                continue;
+            }
+            if ($d['part']) {
+                $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_DepositLinkedPart', $d['ref'], price($d['part'][0], 0, $langs, 1, -1, -1, $this->currency ?: $conf->currency),
+                    price($d['part'][1], 0, $langs, 1, -1, -1, $this->currency ?: $conf->currency));
+            }
+            $linked++;
+        }
+        if ($check !== '') {
+            $this->warnings[] = $check;
+        }
+        return $linked;
+    }
+
+    /**
+     * @brief Cover earlier settlements
+     * @param int $depositId Draft deposit
+     * @param int $socid Supplier
+     * @return int Count, <0 on error
+     */
+    private function coverEarlierSettlements($depositId, $socid)
+    {
+        if ((string) $this->ksef_number === '') {
+            return 0;
+        }
+        $res = $this->db->query("SELECT i.fk_facture_fourn, i.fa3_xml FROM " . MAIN_DB_PREFIX . $this->table_element . " AS i"
+            . " INNER JOIN " . MAIN_DB_PREFIX . "facture_fourn AS ff ON ff.rowid = i.fk_facture_fourn"
+            . " WHERE i.invoice_type = 'ROZ' AND i.import_status = '" . self::STATUS_IMPORTED . "' AND i.entity = " . (int) $this->entity
+            . " AND i.environment = '" . $this->db->escape($this->environment ?: 'TEST') . "' AND i.currency = '" . $this->db->escape($this->currency ?: 'PLN') . "'"
+            . " AND ff.fk_soc = " . (int) $socid . " AND i.fa3_xml LIKE '%" . $this->db->escape($this->db->escapeforlike($this->ksef_number)) . "%' ORDER BY i.rowid");
+        if (!$res) {
+            $this->error = $this->db->lasterror();
+            return -1;
+        }
+        $t = ksefDepositCreditTarget($this->db, $depositId, 0, 0, 'invoice_supplier');
+        $cols = array('ht', 'tva', 'ttc', 'mht', 'mtva', 'mttc');
+        $rem = array();
+        foreach (($t ? $t['rates'] : array()) as $rk => $v) {
+            if ($v[$t['key']] > 0.005) {
+                $rem[$rk] = $v;
+            }
+        }
+        $parser = new FA3Parser($this->db);
+        $n = 0;
+        while ($rem && ($o = $this->db->fetch_object($res))) {
+            $p = $parser->parse((string) $o->fa3_xml);
+            if (!in_array((string) $this->ksef_number, array_column((array) ($p['deposits'] ?? array()), 'ksef_number'), true)) {
+                continue;
+            }
+            $cover = $this->settlementCover($p, (int) $o->fk_facture_fourn, $depositId, $rem, $t['key'] === 'mttc');
+            if ($cover === false) {
+                return -1;
+            }
+            if (!$cover) {
+                continue;
+            }
+            foreach ($cover as $rk => $c) {
+                foreach ($cols as $col) {
+                    $rem[$rk][$col] -= $c[$col];
+                }
+            }
+            if (!ksefDepositCoverSet($this->db, $depositId, (int) $o->fk_facture_fourn, $cover)) {
+                $this->error = $this->db->lasterror();
+                return -1;
+            }
+            $n++;
+        }
+        return $n;
+    }
+
+    /**
+     * @brief Settlement deposit cover
+     * @param array $parsed ROZ parser result
+     * @param int $rozId ROZ invoice id
+     * @param int $depositId
+     * @param array $rem Remaining per rate
+     * @param bool $foreign Use mht
+     * @return array|false False on error
+     */
+    private function settlementCover($parsed, $rozId, $depositId, $rem, $foreign)
+    {
+        $net = $foreign ? 'mht' : 'ht';
+        $ded = array();
+        $sums = $this->rozLineSums((array) ($parsed['lines'] ?? array()));
+        $summary = (array) ($parsed['vat_summary'] ?? array());
+        foreach (array_unique(array_merge(array_map('strval', array_keys($sums)), array_map('strval', array_keys($summary)))) as $rate) {
+            if ($rate === 'marza') {
+                continue;
+            }
+            $v = ksefVatKeyToDolibarr($rate);
+            $rk = is_string($v) ? $v : ksefDepositRateKey($v);
+            $ded[$rk] = ($ded[$rk] ?? 0) + round((float) ($sums[$rate] ?? 0) - (float) ($summary[$rate]['net'] ?? 0), 2);
+        }
+        $res = $this->db->query("SELECT d.tva_tx, d.vat_src_code, SUM(d." . ($foreign ? 'multicurrency_total_ht' : 'total_ht') . ") AS n"
+            . " FROM " . MAIN_DB_PREFIX . "facture_fourn_det AS d INNER JOIN " . MAIN_DB_PREFIX . "societe_remise_except AS r ON r.rowid = d.fk_remise_except"
+            . " WHERE d.fk_facture_fourn = " . (int) $rozId . " AND r.description = '(DEPOSIT)' GROUP BY d.tva_tx, d.vat_src_code");
+        $others = ksefDepositsCoveredBy($this->db, $rozId);
+        if (!$res || $others === false) {
+            $this->error = $this->db->lasterror();
+            return false;
+        }
+        while ($o = $this->db->fetch_object($res)) {
+            $rk = ksefDepositRateKey($o->tva_tx, (string) $o->vat_src_code);
+            $ded[$rk] = ($ded[$rk] ?? 0) - abs((float) $o->n);
+        }
+        foreach ($others as $dep) {
+            if ((int) $dep !== (int) $depositId) {
+                foreach ((array) (ksefDepositState($this->db, $dep, 'invoice_supplier')['dep_cover'][(int) $rozId] ?? array()) as $rk => $c) {
+                    $ded[$rk] = ($ded[$rk] ?? 0) - (float) ($c[$net] ?? 0);
+                }
+            }
+        }
+        $cover = array();
+        foreach ($rem as $rk => $r) {
+            $share = min((float) $r[$net], max(0.0, (float) ($ded[$rk] ?? 0)));
+            if ($share < 0.005) {
+                continue;
+            }
+            $cover[$rk] = array('tva_tx' => $r['tva_tx'], 'code' => $r['code']);
+            foreach (array('ht', 'tva', 'ttc', 'mht', 'mtva', 'mttc') as $col) {
+                $cover[$rk][$col] = (float) price2num($r[$col] * $share / $r[$net], 'MT');
+            }
+        }
+        return $cover;
+    }
+
+    /**
+     * @brief Check deposit deduction
+     * @param int $socid 0: any
+     * @param array|null $parsed null: from fa3_xml
+     * @return string Warning or ''
+     */
+    public function depositDeductionCheck($socid = 0, $parsed = null)
+    {
+        global $langs, $conf;
+        if (!$this->isOutgoingRecord() && in_array($this->invoice_type, array('KOR_ZAL', 'KOR_ROZ'), true)) {
+            return $this->statedBeforeCheck((int) $this->fk_facture_fourn, $parsed);
+        }
+        if ($this->isOutgoingRecord() || $this->invoice_type !== 'ROZ') {
+            return '';
+        }
+        if ($parsed === null) {
+            if (empty($this->fa3_xml)) {
+                return '';
+            }
+            $parsed = (new FA3Parser($this->db))->parse($this->fa3_xml);
+        }
+        $deps = $this->supplierDeposits($socid, $parsed);
+        $value = array();
+        $refs = array();
+        foreach ($deps as $d) {
+            if ($d['id'] <= 0 || !in_array($d['reason'], array('', 'unpaid', 'zero', 'summary'), true)) {
+                return '';
+            }
+            $else = $this->depositDeductedElsewhere($d['ksef_number']);
+            if ($else === null) {
+                return '';
+            }
+            foreach ($d['value'] as $rate => $net) {
+                $value[$rate] = ($value[$rate] ?? 0) + $net - ($else[$rate] ?? 0);
+            }
+            $refs[] = $d['ref'];
+        }
+        if (!$deps) {
+            return '';
+        }
+        $sums = $this->rozLineSums((array) ($parsed['lines'] ?? array()));
+        $summary = (array) ($parsed['vat_summary'] ?? array());
+        $xml = $val = 0.0;
+        $differs = false;
+        foreach (array_unique(array_merge(array_keys($sums), array_keys($value))) as $rate) {
+            $ded = round((float) ($sums[$rate] ?? 0) - (float) ($summary[$rate]['net'] ?? 0), 2);
+            $xml += $ded;
+            $val += round((float) ($value[$rate] ?? 0), 2);
+            if (abs($ded - (float) ($value[$rate] ?? 0)) >= 0.01) {
+                $differs = true;
+            }
+        }
+        if (!$differs) {
+            return '';
+        }
+        $langs->load('ksef@ksef');
+        $cur = $this->currency ?: $conf->currency;
+        return $langs->transnoentitiesnoconv('KSEF_DepositDeductionDiffers', price($xml, 0, $langs, 1, -1, -1, $cur), implode(', ', $refs), price($val, 0, $langs, 1, -1, -1, $cur));
+    }
+
+    /**
+     * @brief Deposit deducted elsewhere
+     * @param string $ksefNumber Deposit KSeF number
+     * @return array|null null: unknown
+     */
+    private function depositDeductedElsewhere($ksefNumber)
+    {
+        global $conf;
+        $out = array();
+        if ((string) $ksefNumber === '') {
+            return $out;
+        }
+        $res = $this->db->query("SELECT ksef_number, fa3_xml FROM " . MAIN_DB_PREFIX . $this->table_element . " WHERE invoice_type = 'ROZ'"
+            . " AND rowid <> " . (int) ($this->id ?: $this->rowid) . " AND entity = " . (int) $conf->entity
+            . " AND import_status <> 'SKIPPED' AND environment = '" . $this->db->escape($this->environment ?: 'TEST') . "'"
+            . " AND fa3_xml LIKE '%" . $this->db->escape($this->db->escapeforlike($ksefNumber)) . "%'");
+        $seen = array((string) $this->ksef_number => true);
+        $parser = new FA3Parser($this->db);
+        while ($res && ($o = $this->db->fetch_object($res))) {
+            if (isset($seen[(string) $o->ksef_number])) {
+                continue;
+            }
+            $seen[(string) $o->ksef_number] = true;
+            $p = $parser->parse((string) $o->fa3_xml);
+            $cited = array_column((array) ($p['deposits'] ?? array()), 'ksef_number');
+            if (!in_array($ksefNumber, $cited, true)) {
+                continue;
+            }
+            if (count($cited) !== 1) {
+                return null;
+            }
+            $sums = $this->rozLineSums((array) ($p['lines'] ?? array()));
+            $summary = (array) ($p['vat_summary'] ?? array());
+            foreach (array_unique(array_merge(array_keys($sums), array_keys($summary))) as $rate) {
+                $out[$rate] = ($out[$rate] ?? 0) + round((float) ($sums[$rate] ?? 0) - (float) ($summary[$rate]['net'] ?? 0), 2);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Check stated P_15ZK
+     * @param int $ownId Own invoice, 0: none
+     * @param array|null $parsed null: from fa3_xml
+     * @return string Warning or ''
+     */
+    public function statedBeforeCheck($ownId = 0, $parsed = null)
+    {
+        global $langs, $conf;
+        if ($this->isOutgoingRecord() || !in_array($this->invoice_type, array('KOR_ZAL', 'KOR_ROZ'), true)) {
+            return '';
+        }
+        if ($parsed === null) {
+            if (empty($this->fa3_xml)) {
+                return '';
+            }
+            $parsed = (new FA3Parser($this->db))->parse($this->fa3_xml);
+        }
+        $stated = $parsed['invoice']['p15zk'] ?? null;
+        $resolved = $stated === null ? array() : $this->resolveCorrectedInvoices();
+        if (count($resolved) !== 1 || empty($resolved[0]['supplier_invoice'])) {
+            return '';
+        }
+        $P = MAIN_DB_PREFIX;
+        $own = (int) $ownId;
+        $mc = !empty($this->currency) && $this->currency !== $conf->currency;
+        $rootId = (int) $resolved[0]['supplier_invoice']->id;
+        for ($i = 0; $i < 20; $i++) {
+            $res = $this->db->query("SELECT type, fk_facture_source FROM " . $P . "facture_fourn WHERE rowid = " . $rootId);
+            $o = $res ? $this->db->fetch_object($res) : null;
+            if (!$o || !in_array((int) $o->type, array(1, 2), true) || empty($o->fk_facture_source)) {
+                break;
+            }
+            $rootId = (int) $o->fk_facture_source;
+        }
+        if ($this->invoice_type === 'KOR_ZAL') {
+            $v = ksefDepositCurrentValue($this->db, $rootId, $own, 'invoice_supplier', $own);
+            if (!$v) {
+                return '';
+            }
+            $before = (float) ($mc ? $v['mttc'] : $v['ttc']);
+            $ref = $v['ref'];
+        } else {
+            $col = $mc ? 'multicurrency_total_ttc' : 'total_ttc';
+            $res = $this->db->query("SELECT ref, " . $col . " AS t FROM " . $P . "facture_fourn WHERE rowid = " . $rootId);
+            $o = $res ? $this->db->fetch_object($res) : null;
+            if (!$o) {
+                return '';
+            }
+            $ref = (string) $o->ref;
+            $inForce = (float) $o->t;
+            $notes = 0.0;
+            $next = array($rootId);
+            $seen = array($rootId);
+            for ($i = 0; $next && $i < 20; $i++) {
+                $res = $this->db->query("SELECT rowid, ref, type, fk_statut, " . $col . " AS t FROM " . $P . "facture_fourn WHERE fk_facture_source IN (" . implode(',', $next) . ")"
+                    . " AND type IN (1, 2) AND fk_statut > 0 AND rowid <> " . $own . ($own > 0 ? " AND rowid < " . $own : "") . " ORDER BY rowid");
+                $next = array();
+                while ($res && ($o = $this->db->fetch_object($res))) {
+                    if (in_array((int) $o->rowid, $seen, true)) {
+                        continue;
+                    }
+                    $seen[] = (int) $o->rowid;
+                    $next[] = (int) $o->rowid;
+                    if (!in_array((int) $o->fk_statut, array(1, 2), true)) {
+                        continue;
+                    }
+                    if ((int) $o->type === 2) {
+                        $notes += (float) $o->t;
+                    } else {
+                        $inForce = (float) $o->t;
+                        $ref = (string) $o->ref;
+                    }
+                }
+            }
+            $before = $inForce + $notes;
+        }
+        $before = (float) price2num($before, 'MT');
+        if (abs($before - (float) $stated) < 0.01) {
+            return '';
+        }
+        $langs->load('ksef@ksef');
+        $cur = $this->currency ?: $conf->currency;
+        return $langs->transnoentitiesnoconv('KSEF_IncomingStatedBeforeDiffers', price((float) $stated, 0, $langs, 1, -1, -1, $cur), $ref, price($before, 0, $langs, 1, -1, -1, $cur));
+    }
+
+    /**
+     * @brief Net per rate
+     * @param array $lines
+     * @return array rate => net
+     */
+    private function rozLineSums($lines)
+    {
+        $norm = array('22' => '23', '7' => '8');
+        $sums = array();
+        foreach ($lines as $line) {
+            $rate = (string) ($line['vat_rate'] ?? '');
+            $rate = isset($norm[$rate]) ? $norm[$rate] : $rate;
+            if (isset($line['net_amount']) && $line['net_amount'] !== null && $line['net_amount'] !== '') {
+                $net = (float) $line['net_amount'];
+            } elseif (isset($line['gross_amount']) && $line['gross_amount'] !== null && $line['gross_amount'] !== '') {
+                $net = (float) $line['gross_amount'] / (1 + (is_numeric($rate) ? (float) $rate : 0) / 100);
+            } else {
+                $net = (float) ($line['quantity'] ?? 1) * (float) ($line['unit_price_net'] ?? 0);
+            }
+            $sums[$rate] = ($sums[$rate] ?? 0) + $net;
+        }
+        return $sums;
+    }
+
+    /**
+     * @brief Prepare import lines
+     * @param array $lines
+     * @param array $lineProductMap line_num => product id
+     * @param bool $isCreditNote
+     * @param bool $isMulticurrency
+     * @param array|null $vatSummary
+     * @param string $stockConst Stock trigger const
+     * @return array|false False on error
+     */
+    public function prepareImportLines($lines, $lineProductMap, $isCreditNote, $isMulticurrency, $vatSummary, $stockConst)
+    {
+        global $langs;
+
+        $out = array();
+        $useSummaryLines = false;
+        if ($isCreditNote && !empty($lines)) {
+            foreach ($lines as $line) {
+                if ((isset($line['net_amount']) ? (float)$line['net_amount'] : 0) > 0) {
+                    $useSummaryLines = true;
+                    break;
+                }
+            }
+        }
+
+        if ($useSummaryLines) {
+            foreach (($vatSummary ?: $this->getVatSummary()) as $rate => $amounts) {
+                if ((float) ($amounts['net'] ?? 0) > 0) {
+                    $this->error = $langs->transnoentitiesnoconv('KSEF_ImportErrorMixedRateKor', $rate);
+                    return false;
+                }
+            }
+            foreach ($lines as $line) {
+                $lineNet = isset($line['net_amount']) ? (float)$line['net_amount'] : 0;
+                $deltaSign = $lineNet >= 0 ? '+' : '';
+                $desc = ($line['description'] ?? '') . ' (' . $langs->transnoentitiesnoconv('KSEF_CorrectionItemDetail', $deltaSign . price($lineNet, 0, $langs, 0, -1, -1, $this->currency), isset($line['quantity']) ? (float)$line['quantity'] : 0, $line['unit'] ?? '') . ')';
+                $out[] = array('desc' => $desc, 'pu' => 0, 'pu_devise' => 0, 'txtva' => 0, 'qty' => 0, 'fk_product' => 0, 'type' => 1,
+                    'price_base' => 'HT', 'ref' => $line['indeks'] ?? '', 'line_num' => $line['line_num'] ?? 0);
+            }
+            foreach (($vatSummary ?: $this->getVatSummary()) as $rate => $amounts) {
+                $netAmount = abs((float)($amounts['net'] ?? 0));
+                if ($netAmount == 0) {
+                    continue;
+                }
+                $out[] = array('desc' => $langs->transnoentitiesnoconv('KSEF_CorrectionSummaryLine', $rate . '%'), 'pu' => $isMulticurrency ? 0 : $netAmount,
+                    'pu_devise' => $isMulticurrency ? $netAmount : 0, 'txtva' => ksefVatKeyToDolibarr($rate), 'qty' => 1, 'fk_product' => 0,
+                    'type' => 1, 'price_base' => 'HT', 'ref' => '', 'line_num' => 0);
+            }
+            return $out;
+        }
+
+        foreach ($lines as $line) {
+            $lineNum = $line['line_num'] ?? 0;
+            $fk_product = (isset($lineProductMap[$lineNum]) && self::isProductLine($line)) ? (int)$lineProductMap[$lineNum] : 0;
+            $type = 0;
+            $product = null;
+            if ($fk_product > 0) {
+                $product = new Product($this->db);
+                if ($product->fetch($fk_product) > 0) {
+                    $type = $product->type;
+                }
+            }
+            $desc = $line['description'] ?? '';
+            // P_10 in P_11
+            if (!$this->isOutgoingRecord() && !self::isCorrectionType($this->invoice_type) && is_numeric($line['discount'] ?? null) && (float) $line['discount'] != 0) {
+                $desc .= ($desc !== '' ? "\n" : '') . $langs->transnoentitiesnoconv('KSEF_ImportLineDiscount', price((float) $line['discount'], 0, $langs, 0, -1, -1, $this->currency ?: 'PLN'));
+            }
+            $amount = self::resolveLineAmount($line);
+            if ($fk_product > 0 && !empty($line['price_only']) && getDolGlobalString($stockConst) && isModEnabled('stock')) {
+                if ($product && $product->id == $fk_product) {
+                    $desc = $product->ref . ($desc !== '' ? ' - ' . $desc : '');
+                }
+                $fk_product = 0;
+                $type = 0;
+            }
+            if ($fk_product > 0 && is_numeric($line['quantity'] ?? null) && (float) $line['quantity'] == 0 && (float) $amount['pu'] == 0) {
+                if ($product && $product->id == $fk_product) {
+                    $desc = $product->ref . ($desc !== '' ? ' - ' . $desc : '');
+                }
+                $fk_product = 0;
+                $type = 0;
+                $amount['qty'] = 0;
+            }
+            $out[] = array('desc' => $desc, 'pu' => $isMulticurrency ? 0 : $amount['pu'], 'pu_devise' => $isMulticurrency ? $amount['pu'] : 0,
+                'txtva' => isset($line['vat_rate']) ? ksefVatKeyToDolibarr($line['vat_rate']) : 0, 'qty' => $amount['qty'],
+                'fk_product' => $fk_product, 'type' => $type, 'price_base' => $amount['price_base_type'], 'ref' => $line['indeks'] ?? '', 'line_num' => $lineNum);
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Attach KSeF PDF
+     * @param FactureFournisseur $facture
+     * @return bool
      */
     private function attachPdfToSupplierInvoice($facture)
     {
@@ -1944,23 +3410,25 @@ class KsefIncoming extends CommonObject
         return true;
     }
 
-
     /**
-     * @brief Reset import status back to NEW when the linked supplier invoice has been deleted
-     * @param User $user User performing the reset
-     * @return int 1 on success, negative on error
+     * @brief Reset import status
+     * @param User $user
+     * @return int <0 on error
      */
     public function resetImportStatus($user)
     {
         global $langs;
+        $langs->load("ksef@ksef");
 
-        if ($this->fk_facture_fourn > 0) {
-            require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
-            $check = new FactureFournisseur($this->db);
-            if ($check->fetch($this->fk_facture_fourn) > 0) {
-                $this->error = $langs->trans('KSEF_LinkedInvoiceStillExists');
-                return -1;
-            }
+        if ($this->import_status === self::STATUS_FETCH_ERROR) {
+            $langs->load("ksef@ksef");
+            $this->error = $langs->trans('KSEF_FetchErrorNotImportable');
+            return -1;
+        }
+
+        if ($this->linkedSupplierDocumentExists()) {
+            $this->error = $langs->trans('KSEF_LinkedInvoiceStillExists');
+            return -1;
         }
 
         $this->import_status = self::STATUS_NEW;
@@ -1972,16 +3440,364 @@ class KsefIncoming extends CommonObject
         return $this->update($user);
     }
 
+    /**
+     * @brief Link to invoice
+     * @param User $user
+     * @param int $fkFactureFourn Supplier invoice id
+     * @return int 0 refused, <0 error
+     */
+    public function linkToInvoice($user, $fkFactureFourn)
+    {
+        global $langs;
+        $langs->load('ksef@ksef');
+        $this->error_code = '';
+        $fk = (int) $fkFactureFourn;
+        if ($fk <= 0 || $this->linkColumn !== 'fk_facture_fourn' || empty($this->id)) {
+            $this->error = 'Bad link request';
+            return -1;
+        }
+        if ($this->import_status === self::STATUS_IMPORTED && (int) $this->fk_facture_fourn === $fk) {
+            return 1;
+        }
+        $old = 0;
+        if ($this->import_status === self::STATUS_IMPORTED) {
+            $old = (int) $this->fk_facture_fourn;
+            if ($old > 0) {
+                require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.facture.class.php';
+                $linked = new FactureFournisseur($this->db);
+                if ($linked->fetch($old) > 0) {
+                    $this->error_code = 'ALREADY_LINKED';
+                    $this->error = $langs->transnoentitiesnoconv('KSEF_IncomingAlreadyLinked', $linked->ref);
+                    return 0;
+                }
+            }
+        } elseif (!in_array($this->import_status, array(self::STATUS_NEW, self::STATUS_ERROR, self::STATUS_SKIPPED), true)) {
+            $this->error_code = 'NOT_LINKABLE';
+            $this->error = $langs->transnoentitiesnoconv('KSEF_ErrorActionNotAllowedForStatus', $this->LibStatut($this->import_status, 0));
+            return 0;
+        }
+
+        $now = dol_now();
+        $sql = "UPDATE " . MAIN_DB_PREFIX . $this->table_element . " SET";
+        $sql .= " import_status = '" . self::STATUS_IMPORTED . "', import_date = " . (int) $now . ", import_error = NULL";
+        $sql .= ", fk_facture_fourn = " . $fk;
+        if ($this->import_status === self::STATUS_IMPORTED) {
+            $sql .= ", fk_credit_note = NULL";
+        }
+        $sql .= " WHERE rowid = " . (int) $this->id . " AND (import_status IN ('" . self::STATUS_NEW . "', '" . self::STATUS_ERROR . "', '" . self::STATUS_SKIPPED . "')";
+        if ($this->import_status === self::STATUS_IMPORTED) {
+            $sql .= " OR (import_status = '" . self::STATUS_IMPORTED . "' AND COALESCE(fk_facture_fourn, 0) = " . $old . ")";
+        }
+        $sql .= ")";
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->error = $this->db->lasterror();
+            return -1;
+        }
+        if ((int) $this->db->affected_rows($resql) !== 1) {
+            $cur = new static($this->db);
+            $cur->fetch($this->id);
+            $this->error_code = 'STATUS_CHANGED';
+            $this->error = $langs->transnoentitiesnoconv('KSEF_ErrorActionNotAllowedForStatus', $cur->id > 0 ? $cur->LibStatut($cur->import_status, 0) : '?');
+            return 0;
+        }
+        if ($this->import_status === self::STATUS_IMPORTED) {
+            $this->fk_credit_note = null;
+        }
+        $this->import_status = self::STATUS_IMPORTED;
+        $this->import_date = $now;
+        $this->import_error = null;
+        $this->fk_facture_fourn = $fk;
+        return 1;
+    }
 
     /**
-     * @brief Auto-create a supplier (Societe) from the invoice's seller data
-     * @param User $user User performing the creation
-     * @param $gusData Optional GUS lookup result override
-     * @return int New societe ID on success, negative on error
+     * @brief Move import status
+     * @param array $from Allowed statuses
+     * @param string $to
+     * @param int|null $importDate
+     * @param bool $clearError
+     * @return int 0 refused, <0 error
+     */
+    private function moveImportStatus($from, $to, $importDate, $clearError)
+    {
+        global $langs;
+        $in = array();
+        foreach ($from as $st) {
+            $in[] = "'" . $this->db->escape($st) . "'";
+        }
+        $sql = "UPDATE " . MAIN_DB_PREFIX . $this->table_element . " SET";
+        $sql .= " import_status = '" . $this->db->escape($to) . "'";
+        $sql .= ", import_date = " . ($importDate ? (int) $importDate : "NULL");
+        if ($clearError) {
+            $sql .= ", import_error = NULL";
+        }
+        $sql .= " WHERE rowid = " . (int) $this->id . " AND import_status IN (" . implode(',', $in) . ")";
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->error = $this->db->lasterror();
+            return -1;
+        }
+        if ((int) $this->db->affected_rows($resql) !== 1) {
+            $langs->load('ksef@ksef');
+            $cur = new static($this->db);
+            $cur->fetch($this->id);
+            $this->error = $langs->trans('KSEF_ErrorActionNotAllowedForStatus', $cur->id > 0 ? $cur->LibStatut($cur->import_status, 0) : '?');
+            return 0;
+        }
+        $this->import_status = $to;
+        $this->import_date = $importDate;
+        if ($clearError) {
+            $this->import_error = null;
+        }
+        return 1;
+    }
+
+    /**
+     * @brief Skip row
+     * @param User $user
+     * @return int 0 refused, <0 error
+     */
+    public function skip($user)
+    {
+        return $this->moveImportStatus(array(self::STATUS_NEW, self::STATUS_ERROR), self::STATUS_SKIPPED, dol_now(), false);
+    }
+
+    /**
+     * @brief Reopen skipped row
+     * @param User $user
+     * @return int 0 refused, <0 error
+     */
+    public function reopen($user)
+    {
+        return $this->moveImportStatus(array(self::STATUS_SKIPPED), self::STATUS_NEW, null, true);
+    }
+
+    /**
+     * @brief Retry fetch errors
+     * @param User $user
+     * @param array $ids Row ids
+     * @return array Counts
+     */
+    public function reprocessMany($user, $ids)
+    {
+        $out = array('done' => 0, 'failed' => 0, 'skipped' => 0);
+        foreach ((array) $ids as $rid) {
+            $row = new static($this->db);
+            if ($row->fetch((int) $rid) <= 0 || $row->import_status !== self::STATUS_FETCH_ERROR) {
+                $out['skipped']++;
+                continue;
+            }
+            if ($row->reprocessFromXml($user) > 0) {
+                $out['done']++;
+            } else {
+                $out['failed']++;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Reparse stored XML
+     * @param User $user
+     * @return int 0 still failing, <0 error
+     */
+    public function reprocessFromXml($user)
+    {
+        global $langs;
+        $langs->load('ksef@ksef');
+        dol_include_once('/ksef/class/fa3_parser.class.php');
+
+        if ($this->import_status !== self::STATUS_FETCH_ERROR) {
+            $this->error = $langs->trans('KSEF_ErrorActionNotAllowedForStatus', $this->LibStatut($this->import_status, 0));
+            return 0;
+        }
+        if (empty($this->fa3_xml)) {
+            $this->error = $langs->trans('KSEF_RetryFetchNoXml');
+            return 0;
+        }
+
+        $parser = new FA3Parser($this->db);
+        $parsed = false;
+        $failure = '';
+        try {
+            $parsed = $parser->parse($this->fa3_xml);
+        } catch (Throwable $e) {
+            $failure = 'Failed to parse XML: ' . $e->getMessage();
+        }
+        if (!$parsed) {
+            if ($failure === '') {
+                $failure = $parser->unsupported_form !== '' ? self::UNSUPPORTED_FORM_PREFIX . $parser->unsupported_form
+                    : (strpos((string) $parser->error, 'Failed to parse XML') === 0 ? $parser->error : 'Failed to parse XML: ' . ($parser->error ?: 'unknown error'));
+            }
+            $sql = "UPDATE " . MAIN_DB_PREFIX . $this->table_element . " SET import_error = '" . $this->db->escape(dol_trunc($failure, 2000, 'right', 'UTF-8', 1)) . "'";
+            $sql .= " WHERE rowid = " . (int) $this->id . " AND import_status = '" . self::STATUS_FETCH_ERROR . "'";
+            if (!$this->db->query($sql)) {
+                $this->error = $this->db->lasterror();
+                return -1;
+            }
+            $this->import_error = $failure;
+            $this->error = $langs->trans('KSEF_RetryFetchStillFailing', $this->getFetchErrorText());
+            return 0;
+        }
+
+        $fresh = new static($this->db);
+        $fresh->assignParsed($parsed, $this->fa3_xml);
+        $q = function ($v) {
+            return ($v !== null && $v !== '') ? "'" . $this->db->escape($v) . "'" : "NULL";
+        };
+        $i = function ($v) {
+            return $v ? (int) $v : "NULL";
+        };
+        $f = function ($v) {
+            return $v !== null && $v !== '' ? (float) $v : "NULL";
+        };
+        $set = array(
+            'seller_nip' => $q($fresh->seller_nip),
+            'seller_vat_id' => $q($fresh->seller_vat_id),
+            'seller_name' => $q($fresh->seller_name),
+            'seller_country' => $fresh->seller_country ? $q($fresh->seller_country) : "'PL'",
+            'seller_address' => $q($fresh->seller_address),
+            'buyer_nip' => $q($fresh->buyer_nip),
+            'buyer_name' => $q($fresh->buyer_name),
+            'invoice_number' => $q($fresh->invoice_number),
+            'invoice_type' => $fresh->invoice_type ? $q($fresh->invoice_type) : "'VAT'",
+            'invoice_date' => $i($fresh->invoice_date),
+            'sale_date' => $i($fresh->sale_date),
+            'currency' => $fresh->currency ? $q($fresh->currency) : "'PLN'",
+            'total_net' => $f($fresh->total_net),
+            'total_vat' => $f($fresh->total_vat),
+            'total_gross' => $f($fresh->total_gross),
+            'vat_summary' => $q($fresh->vat_summary),
+            'line_items' => $q($fresh->line_items),
+            'payment_due_date' => $i($fresh->payment_due_date),
+            'payment_method' => $q($fresh->payment_method),
+            'bank_account' => $q($fresh->bank_account),
+            'payment_status' => $q($fresh->payment_status),
+            'payment_date' => $i($fresh->payment_date),
+            'corrected_ksef_number' => $q($fresh->corrected_ksef_number),
+            'corrected_invoice_number' => $q($fresh->corrected_invoice_number),
+            'corrected_invoice_date' => $i($fresh->corrected_invoice_date),
+            'correction_data' => $q($fresh->correction_data),
+            'fa3_creation_date' => $i($fresh->fa3_creation_date),
+            'fa3_system_info' => $q($fresh->fa3_system_info),
+            'import_status' => "'" . self::STATUS_NEW . "'",
+            'import_error' => "NULL",
+            'import_date' => "NULL",
+        );
+        $sql = "UPDATE " . MAIN_DB_PREFIX . $this->table_element . " SET ";
+        $parts = array();
+        foreach ($set as $col => $val) {
+            $parts[] = $col . " = " . $val;
+        }
+        $sql .= implode(', ', $parts);
+        $sql .= " WHERE rowid = " . (int) $this->id . " AND import_status = '" . self::STATUS_FETCH_ERROR . "'";
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            $this->error = $this->db->lasterror();
+            return -1;
+        }
+        if ((int) $this->db->affected_rows($resql) !== 1) {
+            $this->error = $langs->trans('KSEF_ErrorActionNotAllowedForStatus', '?');
+            return 0;
+        }
+        $this->fetch($this->id);
+        if (method_exists($this, 'reconcile')) {
+            $this->reconcile($user);
+        }
+        return 1;
+    }
+
+    /**
+     * @brief Ensure supplier role
+     * @param User $user
+     * @param Societe $soc
+     * @return int 0 already, -1 not flagged
+     */
+    public function ensureSupplierRole($user, $soc)
+    {
+        global $langs;
+
+        if ((int) $soc->fournisseur === 1) {
+            return 0;
+        }
+        if (ksefUserCan($user, 'create_supplier')) {
+            $upd = new Societe($this->db);
+            if ($upd->fetch($soc->id) > 0) {
+                $upd->fournisseur = 1;
+                if ((string) $upd->code_fournisseur === '') {
+                    $upd->code_fournisseur = '-1';
+                }
+                if ($upd->update($upd->id, $user, 1, 0, 1) > 0) {
+                    $soc->fournisseur = 1;
+                    return 1;
+                }
+                dol_syslog('KsefIncoming::ensureSupplierRole socid=' . (int) $soc->id . ': ' . $upd->error . ' ' . implode(', ', (array) $upd->errors), LOG_WARNING);
+            }
+        }
+        $this->warnings[] = $langs->transnoentitiesnoconv('KSEF_ThirdPartyNotFlaggedSupplier', $soc->name);
+        return -1;
+    }
+
+    /**
+     * @brief Drop unknown products
+     * @param array $lineProductMap line_num => product id
+     * @return array
+     */
+    protected function knownProducts($lineProductMap)
+    {
+        $ids = array();
+        foreach ((array) $lineProductMap as $ln => $pid) {
+            if ((int) $pid > 0) {
+                $ids[(int) $pid] = true;
+            }
+        }
+        if (empty($ids)) {
+            return array();
+        }
+        $found = array();
+        $res = $this->db->query("SELECT rowid FROM " . MAIN_DB_PREFIX . "product WHERE rowid IN (" . implode(',', array_keys($ids)) . ")"
+            . " AND entity IN (" . getEntity('product') . ")");
+        while ($res && ($o = $this->db->fetch_object($res))) {
+            $found[(int) $o->rowid] = true;
+        }
+        $out = array();
+        foreach ((array) $lineProductMap as $ln => $pid) {
+            if (isset($found[(int) $pid])) {
+                $out[$ln] = (int) $pid;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @brief Create supplier
+     * @param User $user
+     * @param $gusData GUS overrides
+     * @return int Id, <0 on error
      */
     public function autoCreateSupplier($user, $gusData = null)
     {
+        global $langs;
         require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+
+        // one supplier
+        $locked = (int) $this->id > 0;
+        if ($locked) {
+            $this->db->begin();
+            $resql = $this->db->query("SELECT import_status FROM " . MAIN_DB_PREFIX . $this->table_element . " WHERE rowid = " . (int) $this->id . " FOR UPDATE");
+            $obj = $resql ? $this->db->fetch_object($resql) : null;
+            if (!$obj || !in_array((string) $obj->import_status, array(self::STATUS_NEW, self::STATUS_ERROR), true)) {
+                $this->error = $langs->trans('KSEF_BatchAlreadyProcessed');
+                $this->db->rollback();
+                return -2;
+            }
+            $found = $this->findMatchingThirdParty();
+            if ($found > 0) {
+                $this->db->commit();
+                return $found;
+            }
+        }
 
         $societe = new Societe($this->db);
         $societe->name = $this->seller_name;
@@ -1989,6 +3805,7 @@ class KsefIncoming extends CommonObject
         $societe->client = 0;
         $societe->code_fournisseur = '-1';
 
+        // TEST: fictitious NIPs
         if (!empty($this->seller_nip) && $this->seller_country == 'PL') {
             $nipField = ksefGetFieldName('NIP');
             if (!empty($nipField) && $nipField !== 'tva_intra') {
@@ -2005,7 +3822,6 @@ class KsefIncoming extends CommonObject
             $societe->tva_intra = $this->seller_nip;
         }
 
-        // Set KRS/REGON/BDO from parsed XML
         if (!empty($this->fa3_xml)) {
             dol_include_once('/ksef/class/fa3_parser.class.php');
             $parser = new FA3Parser($this->db);
@@ -2024,7 +3840,12 @@ class KsefIncoming extends CommonObject
         }
 
         if (!empty($this->seller_address)) {
-            $societe->address = $this->seller_address;
+            $split = ksefSplitAddress($this->seller_address, $this->seller_country ?: 'PL');
+            $societe->address = $split['address'];
+            if ($split['zip'] !== '') {
+                $societe->zip = $split['zip'];
+                $societe->town = $split['town'];
+            }
         }
 
         if (!empty($this->seller_country)) {
@@ -2036,7 +3857,6 @@ class KsefIncoming extends CommonObject
             }
         }
 
-        // Override with GUS data
         if (!empty($gusData) && is_array($gusData)) {
             if (!empty($gusData['name'])) {
                 $societe->name = $gusData['name'];
@@ -2064,41 +3884,174 @@ class KsefIncoming extends CommonObject
         if ($result <= 0) {
             $this->error = $societe->error;
             $this->errors = $societe->errors;
+            if ($locked) {
+                $this->db->rollback();
+            }
             return -1;
+        }
+        if ($locked) {
+            $this->db->commit();
         }
 
         return $result;
     }
 
-
     /**
-     * @brief Auto-create a product from invoice line data
-     * @param User $user User performing the creation
-     * @param array $lineData Line item data from getLineItems()
-     * @return int New product ID on success, negative on error
+     * @brief Find or create
+     * @param User $user
+     * @param array $lineData
+     * @param array $warnings Out
+     * @return int Product id, <0 on error
      */
-    public function autoCreateProduct($user, $lineData)
+    public function autoCreateProduct($user, $lineData, &$warnings = null)
     {
+        global $langs;
+
+        $this->created_product_ref = '';
+
         require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
 
-        $product = new Product($this->db);
-
+        if (!is_array($warnings)) {
+            $warnings = array();
+        }
+        if (in_array((string) $this->invoice_type, array('ZAL', 'KOR_ZAL'), true) || !self::isProductLine($lineData)) {
+            return 0;
+        }
+        $lineNum = (int) ($lineData['line_num'] ?? 0);
+        $fallbackRef = $this->productRefPrefix . (int) $this->rowid . '-' . $lineNum;
         $useIndeks = getDolGlobalString('KSEF_PRODUCT_REF_USE_INDEKS', '1') === '1';
-        if ($useIndeks && !empty($lineData['indeks'])) {
-            $product->ref = $lineData['indeks'];
-        } else {
-            $product->ref = $product->getNextNumRef(null);
-            if (empty($product->ref)) {
-                $product->ref = 'KSEF-' . dol_now() . '-' . ($lineData['line_num'] ?? 0);
+        $ref = ($useIndeks && !empty($lineData['indeks'])) ? trim((string) $lineData['indeks']) : '';
+
+        foreach (array_unique(array_filter(array($ref, $ref === '' ? $fallbackRef : ''))) as $lookup) {
+            $existing = new Product($this->db);
+            if ($existing->fetch(0, $lookup) > 0) {
+                return (int) $existing->id;
             }
         }
 
-        $product->label = $lineData['description'] ?? $product->ref;
-        $product->type = 0;
+        $barcode = !empty($lineData['gtin']) ? (string) $lineData['gtin'] : '';
+        $result = $this->createProductFromLine($user, $lineData, $ref, $barcode, $product);
+        if ($result <= 0 && $ref === '' && ($product->error == 'ProductModuleNotSetupForAutoRef' || trim((string) $product->ref) === '')) {
+            $ref = $fallbackRef;
+            $result = $this->createProductFromLine($user, $lineData, $ref, $barcode, $product);
+        }
+        $barcodeErrors = $barcode !== '' ? array_values(array_intersect((array) $product->errors, array('ErrorBarCodeAlreadyUsed', 'ErrorBadBarCodeSyntax'))) : array();
+        if ($result <= 0 && $barcodeErrors) {
+            $langs->load('errors');
+            $warnings[] = $langs->transnoentitiesnoconv('KSEF_BatchProductBarcodeDropped', $lineNum, $barcode, $langs->transnoentitiesnoconv($barcodeErrors[0]));
+            $retryRef = $ref !== '' ? $ref : trim((string) $product->ref);
+            $result = $this->createProductFromLine($user, $lineData, $retryRef, '', $product);
+            if ($result <= 0 && in_array('ErrorBarCodeRequired', (array) $product->errors, true)) {
+                $result = $this->createProductFromLine($user, $lineData, $retryRef, 'auto', $product);
+            }
+        }
+        if ($result <= 0 && $product->error == 'ErrorProductAlreadyExists') {
+            $existing = new Product($this->db);
+            if ($existing->fetch(0, trim((string) $product->ref)) > 0) {
+                return (int) $existing->id;
+            }
+        }
+        if ($result <= 0) {
+            $errs = array_filter(array_merge(array($product->error), (array) $product->errors));
+            $langs->loadLangs(array('errors', 'products'));
+            dol_syslog(__METHOD__ . ' product create failed: ' . implode(' | ', $errs), LOG_WARNING);
+            $this->error = $errs ? $langs->transnoentitiesnoconv(reset($errs)) : 'Product create failed';
+            $this->errors = $errs;
+            return -1;
+        }
+        $this->created_product_ref = (string) $product->ref;
+        if (!$this->isOutgoingRecord() && !empty($lineData['socid'])) {
+            $this->addSupplierPriceFromLine($user, $result, (int) $lineData['socid'], $lineData);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @brief Add supplier price
+     * @param User $user
+     * @param int $productId
+     * @param int $socid Supplier
+     * @param array $lineData
+     * @return int 0 skipped, -1 error
+     */
+    public function addSupplierPriceFromLine($user, $productId, $socid, $lineData)
+    {
+        global $conf;
+        $amt = self::resolveLineAmount($lineData);
+        $vatNum = isset($lineData['vat_rate']) && is_numeric($lineData['vat_rate']) ? (float) $lineData['vat_rate'] : 0;
+        $netUnit = ($amt['price_base_type'] ?? 'HT') === 'TTC' ? (float) $amt['pu'] / (1 + $vatNum / 100) : (float) $amt['pu'];
+        if ($netUnit == 0 || $productId <= 0 || $socid <= 0 || strpos((string) $this->invoice_type, 'KOR') === 0) {
+            return 0;
+        }
+        $foreign = !empty($this->currency) && strtoupper((string) $this->currency) !== 'PLN';
+        // "4,2913" not 4
+        $rate = $foreign ? (ksefParsedKurs(array('exchange_rate' => array('rate' => $lineData['kurs_waluty'] ?? ''))) ?: $this->getExchangeRate()) : 1;
+        if ($rate <= 0) {
+            return 0;
+        }
+        $exists = $this->db->query("SELECT rowid FROM " . MAIN_DB_PREFIX . "product_fournisseur_price WHERE fk_product = " . (int) $productId . " AND fk_soc = " . (int) $socid . " LIMIT 1");
+        if ($exists && $this->db->num_rows($exists) > 0) {
+            return 0;
+        }
+        require_once DOL_DOCUMENT_ROOT . '/fourn/class/fournisseur.product.class.php';
+        require_once DOL_DOCUMENT_ROOT . '/societe/class/societe.class.php';
+        $pf = new ProductFournisseur($this->db);
+        $supplier = new Societe($this->db);
+        if ($pf->fetch($productId) <= 0 || $supplier->fetch($socid) <= 0) {
+            return -1;
+        }
+        $mc = round(abs($netUnit), 8);
+        $bp = round($mc * $rate, 8);
+        if ($pf->update_buyprice(1, $bp, $user, 'HT', $supplier, 0, (string) (!empty($lineData['indeks']) ? $lineData['indeks'] : $pf->ref), $vatNum,
+            0, 0, 0, 0, 0, '', array(), '', $mc, 'HT', 1 / $rate, $foreign ? strtoupper((string) $this->currency) : $conf->currency) < 0) {
+            dol_syslog(__METHOD__ . ' supplier price not stored: ' . $pf->error, LOG_WARNING);
+            return -1;
+        }
+        return 1;
+    }
+
+    /**
+     * @brief Is sales record
+     * @return bool
+     */
+    protected function isOutgoingRecord()
+    {
+        return false;
+    }
+
+    /**
+     * @brief Create product
+     * @param User $user
+     * @param array $lineData
+     * @param string $ref '' auto
+     * @param string $barcode '' none, 'auto'
+     * @param Product $product Out
+     * @return int Id, <= 0 on error
+     */
+    private function createProductFromLine($user, $lineData, $ref, $barcode, &$product)
+    {
+        $product = new Product($this->db);
+        $product->ref = $ref;
+        $text = trim((string) ($lineData['description'] ?? ''));
+        $firstLine = $text !== '' ? ksefSingleLine(strtok($text, "\n"), 255) : '';
+        $product->label = $firstLine !== '' ? $firstLine : ($ref !== '' ? $ref : 'KSeF');
+        if ($text !== '' && $text !== $product->label) {
+            $product->description = $text;
+        }
+        $product->type = (int) ($lineData['product_type'] ?? 0) === 1 ? 1 : 0;
+        $allowed = ksefCreatableProductTypes($user);
+        if (!in_array((int) $product->type, $allowed, true)) {
+            if (empty($allowed)) {
+                $this->error = ksefMissingRightText('create_product');
+                return -1;
+            }
+            $product->type = (int) $allowed[0];
+        }
         $product->status = 1;
         $product->status_buy = 1;
 
-        if (!empty($lineData['unit_price_net'])) {
+        if ($this->isOutgoingRecord() && !empty($lineData['unit_price_net'])) {
             $product->price = (float)$lineData['unit_price_net'];
             $product->price_base_type = 'HT';
         }
@@ -2107,24 +4060,16 @@ class KsefIncoming extends CommonObject
             $product->tva_tx = (float)$lineData['vat_rate'];
         }
 
-        if (!empty($lineData['gtin'])) {
-            $product->barcode = $lineData['gtin'];
+        if ($barcode !== '') {
+            $product->barcode = $barcode;
         }
 
-        $result = $product->create($user);
-        if ($result <= 0) {
-            $this->error = $product->error;
-            $this->errors = $product->errors;
-            return -1;
-        }
-
-        return $result;
+        return $product->create($user);
     }
 
-
     /**
-     * @brief Generate PDF visualization of the invoice
-     * @return string|false PDF content as string or false on error
+     * @brief Generate PDF
+     * @return string|false
      */
     public function generatePdfVisualization()
     {
@@ -2132,6 +4077,12 @@ class KsefIncoming extends CommonObject
 
         if (empty($this->rowid)) {
             $this->error = "Invoice not loaded";
+            return false;
+        }
+        if ($this->import_status === self::STATUS_FETCH_ERROR || empty($this->fa3_xml)) {
+            global $langs;
+            $langs->load('ksef@ksef');
+            $this->error = $langs->trans('KSEF_FetchErrorNoPdf');
             return false;
         }
 
@@ -2147,31 +4098,21 @@ class KsefIncoming extends CommonObject
     }
 
     /**
-     * Map KSeF FormaPlatnosci code to Dolibarr c_paiement ID
-     * @param string|null $ksefMethod KSeF payment method code (1-7)
-     * @return int Dolibarr c_paiement ID, or 0 if no suitable mapping
+     * @brief Map payment method
+     * @param string|null $ksefMethod Code 1-7
+     * @return int 0 if none
      */
     public function mapKsefPaymentMethod($ksefMethod)
     {
-        $map = array(
-            '1' => 'LIQ',  // Gotówka -> Cash
-            '2' => 'CB',   // Karta -> Credit card
-            '3' => 'LIQ',  // Bon -> Cash
-            '4' => 'CHQ',  // Czek -> Cheque
-            '5' => 'VIR',  // Kredyt -> Bank Transfer
-            '6' => 'VIR',  // Przelew -> Bank Transfer
-            '7' => 'CB',   // Mobilna -> Credit card
-        );
-
-        $code = isset($map[$ksefMethod]) ? $map[$ksefMethod] : 'VIR';
-
-        $sql = "SELECT id FROM " . MAIN_DB_PREFIX . "c_paiement"
-            . " WHERE code = '" . $this->db->escape($code) . "'"
-            . " AND active = 1 LIMIT 1";
-        $resql = $this->db->query($sql);
-        if ($resql && $this->db->num_rows($resql) > 0) {
-            $obj = $this->db->fetch_object($resql);
-            return (int)$obj->id;
+        foreach (ksefImportPaymentModeCodes($ksefMethod) as $code) {
+            $sql = "SELECT id FROM " . MAIN_DB_PREFIX . "c_paiement"
+                . " WHERE code = '" . $this->db->escape($code) . "'"
+                . " AND entity IN (" . getEntity('c_paiement') . ")"
+                . " AND active = 1 ORDER BY entity DESC LIMIT 1";
+            $resql = $this->db->query($sql);
+            if ($resql && ($obj = $this->db->fetch_object($resql))) {
+                return (int) $obj->id;
+            }
         }
         return 0;
     }
